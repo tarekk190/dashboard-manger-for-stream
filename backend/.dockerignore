@@ -1,0 +1,10 @@
+# Never bake secrets, certificates or runtime state into the image
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+data/
+node_modules/
+npm-debug.log*
+.git

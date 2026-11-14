@@ -17,11 +17,14 @@ WORKDIR /app
 COPY package.json ./
 RUN npm install --omit=dev --no-audit --no-fund
 
-# Copy backend source code and public assets
+# Copy backend source code and public assets (.env / certs excluded via .dockerignore)
 COPY . .
 
-# Ensure data directory exists for channel persistence
-RUN mkdir -p /app/data /hls
+# Data directory for channel persistence is owned by the unprivileged 'node' user (uid 1000).
+# A fresh named volume mounted at /app/data inherits this ownership. /hls is mounted read-only.
+RUN mkdir -p /app/data /hls && chown -R node:node /app/data
+
+USER node
 
 # Expose default backend port
 EXPOSE 3000

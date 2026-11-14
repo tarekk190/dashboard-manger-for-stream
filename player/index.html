@@ -344,6 +344,46 @@
         let streamManifestUrl = '';
         let playbackMode = 'Edge CDN';
 
+        // Viewer token for the Nginx edge (/auth). Fetched from /api/stream and renewed before expiry.
+        let viewerToken = tokenParam || null;
+        let tokenRenewTimer = null;
+
+        function scheduleTokenRenewal(expiresInSec) {
+            if (tokenRenewTimer) clearTimeout(tokenRenewTimer);
+            const delayMs = Math.max(5, expiresInSec - 15) * 1000;
+            tokenRenewTimer = setTimeout(renewViewerToken, delayMs);
+        }
+
+        async function fetchViewerToken(channel) {
+            const res = await fetch(`/api/stream?channel=${encodeURIComponent(channel)}`, { headers: { 'Accept': 'application/json' } });
+            if (!res.ok) throw new Error(res.status === 404 ? 'Channel not found' : `Token request failed (HTTP ${res.status})`);
+            const data = await res.json();
+            viewerToken = data.token;
+            scheduleTokenRenewal(data.expiresIn || 60);
+        }
+
+        async function renewViewerToken() {
+            try {
+                const res = await fetch('/api/token', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ token: viewerToken })
+                });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json();
+                viewerToken = data.token;
+                scheduleTokenRenewal(data.expiresIn || 60);
+            } catch (e) {
+                // Renewal window missed (e.g. tab suspended): request a fresh token
+                try {
+                    await fetchViewerToken(channelParam || 'match1');
+                } catch (err) {
+                    console.warn('[TOKEN] Renewal failed, retrying in 5s', err);
+                    tokenRenewTimer = setTimeout(renewViewerToken, 5000);
+                }
+            }
+        }
+
         // Keyboard Shortcut 'D' to toggle HUD
         window.addEventListener('keydown', (e) => {
             if (e.key === 'd' || e.key === 'D') {
@@ -405,9 +445,21 @@
             badgeMode.innerText = 'EDGE CDN (.CSS)';
             telFormat.innerText = 'index.css -> HLS Camouflage';
 
-            let streamUrl = `/live/${channel}/index.css`;
-            if (tokenParam) {
-                streamUrl += `?token=${encodeURIComponent(tokenParam)}`;
+            if (!viewerToken) {
+                try {
+                    await fetchViewerToken(channel);
+                } catch (err) {
+                    loadingSpinner.style.display = 'none';
+                    statusMsg.innerText = `Unable to start stream: ${err.message}`;
+                    return;
+                }
+            }
+
+            // hls.js sends the token as an Authorization header (see xhrSetup). Native Safari HLS
+            // cannot set headers, so the playlist URL carries ?token= there.
+            let streamUrl = `/live/${encodeURIComponent(channel)}/index.css`;
+            if (!Hls.isSupported()) {
+                streamUrl += `?token=${encodeURIComponent(viewerToken)}`;
             }
 
             streamManifestUrl = streamUrl;
@@ -434,9 +486,9 @@
                     liveMaxLatencyDurationCount: 6,
                     liveDurationInfinity: true,
                     xhrSetup: function(xhr, requestUrl) {
-                        // Pass token header if present
-                        if (tokenParam) {
-                            xhr.setRequestHeader('Authorization', `Bearer ${tokenParam}`);
+                        // Attach the current (auto-renewed) viewer token to edge playlist & segment requests only
+                        if (viewerToken && requestUrl.startsWith(window.location.origin + '/')) {
+                            xhr.setRequestHeader('Authorization', `Bearer ${viewerToken}`);
                         }
                     }
                 });

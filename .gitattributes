@@ -1,0 +1,3 @@
+# Configs and scripts are executed inside Linux containers: keep LF line endings on Windows checkouts
+* text=auto eol=lf
+*.pem binary

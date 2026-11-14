@@ -24,6 +24,10 @@ services:
       - hls_data:/hls
     networks:
       - streaming_net
+    # Publish/read authorization is delegated to the backend (authHTTPAddress in mediamtx.yml)
+    depends_on:
+      backend:
+        condition: service_healthy
     logging:
       driver: "json-file"
       options:
@@ -45,11 +49,12 @@ services:
     environment:
       - PORT=3000
       - NODE_ENV=${NODE_ENV:-production}
-      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123456}
-      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
-      - SERVER_IP=${SERVER_IP:-127.0.0.1}
-      - EDGE_DOMAIN=${EDGE_DOMAIN:-localhost}
+      - ADMIN_USERNAME=${ADMIN_USERNAME:?ADMIN_USERNAME is required (see .env.example)}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?ADMIN_PASSWORD is required, min 12 chars (see .env.example)}
+      - ADMIN_JWT_SECRET=${ADMIN_JWT_SECRET:?ADMIN_JWT_SECRET is required - generate with openssl rand -hex 48}
+      - VIEWER_JWT_SECRET=${VIEWER_JWT_SECRET:?VIEWER_JWT_SECRET is required - generate with openssl rand -hex 48}
+      - SERVER_IP=${SERVER_IP:?SERVER_IP is required (public IP for RTMP ingest)}
+      - EDGE_DOMAIN=${EDGE_DOMAIN:?EDGE_DOMAIN is required (public HTTPS domain)}
       - R2_CUSTOM_DOMAIN=${R2_CUSTOM_DOMAIN:-r2-custom-domain.shop}
       - MEDIAMTX_RTMP_HOST=mediamtx
       - MEDIAMTX_RTMP_PORT=1935
@@ -61,15 +66,15 @@ services:
       - HLS_DIR=/hls
       - DATA_FILE=/app/data/channels.json
       - MAX_SEGMENT_AGE_SECONDS=${MAX_SEGMENT_AGE_SECONDS:-120}
-      - ENABLE_AUTH_ON_PLAYLISTS=${ENABLE_AUTH_ON_PLAYLISTS:-false}
+      - ENABLE_AUTH_ON_PLAYLISTS=${ENABLE_AUTH_ON_PLAYLISTS:-true}
       - TOKEN_EXPIRATION_SECONDS=${TOKEN_EXPIRATION_SECONDS:-60}
+      - TOKEN_RENEW_GRACE_SECONDS=${TOKEN_RENEW_GRACE_SECONDS:-15}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-}
     volumes:
-      - hls_data:/hls
+      - hls_data:/hls:ro
       - backend_data:/app/data
     networks:
       - streaming_net
-    depends_on:
-      - mediamtx
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://127.0.0.1:3000/api/health || exit 1"]
       interval: 15s
@@ -97,6 +102,7 @@ services:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/snippets:/etc/nginx/snippets:ro
       - ./certs:/etc/nginx/certs:ro
+      - ./certbot/www:/var/www/certbot:ro
       - ./player:/var/www/player:ro
       - hls_data:/hls:ro
       - nginx_cache:/var/cache/nginx

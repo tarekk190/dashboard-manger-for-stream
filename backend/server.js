@@ -16,6 +16,8 @@
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
+const net = require('net');
+const dns = require('dns').promises;
 const { spawn } = require('child_process');
 const crypto = require('crypto');
 const express = require('express');
@@ -23,21 +25,56 @@ const cors = require('cors');
 const helmet = require('helmet');
 const jwt = require('jsonwebtoken');
 const chokidar = require('chokidar');
-const { 
-    S3Client, 
-    PutObjectCommand, 
-    ListObjectsV2Command, 
-    DeleteObjectsCommand 
+const {
+    S3Client,
+    PutObjectCommand,
+    ListObjectsV2Command,
+    DeleteObjectsCommand
 } = require('@aws-sdk/client-s3');
 
 // ------------------------------------------------------------------------------
 // Configuration & Environment Variables
 // ------------------------------------------------------------------------------
+function fatal(message) {
+    console.error(`[FATAL] ${message} Refusing to start.`);
+    process.exit(1);
+}
+
+// SHA-256 of placeholder passwords that shipped in earlier .env/.env.example files.
+// Stored as hashes so the literal placeholder strings do not live in the source tree.
+const KNOWN_PLACEHOLDER_PASSWORD_HASHES = new Set([
+    'ac0e7d037817094e9e0b4441f9bae3209d67b02fa484917065f71b16109a1a78', // old compose default
+    '299bd1a5420db43c61a00a05bee485c27f0129c3f014bb9b53bf9c5791b1a37f', // old .env.example
+    'a122649a4ff9430be08e9d697b748df8838fd3a10b3fbda6ee94ef3fd33d453a'  // old backend/.env.example
+]);
+const sha256 = (value) => crypto.createHash('sha256').update(String(value), 'utf8').digest('hex');
+
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const NODE_ENV = process.env.NODE_ENV || 'production';
-const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123456';
-const JWT_SECRET = process.env.JWT_SECRET || 'fallback_default_jwt_secret_must_be_overridden_in_production_32chars';
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME;
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+const ADMIN_JWT_SECRET = process.env.ADMIN_JWT_SECRET;
+const VIEWER_JWT_SECRET = process.env.VIEWER_JWT_SECRET;
+
+if (!ADMIN_JWT_SECRET || ADMIN_JWT_SECRET.trim().length < 32) {
+    fatal('ADMIN_JWT_SECRET is missing or shorter than 32 characters (generate with: openssl rand -hex 48).');
+}
+if (!VIEWER_JWT_SECRET || VIEWER_JWT_SECRET.trim().length < 32) {
+    fatal('VIEWER_JWT_SECRET is missing or shorter than 32 characters (generate with: openssl rand -hex 48).');
+}
+if (ADMIN_JWT_SECRET === VIEWER_JWT_SECRET) {
+    fatal('ADMIN_JWT_SECRET and VIEWER_JWT_SECRET must be different values.');
+}
+if (!ADMIN_USERNAME || !ADMIN_USERNAME.trim()) {
+    fatal('ADMIN_USERNAME is missing.');
+}
+if (!ADMIN_PASSWORD || ADMIN_PASSWORD.length < 12) {
+    fatal('ADMIN_PASSWORD is missing or shorter than 12 characters.');
+}
+if (KNOWN_PLACEHOLDER_PASSWORD_HASHES.has(sha256(ADMIN_PASSWORD))) {
+    fatal('ADMIN_PASSWORD is a known placeholder value. Set a real password.');
+}
+
 const SERVER_IP = process.env.SERVER_IP || '127.0.0.1';
 const EDGE_DOMAIN = process.env.EDGE_DOMAIN || 'localhost';
 const R2_CUSTOM_DOMAIN = process.env.R2_CUSTOM_DOMAIN || 'r2-custom-domain.shop';
@@ -46,8 +83,31 @@ const MEDIAMTX_RTMP_PORT = parseInt(process.env.MEDIAMTX_RTMP_PORT || '1935', 10
 const HLS_DIR = path.resolve(process.env.HLS_DIR || '/hls');
 const DATA_FILE = path.resolve(process.env.DATA_FILE || path.join(__dirname, 'data', 'channels.json'));
 const MAX_SEGMENT_AGE_SECONDS = parseInt(process.env.MAX_SEGMENT_AGE_SECONDS || '120', 10);
-const ENABLE_AUTH_ON_PLAYLISTS = process.env.ENABLE_AUTH_ON_PLAYLISTS === 'true';
+// Viewer auth on edge playlists AND segments. Enabled unless explicitly set to 'false'.
+const ENABLE_AUTH_ON_PLAYLISTS = process.env.ENABLE_AUTH_ON_PLAYLISTS !== 'false';
 const TOKEN_EXPIRATION_SECONDS = parseInt(process.env.TOKEN_EXPIRATION_SECONDS || '60', 10);
+const TOKEN_RENEW_GRACE_SECONDS = parseInt(process.env.TOKEN_RENEW_GRACE_SECONDS || '15', 10);
+const ADMIN_TOKEN_TTL = '12h';
+const JWT_ALGORITHMS = ['HS256'];
+
+// Cross-origin access for the public viewer API only (/api/stream, /api/token).
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
+if (NODE_ENV === 'production' && ALLOWED_ORIGINS.includes('*')) {
+    fatal('ALLOWED_ORIGINS="*" is not allowed when NODE_ENV=production. List explicit origins.');
+}
+
+if (!ENABLE_AUTH_ON_PLAYLISTS) {
+    console.warn('[SECURITY] ENABLE_AUTH_ON_PLAYLISTS=false: /auth allows every edge request. Do not use in production.');
+}
+
+// Restream source URL policy
+const ALLOWED_SOURCE_PROTOCOLS = new Set(['http:', 'https:', 'rtmp:', 'rtmps:', 'rtsp:', 'srt:']);
+const BLOCKED_SOURCE_HOSTS = new Set([
+    'localhost', 'mediamtx', 'backend', 'nginx',
+    'stream_mediamtx', 'stream_backend', 'stream_nginx', 'host.docker.internal'
+]);
+// Passed to FFmpeg so HLS playlists / redirects can never pull in file:, pipe:, concat:, data: etc.
+const FFMPEG_PROTOCOL_WHITELIST = 'http,https,tcp,tls,crypto,rtmp,rtmps,rtmpt,rtmpts,rtp,srtp,udp,srt';
 
 // Cloudflare R2 S3 Config
 const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID || '';
@@ -98,12 +158,25 @@ class ChannelManager {
                 if (Array.isArray(list)) {
                     list.forEach(c => this.channels.set(c.id, c));
                 }
+                // Migration: every channel needs a secret RTMP publish key distinct from its public streamKey
+                let migrated = 0;
+                for (const channel of this.channels.values()) {
+                    if (!channel.publishKey) {
+                        channel.publishKey = ChannelManager.generatePublishKey();
+                        migrated++;
+                    }
+                }
+                if (migrated > 0) {
+                    console.log(`[CHANNELS] Generated publishKey for ${migrated} existing channel(s).`);
+                    this.save();
+                }
             } else {
                 // Initialize default demo channel
                 const defaultChannel = {
                     id: 'ch_match1',
                     name: 'Match 1 Primary Feed',
                     streamKey: 'match1',
+                    publishKey: ChannelManager.generatePublishKey(),
                     r2_slug: this.generateRandomSlug(12),
                     sourceUrl: '',
                     createdAt: new Date().toISOString()
@@ -124,6 +197,10 @@ class ChannelManager {
         } catch (err) {
             console.error('[CHANNELS-ERROR] Failed to save channels:', err.message);
         }
+    }
+
+    static generatePublishKey() {
+        return crypto.randomBytes(16).toString('hex'); // 32 hex chars
     }
 
     generateRandomSlug(length = 12) {
@@ -175,6 +252,7 @@ class ChannelManager {
             id,
             name: name.trim() || `Channel ${cleanKey}`,
             streamKey: cleanKey,
+            publishKey: ChannelManager.generatePublishKey(),
             r2_slug: (r2_slug || this.generateRandomSlug(12)).trim().toLowerCase().replace(/[^a-z0-9]/g, ''),
             sourceUrl: sourceUrl.trim(),
             createdAt: new Date().toISOString()
@@ -210,6 +288,75 @@ class ChannelManager {
 const channelManager = new ChannelManager(DATA_FILE);
 
 // ------------------------------------------------------------------------------
+// Restream Source URL Validation (SSRF / local file protection)
+// ------------------------------------------------------------------------------
+class ValidationError extends Error {
+    constructor(message) {
+        super(message);
+        this.status = 400;
+    }
+}
+
+const PRIVATE_NETWORKS = new net.BlockList();
+[
+    ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16],
+    ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15],
+    ['224.0.0.0', 4], ['240.0.0.0', 4]
+].forEach(([addr, prefix]) => PRIVATE_NETWORKS.addSubnet(addr, prefix, 'ipv4'));
+[
+    ['::', 128], ['::1', 128], ['fc00::', 7], ['fe80::', 10], ['ff00::', 8]
+].forEach(([addr, prefix]) => PRIVATE_NETWORKS.addSubnet(addr, prefix, 'ipv6'));
+
+function isPrivateAddress(address) {
+    const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(address);
+    if (mapped) address = mapped[1];
+    const family = net.isIPv6(address) ? 'ipv6' : 'ipv4';
+    return PRIVATE_NETWORKS.check(address, family);
+}
+
+/**
+ * Validates an external restream source URL. Throws ValidationError (HTTP 400) on rejection.
+ * Returns the normalized URL string.
+ */
+async function validateSourceUrl(rawUrl) {
+    const value = String(rawUrl || '').trim();
+    if (!value) throw new ValidationError('Source URL is required for pull restreaming');
+
+    let parsed;
+    try {
+        parsed = new URL(value);
+    } catch {
+        throw new ValidationError('Source URL is not a valid absolute URL');
+    }
+
+    if (!ALLOWED_SOURCE_PROTOCOLS.has(parsed.protocol)) {
+        throw new ValidationError(`Source URL scheme '${parsed.protocol}' is not allowed (use http, https, rtmp, rtmps, rtsp or srt)`);
+    }
+
+    const host = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+    if (!host) throw new ValidationError('Source URL must include a host');
+    if (BLOCKED_SOURCE_HOSTS.has(host) || host.endsWith('.localhost') || host.endsWith('.internal')) {
+        throw new ValidationError(`Source host '${host}' is not allowed`);
+    }
+
+    let addresses;
+    if (net.isIP(host)) {
+        addresses = [host];
+    } else {
+        try {
+            addresses = (await dns.lookup(host, { all: true, verbatim: true })).map(a => a.address);
+        } catch {
+            throw new ValidationError(`Source host '${host}' could not be resolved`);
+        }
+    }
+    if (addresses.length === 0 || addresses.some(isPrivateAddress)) {
+        throw new ValidationError(`Source host '${host}' resolves to a loopback, link-local or private address`);
+    }
+
+    return value;
+}
+
+// ------------------------------------------------------------------------------
 // FFmpeg Process & Restream Manager
 // ------------------------------------------------------------------------------
 class FFmpegRestreamManager {
@@ -226,8 +373,10 @@ class FFmpegRestreamManager {
         // Stop existing restream process if running
         this.stop(channelId);
 
-        const rtmpTarget = `rtmp://${MEDIAMTX_RTMP_HOST}:${MEDIAMTX_RTMP_PORT}/live/${channel.streamKey}`;
-        console.log(`[RESTREAMER] Starting FFmpeg restream: ${channel.name} (${sourceUrl} -> ${rtmpTarget})`);
+        // Publish with the channel's secret key; MediaMTX validates it via POST /internal/mediamtx-auth
+        const rtmpTarget = `rtmp://${MEDIAMTX_RTMP_HOST}:${MEDIAMTX_RTMP_PORT}/live/${channel.streamKey}` +
+            `?user=publish&pass=${channel.publishKey}`;
+        console.log(`[RESTREAMER] Starting FFmpeg restream: ${channel.name} (${sourceUrl} -> live/${channel.streamKey})`);
 
         // FFmpeg command arguments:
         // - High resilience network flags (-reconnect, etc.)
@@ -238,6 +387,7 @@ class FFmpegRestreamManager {
             '-nostdin',
             '-hide_banner',
             '-loglevel', 'info',
+            '-protocol_whitelist', FFMPEG_PROTOCOL_WHITELIST,
             '-reconnect', '1',
             '-reconnect_at_eof', '1',
             '-reconnect_streamed', '1',
@@ -396,7 +546,9 @@ class FFmpegRestreamManager {
 
     appendLog(job, message) {
         const timestamp = new Date().toISOString().substring(11, 19);
-        job.logs.push(`[${timestamp}] ${message}`);
+        // Never expose the RTMP publish key in logs (logs are streamed to the dashboard)
+        const safe = String(message).replace(/([?&]pass=)[^&\s]+/g, '$1***');
+        job.logs.push(`[${timestamp}] ${safe}`);
         if (job.logs.length > 200) {
             job.logs.shift();
         }
@@ -631,16 +783,44 @@ r2Pipeline.start();
 // ------------------------------------------------------------------------------
 const app = express();
 
+// Nginx is the single trusted hop in front of the backend; req.ip = the client address nginx saw.
+app.set('trust proxy', 1);
+
 // Security Middlewares
-app.use(helmet({ 
+app.use(helmet({
     contentSecurityPolicy: false,
-    crossOriginEmbedderPolicy: false 
+    crossOriginEmbedderPolicy: false
 }));
-app.use(cors({
-    origin: '*',
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Authorization', 'Content-Type', 'Range', 'Origin', 'Referer']
-}));
+
+// CORS for the public viewer API only. Admin routes get no CORS headers (same-origin only).
+const viewerCors = cors({
+    origin: (origin, callback) => {
+        if (!origin) return callback(null, false);
+        if (ALLOWED_ORIGINS.includes('*')) return callback(null, true); // non-production only
+        let normalized;
+        try { normalized = new URL(origin).origin.toLowerCase(); } catch { return callback(null, false); }
+        const allowed = ALLOWED_ORIGINS.some(a => {
+            try { return new URL(a).origin.toLowerCase() === normalized; } catch { return false; }
+        });
+        callback(null, allowed);
+    },
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Authorization', 'Content-Type'],
+    maxAge: 86400
+});
+app.use(['/api/stream', '/api/token'], viewerCors);
+
+// Reject cross-origin browser requests to admin endpoints.
+function sameOriginOnly(req, res, next) {
+    const origin = req.headers.origin;
+    if (!origin) return next();
+    try {
+        if (new URL(origin).host.toLowerCase() === String(req.headers.host || '').toLowerCase()) return next();
+    } catch { /* fall through */ }
+    return res.status(403).json({ success: false, error: 'Forbidden: cross-origin admin request' });
+}
+app.use(['/api/admin', '/api/channels', '/api/stats', '/api/config'], sameOriginOnly);
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -657,10 +837,49 @@ app.get('/admin', (req, res) => {
 function generateAdminToken(username) {
     return jwt.sign(
         { role: 'admin', username },
-        JWT_SECRET,
-        { expiresIn: '7d' }
+        ADMIN_JWT_SECRET,
+        { algorithm: 'HS256', expiresIn: ADMIN_TOKEN_TTL }
     );
 }
+
+// Constant-time string comparison: hash both sides so lengths always match.
+function safeEqual(a, b) {
+    const ha = crypto.createHash('sha256').update(String(a), 'utf8').digest();
+    const hb = crypto.createHash('sha256').update(String(b), 'utf8').digest();
+    return crypto.timingSafeEqual(ha, hb);
+}
+
+// In-memory admin login rate limiter: LOGIN_MAX_FAILURES failed attempts per LOGIN_WINDOW_MS per IP.
+const LOGIN_MAX_FAILURES = 5;
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const loginFailures = new Map(); // ip -> { count, firstAt }
+
+function loginBlockedFor(ip) {
+    const entry = loginFailures.get(ip);
+    if (!entry) return 0;
+    const elapsed = Date.now() - entry.firstAt;
+    if (elapsed > LOGIN_WINDOW_MS) {
+        loginFailures.delete(ip);
+        return 0;
+    }
+    return entry.count >= LOGIN_MAX_FAILURES ? Math.ceil((LOGIN_WINDOW_MS - elapsed) / 1000) : 0;
+}
+
+function recordLoginFailure(ip) {
+    const entry = loginFailures.get(ip);
+    if (!entry || Date.now() - entry.firstAt > LOGIN_WINDOW_MS) {
+        loginFailures.set(ip, { count: 1, firstAt: Date.now() });
+    } else {
+        entry.count++;
+    }
+}
+
+setInterval(() => {
+    const now = Date.now();
+    for (const [ip, entry] of loginFailures) {
+        if (now - entry.firstAt > LOGIN_WINDOW_MS) loginFailures.delete(ip);
+    }
+}, 60 * 1000).unref();
 
 function verifyAdminAuth(req, res, next) {
     const authHeader = req.headers.authorization;
@@ -670,7 +889,7 @@ function verifyAdminAuth(req, res, next) {
 
     const token = authHeader.split(' ')[1];
     try {
-        const decoded = jwt.verify(token, JWT_SECRET);
+        const decoded = jwt.verify(token, ADMIN_JWT_SECRET, { algorithms: JWT_ALGORITHMS });
         if (decoded.role !== 'admin') {
             return res.status(403).json({ success: false, error: 'Forbidden: Admin privilege required' });
         }
@@ -714,20 +933,32 @@ app.get('/api/config', (req, res) => {
 
 // Admin Login
 app.post('/api/admin/login', (req, res) => {
-    const { username, password } = req.body;
+    const ip = req.ip || 'unknown';
+    const retryAfter = loginBlockedFor(ip);
+    if (retryAfter > 0) {
+        res.set('Retry-After', String(retryAfter));
+        return res.status(429).json({ success: false, error: 'Too many failed login attempts. Try again later.' });
+    }
+
+    const { username, password } = req.body || {};
     if (!username || !password) {
         return res.status(400).json({ success: false, error: 'Username and password are required' });
     }
 
-    if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
-        const token = generateAdminToken(username);
+    // Evaluate both comparisons (no short-circuit) to keep timing independent of which one failed
+    const userOk = safeEqual(username, ADMIN_USERNAME);
+    const passOk = safeEqual(password, ADMIN_PASSWORD);
+    if (userOk & passOk) {
+        loginFailures.delete(ip);
+        const token = generateAdminToken(ADMIN_USERNAME);
         return res.json({
             success: true,
             token,
-            user: { username, role: 'admin' }
+            user: { username: ADMIN_USERNAME, role: 'admin' }
         });
     }
 
+    recordLoginFailure(ip);
     return res.status(401).json({ success: false, error: 'Invalid admin credentials' });
 });
 
@@ -735,6 +966,19 @@ app.post('/api/admin/login', (req, res) => {
 app.get('/api/admin/verify', verifyAdminAuth, (req, res) => {
     res.json({ success: true, user: req.admin });
 });
+
+// Admin-only link set. obsStreamKey embeds the secret publish key; never return it from public endpoints.
+function buildChannelLinks(channel) {
+    return {
+        obsRtmpUrl: `rtmp://${SERVER_IP}:${MEDIAMTX_RTMP_PORT}/live`,
+        obsStreamKey: `${channel.streamKey}?user=publish&pass=${channel.publishKey}`,
+        edgeCamouflagedUrl: `https://${EDGE_DOMAIN}/live/${channel.streamKey}/index.css`,
+        r2DirectHtmlUrl: `https://${R2_CUSTOM_DOMAIN}/hd/${channel.r2_slug}/index.html`,
+        r2DirectCssUrl: `https://${R2_CUSTOM_DOMAIN}/hd/${channel.r2_slug}/index.css`,
+        iframeEmbedUrl: `https://${EDGE_DOMAIN}/player/?channel=${channel.streamKey}`,
+        iframeR2EmbedUrl: `https://${EDGE_DOMAIN}/player/?r2=${channel.r2_slug}`
+    };
+}
 
 // List All Channels with Dynamic Restream Status
 app.get('/api/channels', verifyAdminAuth, (req, res) => {
@@ -744,15 +988,7 @@ app.get('/api/channels', verifyAdminAuth, (req, res) => {
         return {
             ...channel,
             restream: restreamStatus,
-            links: {
-                obsRtmpUrl: `rtmp://${SERVER_IP}:${MEDIAMTX_RTMP_PORT}/live`,
-                obsStreamKey: channel.streamKey,
-                edgeCamouflagedUrl: `https://${EDGE_DOMAIN}/live/${channel.streamKey}/index.css`,
-                r2DirectHtmlUrl: `https://${R2_CUSTOM_DOMAIN}/hd/${channel.r2_slug}/index.html`,
-                r2DirectCssUrl: `https://${R2_CUSTOM_DOMAIN}/hd/${channel.r2_slug}/index.css`,
-                iframeEmbedUrl: `https://${EDGE_DOMAIN}/player/?channel=${channel.streamKey}`,
-                iframeR2EmbedUrl: `https://${EDGE_DOMAIN}/player/?r2=${channel.r2_slug}`
-            }
+            links: buildChannelLinks(channel)
         };
     });
 
@@ -760,12 +996,14 @@ app.get('/api/channels', verifyAdminAuth, (req, res) => {
 });
 
 // Create New Channel
-app.post('/api/channels', verifyAdminAuth, (req, res) => {
+app.post('/api/channels', verifyAdminAuth, async (req, res) => {
     try {
-        const { name, streamKey, r2_slug, sourceUrl } = req.body;
+        const { name, streamKey, r2_slug } = req.body;
+        let { sourceUrl } = req.body;
         if (!name && !streamKey) {
             return res.status(400).json({ success: false, error: 'Channel name or stream key is required' });
         }
+        sourceUrl = sourceUrl && String(sourceUrl).trim() ? await validateSourceUrl(sourceUrl) : '';
 
         const channel = channelManager.create({ name, streamKey, r2_slug, sourceUrl });
         const restreamStatus = restreamManager.getStatus(channel.id);
@@ -775,14 +1013,7 @@ app.post('/api/channels', verifyAdminAuth, (req, res) => {
             channel: {
                 ...channel,
                 restream: restreamStatus,
-                links: {
-                    obsRtmpUrl: `rtmp://${SERVER_IP}:${MEDIAMTX_RTMP_PORT}/live`,
-                    obsStreamKey: channel.streamKey,
-                    edgeCamouflagedUrl: `https://${EDGE_DOMAIN}/live/${channel.streamKey}/index.css`,
-                    r2DirectHtmlUrl: `https://${R2_CUSTOM_DOMAIN}/hd/${channel.r2_slug}/index.html`,
-                    r2DirectCssUrl: `https://${R2_CUSTOM_DOMAIN}/hd/${channel.r2_slug}/index.css`,
-                    iframeEmbedUrl: `https://${EDGE_DOMAIN}/player/?channel=${channel.streamKey}`
-                }
+                links: buildChannelLinks(channel)
             }
         });
     } catch (err) {
@@ -791,9 +1022,18 @@ app.post('/api/channels', verifyAdminAuth, (req, res) => {
 });
 
 // Update Channel
-app.put('/api/channels/:id', verifyAdminAuth, (req, res) => {
+app.put('/api/channels/:id', verifyAdminAuth, async (req, res) => {
     const { id } = req.params;
-    const { name, sourceUrl, r2_slug } = req.body;
+    const { name, r2_slug } = req.body;
+    let { sourceUrl } = req.body;
+
+    try {
+        if (sourceUrl !== undefined) {
+            sourceUrl = String(sourceUrl).trim() ? await validateSourceUrl(sourceUrl) : '';
+        }
+    } catch (err) {
+        return res.status(err.status || 400).json({ success: false, error: err.message });
+    }
 
     const channel = channelManager.update(id, { name, sourceUrl, r2_slug });
     if (!channel) {
@@ -815,7 +1055,7 @@ app.delete('/api/channels/:id', verifyAdminAuth, (req, res) => {
 });
 
 // Pull Restreaming: Start
-app.post('/api/channels/:id/restream/start', verifyAdminAuth, (req, res) => {
+app.post('/api/channels/:id/restream/start', verifyAdminAuth, async (req, res) => {
     const { id } = req.params;
     const { sourceUrl } = req.body;
 
@@ -830,10 +1070,11 @@ app.post('/api/channels/:id/restream/start', verifyAdminAuth, (req, res) => {
             return res.status(400).json({ success: false, error: 'External source URL is required' });
         }
 
-        const status = restreamManager.start(id, effectiveUrl);
+        const validUrl = await validateSourceUrl(effectiveUrl);
+        const status = restreamManager.start(id, validUrl);
         res.json({ success: true, status });
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        res.status(err.status || 500).json({ success: false, error: err.message });
     }
 });
 
@@ -845,13 +1086,16 @@ app.post('/api/channels/:id/restream/stop', verifyAdminAuth, (req, res) => {
 });
 
 // Pull Restreaming: Restart
-app.post('/api/channels/:id/restream/restart', verifyAdminAuth, (req, res) => {
+app.post('/api/channels/:id/restream/restart', verifyAdminAuth, async (req, res) => {
     const { id } = req.params;
     try {
+        const job = restreamManager.jobs.get(id);
+        const sourceUrl = job ? job.sourceUrl : (channelManager.getById(id)?.sourceUrl || '');
+        if (sourceUrl) await validateSourceUrl(sourceUrl);
         const status = restreamManager.restart(id);
         res.json({ success: true, status });
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        res.status(err.status || 500).json({ success: false, error: err.message });
     }
 });
 
@@ -905,69 +1149,140 @@ app.get('/api/stats', verifyAdminAuth, (req, res) => {
 // Edge Viewer Token & Nginx Auth Subrequest Handler (/auth)
 // ------------------------------------------------------------------------------
 
+const CHANNEL_RE = /^[a-z0-9_-]{1,64}$/;
+
+function signViewerToken(channelKey) {
+    return jwt.sign(
+        { sub: crypto.randomBytes(8).toString('hex'), channel: channelKey, role: 'viewer' },
+        VIEWER_JWT_SECRET,
+        { algorithm: 'HS256', expiresIn: TOKEN_EXPIRATION_SECONDS }
+    );
+}
+
+function bearerToken(req) {
+    const header = req.headers.authorization || '';
+    return header.startsWith('Bearer ') ? header.slice(7).trim() : null;
+}
+
+// Channel segment of an edge URI: /live/{channel}/index.css, /live/{channel}.css, /live/{channel}/seg_1.js
+function extractChannelFromUri(uri) {
+    const match = /^\/(?:live|hls)\/([A-Za-z0-9_-]+)/.exec(String(uri || '').split('?')[0]);
+    return match ? match[1].toLowerCase() : null;
+}
+
+function tokenFromOriginalUri(uri) {
+    if (!uri || !uri.includes('?')) return null;
+    try {
+        return new URL(uri, 'http://localhost').searchParams.get('token');
+    } catch {
+        return null;
+    }
+}
+
 // Generate dynamic viewer token for Edge CDN playback
 app.get('/api/stream', (req, res) => {
-    const { channel } = req.query;
-    if (!channel) {
+    const requested = String(req.query.channel || '').trim().toLowerCase();
+    if (!requested) {
         return res.status(400).json({ error: 'channel query parameter is required' });
     }
+    if (!CHANNEL_RE.test(requested)) {
+        return res.status(400).json({ error: 'channel may only contain a-z, 0-9, _ and -' });
+    }
+    const channel = channelManager.getByStreamKey(requested);
+    if (!channel) {
+        return res.status(404).json({ error: 'Channel not found' });
+    }
 
-    const payload = {
-        sub: crypto.randomBytes(8).toString('hex'),
-        channel: channel.trim(),
-        iat: Math.floor(Date.now() / 1000)
-    };
-
-    const token = jwt.sign(payload, JWT_SECRET, { expiresIn: TOKEN_EXPIRATION_SECONDS });
-    const edgeUrl = `https://${EDGE_DOMAIN}/live/${channel}/index.css?token=${token}`;
-
+    const token = signViewerToken(channel.streamKey);
     res.json({
-        channel,
+        channel: channel.streamKey,
         token,
         expiresIn: TOKEN_EXPIRATION_SECONDS,
-        streamUrl: edgeUrl
+        streamUrl: `https://${EDGE_DOMAIN}/live/${channel.streamKey}/index.css?token=${token}`
     });
 });
 
-// Token Renewal
+// Token Renewal: accepts a valid token or one expired by at most TOKEN_RENEW_GRACE_SECONDS
 app.post('/api/token', (req, res) => {
-    const { token } = req.body;
+    const token = (req.body && req.body.token) || bearerToken(req);
     if (!token) {
         return res.status(400).json({ error: 'Token is required' });
     }
 
+    let decoded;
     try {
-        const decoded = jwt.verify(token, JWT_SECRET, { ignoreExpiration: true });
-        const newToken = jwt.sign(
-            { sub: decoded.sub, channel: decoded.channel },
-            JWT_SECRET,
-            { expiresIn: TOKEN_EXPIRATION_SECONDS }
-        );
-        res.json({ token: newToken, expiresIn: TOKEN_EXPIRATION_SECONDS });
+        decoded = jwt.verify(token, VIEWER_JWT_SECRET, {
+            algorithms: JWT_ALGORITHMS,
+            clockTolerance: TOKEN_RENEW_GRACE_SECONDS
+        });
     } catch (err) {
-        res.status(401).json({ error: 'Invalid token' });
+        return res.status(401).json({ error: err.name === 'TokenExpiredError' ? 'Token expired beyond renewal window' : 'Invalid token' });
     }
+
+    if (decoded.role !== 'viewer' || !decoded.channel || !channelManager.getByStreamKey(decoded.channel)) {
+        return res.status(401).json({ error: 'Invalid token' });
+    }
+
+    res.json({ token: signViewerToken(decoded.channel), expiresIn: TOKEN_EXPIRATION_SECONDS });
 });
 
-// Internal Nginx Auth Subrequest Endpoint
-app.get('/auth', (req, res) => {
-    // If strict authentication on playlists is disabled, always allow
+// Internal Nginx auth_request endpoint. 200 = allow, 401 = missing/invalid/expired, 403 = channel mismatch
+function handleEdgeAuth(req, res) {
     if (!ENABLE_AUTH_ON_PLAYLISTS) {
         return res.status(200).send('OK');
     }
 
-    // Check token from query ?token= or Authorization header
-    const token = req.query.token || (req.headers.authorization && req.headers.authorization.split(' ')[1]);
+    const originalUri = req.headers['x-original-uri'] || '';
+    const token = bearerToken(req) || tokenFromOriginalUri(originalUri);
     if (!token) {
-        return res.status(401).send('Unauthorized: Token missing');
+        return res.status(401).set('WWW-Authenticate', 'Bearer error="token_missing"').send('Unauthorized: Token missing');
     }
 
+    let decoded;
     try {
-        jwt.verify(token, JWT_SECRET);
-        return res.status(200).send('OK');
+        decoded = jwt.verify(token, VIEWER_JWT_SECRET, { algorithms: JWT_ALGORITHMS });
     } catch (err) {
-        return res.status(403).send('Forbidden: Token invalid or expired');
+        const reason = err.name === 'TokenExpiredError' ? 'Token expired' : 'Invalid token';
+        return res.status(401).set('WWW-Authenticate', `Bearer error="${err.name}"`).send(`Unauthorized: ${reason}`);
     }
+
+    const requestedChannel = extractChannelFromUri(originalUri);
+    if (decoded.role !== 'viewer' || !requestedChannel || typeof decoded.channel !== 'string' ||
+        decoded.channel.toLowerCase() !== requestedChannel) {
+        return res.status(403).send('Forbidden: Token not valid for requested channel');
+    }
+
+    return res.status(200).send('OK');
+}
+app.get('/auth', handleEdgeAuth);
+app.head('/auth', handleEdgeAuth);
+
+// ------------------------------------------------------------------------------
+// MediaMTX HTTP auth hook (authMethod: http). Reachable only on the docker network;
+// nginx does not proxy /internal/.
+// ------------------------------------------------------------------------------
+const LOOPBACK_IPS = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+
+app.post('/internal/mediamtx-auth', (req, res) => {
+    const { action, path: mtxPath, ip, password } = req.body || {};
+
+    // Only the packaging FFmpeg running inside the MediaMTX container may read streams
+    if (action === 'read') {
+        return LOOPBACK_IPS.has(ip) ? res.sendStatus(200) : res.sendStatus(403);
+    }
+
+    if (action === 'publish') {
+        const match = /^live\/([a-z0-9_-]+)$/.exec(String(mtxPath || ''));
+        const channel = match && channelManager.getByStreamKey(match[1]);
+        if (channel && password && safeEqual(password, channel.publishKey)) {
+            return res.sendStatus(200);
+        }
+        console.warn(`[MEDIAMTX-AUTH] Rejected publish to '${mtxPath}' from ${ip}`);
+        return res.sendStatus(401);
+    }
+
+    // playback, api, metrics, pprof: not used by this stack
+    return res.sendStatus(403);
 });
 
 // ------------------------------------------------------------------------------

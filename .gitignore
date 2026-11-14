@@ -1,11 +1,17 @@
 # Environment files
 .env
-auth/.env
+**/.env
 *.env.local
 
 # SSL / TLS certificates
 certs/*.pem
 !certs/.gitkeep
+certbot/conf/
+certbot/www/*
+!certbot/www/.gitkeep
+
+# Runtime data
+backend/data/
 
 # Node dependencies & logs
 node_modules/

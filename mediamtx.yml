@@ -8,6 +8,19 @@ logLevel: info
 logDestinations: [stdout]
 
 ################################################################################
+# Authentication (MediaMTX v1.21.x, authMethod: http)
+# Every publish/read is POSTed as JSON {user, password, ip, action, path, protocol, ...}
+# to the backend. 2xx = allowed, anything else = rejected.
+# - publish: allowed only on live/{streamKey} with password == that channel's publishKey
+#   (OBS stream key: {streamKey}?user=publish&pass={publishKey})
+# - read: allowed only from 127.0.0.1 / ::1, i.e. the packaging FFmpeg below
+# MediaMTX API/metrics/pprof stay disabled (defaults), so nothing else needs excluding.
+################################################################################
+authMethod: http
+authHTTPAddress: http://backend:3000/internal/mediamtx-auth
+authHTTPExclude: []
+
+################################################################################
 # Ingestion Protocols
 ################################################################################
 
@@ -32,7 +45,8 @@ srt: no
 
 paths:
   # Path pattern for standard live streams: rtmp://SERVER_IP:1935/live/{stream_key}
-  live/*:
+  # (MediaMTX >= 1.x rejects glob names like 'live/*'; a '~' regex is required)
+  "~^live/[a-z0-9_-]+$":
     source: publisher
 
     # Automatically trigger FFmpeg on publish to package clean HLS
