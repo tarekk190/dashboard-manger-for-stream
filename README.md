@@ -1,9 +1,9 @@
 # Enterprise Live Streaming Infrastructure & Admin Restreaming Dashboard
 
-A complete, production-ready, Dockerized live video streaming infrastructure and administration control panel. Designed for high-scale sports and live event distribution supporting **two simultaneous delivery modes**:
+A Dockerized live video streaming stack with an admin control panel. It supports **two delivery modes**:
 
-1. **Direct Nginx + Cloudflare CDN Mode:** RTMP ingestion -> MediaMTX -> Real-time FFmpeg HLS packaging (`2s` segments, sliding window 6) -> Nginx masking `.m3u8` as `.css` and `.ts` as `.js` with `proxy_cache_lock` micro-caching.
-2. **Cloudflare R2 Zero-Egress Mode (Storage + CDN):** Background Node.js watcher (`r2-uploader` inside backend) watches `/hls`, rewrites manifest segment links to `.js`, uploads manifests as `index.html` (and `index.css`) and segments as `.js` to Cloudflare R2 under randomized folder slugs (`/hd/{random_slug}/`), and automatically purges segments older than 120 seconds.
+1. **Nginx Edge Mode (token-protected):** RTMP ingest -> MediaMTX -> FFmpeg HLS packaging (`2s` segments, sliding window 6) -> Nginx serves `.m3u8` as `.css` and `.ts` as `.js`, with `proxy_cache_lock` segment micro-caching. Every playlist and segment request is checked against a short-lived viewer token.
+2. **Cloudflare R2 Zero-Egress Mode (public):** the backend's R2 watcher watches `/hls`, rewrites segment links to `.js`, uploads segments first and then manifests (`index.html` / `index.css`) to R2 under randomized folder slugs (`/hd/{random_slug}/`), and purges segments older than `MAX_SEGMENT_AGE_SECONDS`. R2 delivery is not token-protected.
 
 ---
 
@@ -12,45 +12,48 @@ A complete, production-ready, Dockerized live video streaming infrastructure and
 ```mermaid
 flowchart TD
     subgraph Ingestion ["1. Broadcast Ingestion Layer"]
-        OBS["OBS Studio Broadcaster\n(rtmp://SERVER_IP:1935/live/{key})"] -->|RTMP Port 1935| MTX["MediaMTX Server"]
-        RESTREAM["Admin Restreamer\n(FFmpeg Background Pull)"] -->|RTMP Relay| MTX
-        MTX -->|runOnReady Hook\n(RTSP 127.0.0.1:8554)| FFMPEG_PKG["FFmpeg Packager\n(-c copy, 2s segments, list 6)"]
-        FFMPEG_PKG -->|Outputs HLS| HLS_VOL[("Shared Volume: /hls/live/{key}/\n(index.m3u8 + seg_%05d.ts)")]
+        OBS["OBS Studio Broadcaster\n(rtmp://SERVER_IP:1935/live,\nkey: {streamKey}?user=publish&pass={publishKey})"] -->|RTMP Port 1935| MTX["MediaMTX Server"]
+        RESTREAM["Admin Restreamer\n(FFmpeg Background Pull, supervised)"] -->|RTMP Relay + publishKey| MTX
+        MTX -.->|authMethod: http\nPOST /internal/mediamtx-auth| AUTHHOOK["Backend publish/read check"]
+        MTX -->|runOnReady Hook\n(RTSP 127.0.0.1:8554)| FFMPEG_PKG["FFmpeg Packager\n(-c copy, 2s segments, list 6,\nepoch segment numbers)"]
+        FFMPEG_PKG -->|Outputs HLS| HLS_VOL[("Shared Volume: /hls/live/{streamKey}/\n(index.m3u8 + seg_{epoch}.ts)")]
     end
 
-    subgraph BackendAdmin ["2. Admin Control Panel & Backend (Node.js :3000)"]
-        ADMIN_UI["Web Dashboard (/admin)\n(Tailwind Dark Mode UI)"]
-        FFMPEG_MGR["FFmpeg Process Manager\n(Start/Stop/Restart, Telemetry & Logs)"]
+    subgraph BackendAdmin ["2. Admin Control Panel & Backend (Node.js :3000, user 'node')"]
+        ADMIN_UI["Web Dashboard (/admin)"]
+        FFMPEG_MGR["FFmpeg Process Manager\n(Start/Stop/Restart, auto-restart, resume on boot)"]
         R2_WATCHER["R2 Real-Time Watcher\n(chokidar + @aws-sdk/client-s3)"]
-        PRUNER["R2 Auto-Pruner Loop\n(Purge segments > 120s)"]
-        
+        PRUNER["R2 Auto-Pruner Loop"]
+        VIEWER_AUTH["Viewer tokens\n/api/stream, /api/token, /auth"]
+
         ADMIN_UI <--> FFMPEG_MGR
         HLS_VOL -.->|Watch FS Events| R2_WATCHER
-        R2_WATCHER -->|Manifest Rewrite & Upload| R2_BUCKET
+        R2_WATCHER -->|Segments first, then manifest| R2_BUCKET
         PRUNER -.->|Clean Expired Segments| R2_BUCKET
     end
 
-    subgraph DeliveryMode1 ["3. Mode 1: Direct Nginx Edge + Cloudflare CDN"]
-        NGINX["Nginx Edge Proxy (:80 / :443)\n(TLS 1.2/1.3 + HTTP/2)"]
+    subgraph DeliveryMode1 ["3. Mode 1: Nginx Edge (HTTPS only)"]
+        NGINX["Nginx Edge Proxy (:443, :80 -> 301)\n(TLS 1.2/1.3 + HTTP/2)"]
         HLS_CACHE[("Nginx proxy_cache\n(Segment Cache: 60s, lock on)")]
-        
+
         HLS_VOL --> NGINX
         NGINX <--> HLS_CACHE
-        NGINX -->|sub_filter '.ts' '.js'\nCache-Control: no-store| EDGE_MANIFEST["Camouflaged Manifest\n/live/{key}/index.css"]
-        NGINX -->|rewrite '.js' '.ts'\nCache-Control: public, max-age=60| EDGE_SEGMENT["Camouflaged Segments\n/live/{key}/seg_*.js"]
+        NGINX -.->|auth_request /auth| VIEWER_AUTH
+        NGINX -->|sub_filter '.ts' '.js'\nCache-Control: no-store| EDGE_MANIFEST["Camouflaged Manifest\n/live/{streamKey}/index.css"]
+        NGINX -->|rewrite '.js' '.ts'\nCache-Control: public, max-age=60| EDGE_SEGMENT["Camouflaged Segments\n/live/{streamKey}/seg_*.js"]
     end
 
     subgraph DeliveryMode2 ["4. Mode 2: Cloudflare R2 Zero-Egress Storage + CDN"]
         R2_BUCKET[("Cloudflare R2 Bucket\n(Zero Egress Fees)")]
-        R2_CDN["Cloudflare Global CDN (300+ PoPs)\nhttps://r2-custom-domain.shop"]
-        
+        R2_CDN["Cloudflare Global CDN\nhttps://R2_CUSTOM_DOMAIN"]
+
         R2_BUCKET --> R2_CDN
         R2_CDN --> R2_MANIFEST["Manifest: /hd/{slug}/index.html\n(Cache: Bypass)"]
         R2_CDN --> R2_SEGMENT["Segments: /hd/{slug}/seg_*.js\n(Cache: 1-4 hours)"]
     end
 
     subgraph Viewers ["5. Playback & Embeds"]
-        PLAYER["Embedded Web Player (/player/)\n(hls.js Low Latency MSE Engine)"]
+        PLAYER["Embedded Web Player (/player/)\n(hls.js, fetches + renews viewer token)"]
         EDGE_MANIFEST --> PLAYER
         EDGE_SEGMENT --> PLAYER
         R2_MANIFEST --> PLAYER
@@ -64,122 +67,140 @@ flowchart TD
 
 ```text
 /opt/stream/ (or repository root)
-├── docker-compose.yml              # Multi-container orchestration (MediaMTX, Backend, Nginx)
-├── mediamtx.yml                    # Ingestion & automatic FFmpeg HLS packaging config
-├── .env.example                    # Environment template
-├── .env                            # Active environment configuration
+├── docker-compose.yml              # MediaMTX, Backend, Nginx (stock nginx:alpine image)
+├── mediamtx.yml                    # Ingest, HTTP auth hook & automatic FFmpeg HLS packaging
+├── .env.example                    # Environment template (placeholders only)
+├── .env                            # Your configuration (git-ignored, never baked into images)
 ├── backend/
-│   ├── Dockerfile                  # Alpine + Node.js 20 + FFmpeg
-│   ├── package.json                # Express, AWS S3 SDK, Chokidar, JWT, Helmet
-│   ├── server.js                   # Unified backend: Auth, Restream Manager, R2 Watcher & Pruner
-│   ├── .env.example                # Backend-specific environment variables
-│   ├── data/
-│   │   └── channels.json           # File-backed channel and restream store
+│   ├── Dockerfile                  # Alpine + Node.js 20 + FFmpeg, runs as user 'node'
+│   ├── .dockerignore               # Keeps .env, certs and data out of the image
+│   ├── package.json                # Express, AWS S3 SDK, Chokidar, JWT, Helmet, CORS
+│   ├── server.js                   # Admin API, restream supervisor, R2 pipeline, viewer auth, MediaMTX auth hook
+│   ├── .env.example                # Only for running server.js outside docker compose
 │   └── public/
-│       └── admin.html              # Full dark-mode Restreaming Dashboard (Tailwind UI)
+│       └── admin.html              # Restreaming Dashboard (Tailwind UI)
 ├── nginx/
-│   ├── Dockerfile                  # Production Nginx image
-│   ├── nginx.conf                  # Main Nginx edge configuration (TLS, proxy_cache, sub_filter)
+│   ├── nginx.conf                  # TLS, proxy_cache, CORS map, HTTP->HTTPS redirect
 │   └── snippets/
-│       ├── allowed-origins.conf    # CORS origins list
-│       └── stream-locations.conf   # Camouflage routing rules (.css -> .m3u8, .js -> .ts)
+│       ├── allowed-origins.conf    # CORS origins for playlists/segments (map $http_origin)
+│       └── stream-locations.conf   # HTTPS locations: camouflage routing + auth_request
 ├── player/
-│   └── index.html                  # Embedded hls.js player supporting both Nginx and R2 URLs
+│   └── index.html                  # The embedded hls.js player (Nginx edge + R2 modes)
+├── certbot/
+│   └── www/                        # ACME webroot served on port 80
 └── certs/
-    ├── fullchain.pem               # SSL Certificate (Let's Encrypt / Cloudflare Origin)
-    └── privkey.pem                 # SSL Private Key
+    ├── fullchain.pem               # TLS certificate (git-ignored)
+    └── privkey.pem                 # TLS private key (git-ignored)
 ```
+
+Channel data lives in the `backend_data` docker volume (`/app/data/channels.json`).
 
 ---
 
 ## 3. Quick Start & Deployment Guide
 
 ### Prerequisites
-- A Linux VPS (Ubuntu 22.04 / Debian 12 / Rocky Linux) with Docker and Docker Compose installed.
-- Public IP address and domain pointing to your server (e.g. `edge-domain.com`).
-- Optional: Cloudflare account for R2 Zero-Egress distribution.
+- A Linux VPS with Docker and Docker Compose v2.
+- A public IP and a domain (`EDGE_DOMAIN`) pointing to it.
+- Optional: Cloudflare account for R2 delivery.
 
-### Step 1: Clone or Copy Project Files
-Place the repository files into `/opt/stream`:
+### Step 1: Copy Project Files
 ```bash
-sudo mkdir -p /opt/stream
-cd /opt/stream
+sudo mkdir -p /opt/stream && cd /opt/stream
 # Copy project files here
 ```
 
 ### Step 2: Configure Environment Variables
-Copy `.env.example` to `.env` and fill in your details:
 ```bash
 cp .env.example .env
 nano .env
 ```
 
-Key environment settings:
-```ini
-ADMIN_USERNAME=admin
-ADMIN_PASSWORD=your_secure_password_here
-JWT_SECRET=generate_with_openssl_rand_hex_32
-SERVER_IP=YOUR_VPS_PUBLIC_IP
-EDGE_DOMAIN=edge-domain.com
-R2_CUSTOM_DOMAIN=r2-custom-domain.shop
+Required (compose refuses to start without them, the backend refuses weak values):
 
-# Cloudflare R2 Credentials (Optional - leave blank for local DRY-RUN mode)
-R2_ACCOUNT_ID=your_cloudflare_account_id
-R2_ACCESS_KEY_ID=your_r2_access_key_id
-R2_SECRET_ACCESS_KEY=your_r2_secret_access_key
-R2_BUCKET_NAME=live-streams
-```
+| Variable | Rule | How to generate |
+| :--- | :--- | :--- |
+| `ADMIN_USERNAME` | non-empty | choose one |
+| `ADMIN_PASSWORD` | ≥ 12 chars, not a known placeholder | `openssl rand -base64 24` |
+| `ADMIN_JWT_SECRET` | ≥ 32 chars, signs admin sessions (12h) | `openssl rand -hex 48` |
+| `VIEWER_JWT_SECRET` | ≥ 32 chars, different from the admin secret, signs viewer tokens | `openssl rand -hex 48` |
+| `SERVER_IP` | public IP shown as the OBS RTMP server | |
+| `EDGE_DOMAIN` | public HTTPS domain of the edge | |
 
-### Step 3: SSL Certificates Setup
-Ensure valid TLS certificates exist in `./certs/`:
-- **Option A (Self-Signed for testing):**
+Optional:
+
+| Variable | Default | Meaning |
+| :--- | :--- | :--- |
+| `ENABLE_AUTH_ON_PLAYLISTS` | `true` | Require a viewer token on every edge playlist **and** segment. `false` makes `/auth` allow everything (debug only). |
+| `TOKEN_EXPIRATION_SECONDS` | `60` | Viewer token lifetime |
+| `TOKEN_RENEW_GRACE_SECONDS` | `15` | How long after expiry `POST /api/token` still renews a token |
+| `ALLOWED_ORIGINS` | empty | Comma-separated origins allowed to call `/api/stream` and `/api/token` cross-origin. `*` is refused when `NODE_ENV=production`. |
+| `RESTREAM_MAX_RETRIES` | `10` | Consecutive auto-restarts before a restream is marked `failed` (`0` = unlimited) |
+| `R2_*`, `R2_CUSTOM_DOMAIN` | empty | Cloudflare R2. Empty credentials = DRY-RUN (no uploads). |
+| `MAX_SEGMENT_AGE_SECONDS` | `120` | R2 segment retention. Keep it well above the 12s playlist window. |
+
+Playlist/segment CORS for third-party sites is configured in `nginx/snippets/allowed-origins.conf` (the bundled player is same-origin and needs no entry).
+
+### Step 3: TLS Certificates
+Nginx serves only HTTPS; port 80 answers ACME challenges and redirects everything else.
+
+- **Option A: self-signed (testing only):**
   ```bash
-  mkdir -p certs
   openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-    -keyout certs/privkey.pem \
-    -out certs/fullchain.pem \
-    -subj "/CN=localhost"
+    -keyout certs/privkey.pem -out certs/fullchain.pem -subj "/CN=$EDGE_DOMAIN"
   ```
-- **Option B (Let's Encrypt via Certbot or Cloudflare Origin CA):**
-  Place your certificate in `./certs/fullchain.pem` and private key in `./certs/privkey.pem`.
+- **Option B: Let's Encrypt via the webroot** (the stack must be running so port 80 serves `./certbot/www`; start it once with a self-signed cert from Option A):
+  ```bash
+  docker run --rm \
+    -v "$PWD/certbot/www:/var/www/certbot" \
+    -v "$PWD/certbot/conf:/etc/letsencrypt" \
+    certbot/certbot certonly --webroot -w /var/www/certbot -d "$EDGE_DOMAIN" --agree-tos -m you@example.com
+  cp -L "certbot/conf/live/$EDGE_DOMAIN/fullchain.pem" certs/fullchain.pem
+  cp -L "certbot/conf/live/$EDGE_DOMAIN/privkey.pem"   certs/privkey.pem
+  docker compose exec nginx nginx -s reload
+  ```
+  Renew with the same command plus `renew` instead of `certonly ...`, then copy and reload again.
+- **Option C:** a Cloudflare Origin CA certificate placed at the same two paths.
 
-### Step 4: Build and Launch the Stack
+HSTS is sent as a plain `max-age` (no `includeSubDomains` / `preload`).
+
+### Step 4: Build and Launch
 ```bash
+docker compose config --quiet   # fails clearly if a required variable is missing
 docker compose up -d --build
+docker compose exec nginx nginx -t
+docker compose ps
 ```
 
-Verify container status:
-```bash
-docker compose ps
-docker compose logs -f
-```
+### Upgrading an existing deployment
+- Set `ADMIN_JWT_SECRET` and `VIEWER_JWT_SECRET` (the old `JWT_SECRET` is no longer read). Existing admin sessions and viewer tokens become invalid.
+- On first start every existing channel gets a random `publishKey`. **OBS / encoder settings must be updated** with the new stream key from the dashboard.
+- The backend now runs as uid 1000. If `backend_data` was created by an older root container, fix ownership once:
+  `docker compose run --rm -u root backend chown -R node:node /app/data`
 
 ---
 
 ## 4. Admin Restreaming Dashboard Usage
 
-Open your browser and navigate to:
-```text
-https://edge-domain.com/admin
-(or http://SERVER_IP/admin)
-```
+Open `https://EDGE_DOMAIN/admin` (plain HTTP redirects to HTTPS).
 
-1. **Sign In:** Use your `ADMIN_USERNAME` and `ADMIN_PASSWORD`.
-2. **Channel Management:**
-   - Click **"New Channel"** to generate a channel (e.g., `match1`).
-   - The system automatically generates:
-     - **OBS RTMP URL:** `rtmp://SERVER_IP:1935/live`
-     - **Stream Key:** `match1`
-     - **Randomized R2 Folder Slug:** e.g. `ugrabzavmtzj`
-3. **Pull Restreaming (No OBS Needed):**
-   - Paste an external stream link (`.m3u8`, `.ts`, `.mp4`) into the source URL field.
-   - Click **"Start Restream"**.
-   - The backend spawns a resilient background FFmpeg process that pulls the source and relays it to local MediaMTX.
-   - Watch live telemetry (FPS, Bitrate, Speed, Uptime) and inspect real-time terminal logs with one click.
-4. **Ready-to-Use Output Links (One-Click Copy):**
-   - **Nginx Camouflaged Edge:** `https://edge-domain.com/live/{stream_key}/index.css`
-   - **Cloudflare R2 Direct CDN:** `https://r2-custom-domain.shop/hd/{random_slug}/index.html` (or `.css`)
-   - **Embedded Player Iframe:** Ready `<iframe>` tag pointing to `/player/?channel={stream_key}` or `/player/?r2={random_slug}`.
+1. **Sign In** with `ADMIN_USERNAME` / `ADMIN_PASSWORD`. Five failed attempts per IP within 15 minutes lock that IP out for the rest of the window (HTTP 429).
+2. **Channels:** each channel has
+   - a **public stream key** (`streamKey`, e.g. `match1`): the URL path `/live/match1/...` and the `?channel=` value. Not secret.
+   - a **secret publish key** (`publishKey`, 32 hex chars): only shown in the dashboard and required to push RTMP.
+   - a randomized **R2 folder slug** (`r2_slug`).
+3. **OBS settings:**
+   - Server: `rtmp://SERVER_IP:1935/live`
+   - Stream Key: `match1?user=publish&pass=<publishKey>` (use **Copy Key** on the channel card)
+
+   Publishing without the right key is rejected by MediaMTX. Reading streams over RTMP/RTSP from outside is rejected too; only the packager inside the MediaMTX container may read.
+4. **Pull Restreaming:** paste an `http(s)`, `rtmp(s)`, `rtsp` or `srt` source URL and click **Start Restream**.
+   - Other schemes (`file:`, `concat:`, `pipe:`, `data:` …) and hosts that resolve to loopback, link-local or private ranges, or to the docker service names, are rejected with HTTP 400. FFmpeg also runs with `-protocol_whitelist`.
+   - FFmpeg is supervised: an unexpected exit triggers a restart after 2s, 4s, 8s … (max 60s, `RESTREAM_MAX_RETRIES`). **Stop** is final. Running jobs resume automatically after a backend restart.
+5. **Output links:**
+   - **Nginx edge:** `https://EDGE_DOMAIN/live/{streamKey}/index.css` (needs a viewer token, see section 7)
+   - **Cloudflare R2:** `https://R2_CUSTOM_DOMAIN/hd/{r2_slug}/index.html` (or `.css`)
+   - **Player iframe:** `/player/?channel={streamKey}` or `/player/?r2={r2_slug}`
 
 ---
 
@@ -275,96 +296,104 @@ Because live streaming playlists change every 2 seconds while media segments are
 
 ## 6. How Obfuscation & Camouflage Work
 
-| Asset Type | Real File on Server | Delivered URL | Masqueraded MIME Type | Caching Behavior |
+| Asset Type | Real File on Server | Delivered URL | MIME Type | Caching Behavior |
 | :--- | :--- | :--- | :--- | :--- |
-| **HLS Playlist (Edge)** | `/hls/live/match1/index.m3u8` | `/live/match1/index.css` | `text/css; charset=utf-8` | `Cache-Control: no-store` (No edge/browser caching) |
-| **Media Segment (Edge)** | `/hls/live/match1/seg_00001.ts` | `/live/match1/seg_00001.js` | `application/javascript` | `Cache-Control: public, max-age=60` (`proxy_cache` active) |
-| **HLS Playlist (R2)** | Uploaded rewritten manifest | `/hd/ugrabzavmtzj/index.html` | `text/html; charset=utf-8` | `Cache-Control: no-store` (Cloudflare Cache Bypassed) |
-| **Media Segment (R2)** | Uploaded MPEG-TS segment | `/hd/ugrabzavmtzj/seg_00001.js` | `application/javascript` | Edge cached globally (Cloudflare 2h TTL, purged > 120s) |
+| **HLS Playlist (Edge)** | `/hls/live/match1/index.m3u8` | `/live/match1/index.css` | `text/css; charset=utf-8` | `Cache-Control: no-store` |
+| **Media Segment (Edge)** | `/hls/live/match1/seg_1794671902.ts` | `/live/match1/seg_1794671902.js` | `application/javascript` | `public, max-age=60` (`proxy_cache`) |
+| **HLS Playlist (R2)** | Uploaded rewritten manifest | `/hd/ugrabzavmtzj/index.html` | `text/html; charset=utf-8` | `no-store` (Cloudflare cache bypassed) |
+| **Media Segment (R2)** | Uploaded MPEG-TS segment | `/hd/ugrabzavmtzj/seg_1794671902.js` | `application/javascript` | `public, max-age=3600, immutable` |
+
+- Raw `.m3u8` / `.ts` URLs (and anything else under `/live/` or `/hls/`) return **404**.
+- Segment numbers start at the Unix time when the packager starts (`-hls_start_number_source epoch`), so a restarted packager never reuses a segment name. That is what makes the 60s edge cache and the immutable R2 cache safe.
+- The MIME types are set by the internal origin (`127.0.0.1:8088` in `nginx.conf`). The edge locations must not `proxy_hide_header Content-Type`: that would disable `sub_filter`.
 
 ---
 
-## 7. Verification & Testing
+## 7. Viewer Tokens (Nginx edge mode)
 
-### Test Ingestion with FFmpeg (CLI Test Stream)
-Push a test colorbars live video with audio to MediaMTX:
-```bash
-ffmpeg -re -f lavfi -i testsrc=size=1920x1080:rate=30 \
-  -f lavfi -i sine=frequency=1000:sample_rate=44100 \
-  -c:v libx264 -preset veryfast -b:v 3000k -maxrate 3000k -bufsize 6000k -pix_fmt yuv420p -g 60 \
-  -c:a aac -b:a 128k \
-  -f flv rtmp://127.0.0.1:1935/live/match1
-```
+1. `GET /api/stream?channel=match1` → `{ channel, token, expiresIn, streamUrl }`. `channel` must match `[a-z0-9_-]` and exist (404 otherwise). `streamUrl` already carries `?token=`.
+2. Send the token on every playlist **and** segment request, either as `Authorization: Bearer <token>` (hls.js `xhrSetup`) or as `?token=`.
+3. Renew before expiry with `POST /api/token {"token": "<current>"}`. Tokens expired by more than `TOKEN_RENEW_GRACE_SECONDS` return 401 and the client must call `/api/stream` again.
+4. Nginx `auth_request /auth` answers **401** for a missing, invalid or expired token and **403** when the token's channel differs from the channel in the URL. Results are micro-cached (200: 5s, 401/403: 1s) under a key of *channel + query token + Authorization header* from the original request.
 
-### Inspect Camouflaged Manifest Delivery
-```bash
-curl -I https://edge-domain.com/live/match1/index.css
-```
-Expected response:
-```http
-HTTP/2 200
-content-type: text/css; charset=utf-8
-cache-control: no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0
-access-control-allow-origin: *
-```
+The bundled player (`/player/?channel=...`) does all of this automatically. Native Safari HLS (no hls.js) can only pass the token in the playlist URL, so its segment requests fail with 401; use hls.js there.
 
-### Inspect Camouflaged Segment Delivery & Caching
-```bash
-curl -I https://edge-domain.com/live/match1/seg_00001.js
-```
-Expected response:
-```http
-HTTP/2 200
-content-type: application/javascript
-cache-control: public, max-age=60, immutable
-x-cache-status: HIT
-access-control-allow-origin: *
-```
+---
 
-### Inspect Cloudflare R2 Delivery
+## 8. Verification & Testing
+
+Replace `edge-domain.com` with your `EDGE_DOMAIN`. Add `-k` for self-signed certificates.
+
 ```bash
-curl -I https://r2-custom-domain.shop/hd/ugrabzavmtzj/index.html
+# Config and syntax
+docker compose config --quiet                 # must fail clearly if a required var is missing
+docker compose up -d --build
+docker compose exec nginx nginx -t
+
+# HTTPS only
+curl -sI http://edge-domain.com/admin                         # 301 -> https://edge-domain.com/admin
+
+# Raw HLS is never reachable, camouflaged HLS needs a token
+curl -s -o /dev/null -w '%{http_code}\n' https://edge-domain.com/live/match1/index.m3u8   # 404
+curl -s -o /dev/null -w '%{http_code}\n' https://edge-domain.com/live/match1/index.css    # 401
+
+# Valid token: playlist 200 with exactly one Content-Type
+TOKEN=$(curl -s 'https://edge-domain.com/api/stream?channel=match1' | jq -r .token)
+curl -s -D - -o /tmp/pl.css -H "Authorization: Bearer $TOKEN" https://edge-domain.com/live/match1/index.css | grep -ci '^content-type'   # 1
+
+# Same segment twice: the second response is a cache HIT
+SEG=$(grep -m1 '\.js$' /tmp/pl.css)
+for i in 1 2; do curl -s -D - -o /dev/null -H "Authorization: Bearer $TOKEN" "https://edge-domain.com/live/match1/$SEG" | grep -i x-cache-status; done
+
+# Token for match1 used on another channel -> 403
+curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOKEN" https://edge-domain.com/live/match2/index.css
+
+# Expired token (older than the grace window) -> 401
+curl -s -X POST https://edge-domain.com/api/token -H 'Content-Type: application/json' -d '{"token":"<old token>"}' -w ' %{http_code}\n'
+
+# RTMP publish: rejected without the publish key, accepted with it
+ffmpeg -re -f lavfi -i testsrc=size=1280x720:rate=30 -f lavfi -i sine=frequency=1000 \
+  -c:v libx264 -preset veryfast -g 60 -pix_fmt yuv420p -c:a aac -f flv \
+  rtmp://SERVER_IP:1935/live/match1                                    # "authentication failed"
+ffmpeg ... -f flv "rtmp://SERVER_IP:1935/live/match1?user=publish&pass=<publishKey>"   # accepted
+
+# Restream source validation (admin token from POST /api/admin/login)
+curl -s -X POST https://edge-domain.com/api/channels/<id>/restream/start \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"sourceUrl":"file:///etc/passwd"}' -w ' %{http_code}\n'          # 400
+
+# Restream supervision
+docker compose exec backend pkill -9 ffmpeg     # dashboard shows "restarting", new PID after 2s, 4s, ...
+docker compose restart backend                  # running jobs resume ("Resumed restream" in logs)
+
+# Admin login rate limit: the 6th wrong attempt within 15 minutes -> 429
+for i in 1 2 3 4 5 6; do curl -s -o /dev/null -w '%{http_code} ' -X POST https://edge-domain.com/api/admin/login \
+  -H 'Content-Type: application/json' -d '{"username":"x","password":"wrong-password"}'; done; echo
+
+# No default secrets in the tree
+grep -rnE "admin12345[6]|fallback_[d]efault|super_[s]ecret" --exclude-dir=.git .   # [x] keeps this line from matching itself
 ```
 
 ---
 
-## 8. Embedded Web Player Integration
-
-Use the built-in standalone player or embed via iframe:
+## 9. Embedded Web Player Integration
 
 ```html
-<!-- Edge Camouflaged Mode -->
-<iframe 
-    src="https://edge-domain.com/player/?channel=match1" 
-    width="100%" 
-    height="100%" 
-    frameborder="0" 
-    allowfullscreen 
-    allow="autoplay; encrypted-media">
-</iframe>
+<!-- Nginx edge mode (token fetched and renewed by the player) -->
+<iframe src="https://edge-domain.com/player/?channel=match1"
+        width="100%" height="100%" frameborder="0" allowfullscreen allow="autoplay; encrypted-media"></iframe>
 
-<!-- Cloudflare R2 Direct CDN Mode -->
-<iframe 
-    src="https://edge-domain.com/player/?r2=ugrabzavmtzj" 
-    width="100%" 
-    height="100%" 
-    frameborder="0" 
-    allowfullscreen 
-    allow="autoplay; encrypted-media">
-</iframe>
+<!-- Cloudflare R2 mode -->
+<iframe src="https://edge-domain.com/player/?r2=ugrabzavmtzj"
+        width="100%" height="100%" frameborder="0" allowfullscreen allow="autoplay; encrypted-media"></iframe>
 ```
 
 ---
 
-## 9. Maintenance & Troubleshooting
+## 10. Maintenance & Troubleshooting
 
-- **Check Restreamer logs in real time:**
-  Open the Admin Dashboard -> Click **Logs** on any channel card.
-- **Inspect MediaMTX ingestion:**
-  `docker compose logs -f mediamtx`
-- **Inspect Nginx cache metrics:**
-  `docker compose logs -f nginx`
-- **Clear Nginx edge cache:**
-  `docker compose exec nginx rm -rf /var/cache/nginx/hls/*`
-- **R2 Storage Cost:**
-  The automated 120-second segment pruner runs every 20 seconds, maintaining zero egress fees and minimal R2 object count.
+- **Restreamer logs:** Admin Dashboard -> **Logs** on a channel card (the publish key is masked).
+- **Ingest / auth decisions:** `docker compose logs -f mediamtx` and `docker compose logs -f backend | grep MEDIAMTX-AUTH`
+- **Nginx:** `docker compose logs -f nginx`
+- **Clear the edge cache:** `docker compose exec nginx sh -c 'rm -rf /var/cache/nginx/hls/*'`
+- **R2 pruning** runs every 20 seconds and paginates the full `hd/` listing.
