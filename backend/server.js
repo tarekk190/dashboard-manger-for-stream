@@ -693,18 +693,22 @@ class FFmpegRestreamManager {
         //   time spent downloading each segment is never made up (measured 0.8x = constant stalls).
         //   Looped HLS is read from a local rewritten playlist, hence 'file' in its whitelist.
         // - Endless HTTP streams (IPTV .ts): reconnect at EOF.
+        // Many HLS sources disguise segments (.zst, .jpg, .html, no extension, presigned URLs);
+        // FFmpeg 8 rejects unknown segment extensions by default ("not in allowed_segment_extensions").
+        // Safe to open up: the protocol whitelist and validateSourceUrl still apply.
+        const anySegmentExt = ['-allowed_segment_extensions', 'ALL', '-extension_picky', '0'];
         const realtimeLoop = ['-readrate', '1', '-readrate_initial_burst', '8', '-readrate_catchup', '1.5', '-stream_loop', '-1'];
         const httpReconnect = ['-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_on_network_error', '1', '-reconnect_delay_max', '5'];
         let input;
         switch (probe.kind) {
             case 'hls-live':
-                input = ['-protocol_whitelist', FFMPEG_PROTOCOL_WHITELIST, ...httpReconnect,
+                input = ['-protocol_whitelist', FFMPEG_PROTOCOL_WHITELIST, ...httpReconnect, ...anySegmentExt,
                     '-live_start_index', '-3', '-m3u8_hold_counters', '10', '-seg_max_retry', '3'];
                 break;
             case 'hls-vod':
             case 'hls-frozen':
                 input = ['-protocol_whitelist', 'file,http,https,tcp,tls,crypto',
-                    '-allowed_extensions', 'ALL', '-extension_picky', '0', '-seg_max_retry', '3',
+                    '-allowed_extensions', 'ALL', ...anySegmentExt, '-seg_max_retry', '3',
                     ...realtimeLoop];
                 break;
             case 'file':
