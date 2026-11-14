@@ -1071,7 +1071,9 @@ const viewerCors = cors({
     },
     methods: ['GET', 'POST', 'OPTIONS'],
     allowedHeaders: ['Authorization', 'Content-Type'],
-    maxAge: 86400
+    maxAge: 86400,
+    // Lets allow-listed third-party pages receive/send the stream_auth cookie (never with '*' in production)
+    credentials: true
 });
 app.use(['/api/stream', '/api/token'], viewerCors);
 
@@ -1424,6 +1426,40 @@ function signViewerToken(channelKey) {
     );
 }
 
+// Viewer token cookie for playlist auth (needed by native Safari HLS, which reloads the same
+// playlist URL and cannot attach headers). Scoped per channel (Path=/live/{channel}/) so two
+// channels open in one browser never overwrite each other. SameSite=None + Partitioned so it
+// also works inside cross-site iframe embeds where the browser allows (partitioned) third-party
+// cookies; Safari/Brave block those by default, so embeds there rely on hls.js + Bearer header.
+const VIEWER_COOKIE = 'stream_auth';
+
+function setViewerCookie(res, channelKey, token) {
+    res.cookie(VIEWER_COOKIE, token, {
+        httpOnly: true,
+        secure: true,
+        sameSite: 'none',
+        partitioned: true,
+        path: `/live/${channelKey}/`,
+        maxAge: TOKEN_EXPIRATION_SECONDS * 1000
+    });
+}
+
+function cookieToken(req) {
+    const header = req.headers.cookie;
+    if (!header) return null;
+    for (const part of header.split(';')) {
+        const eq = part.indexOf('=');
+        if (eq > 0 && part.slice(0, eq).trim() === VIEWER_COOKIE) {
+            try {
+                return decodeURIComponent(part.slice(eq + 1).trim()) || null;
+            } catch {
+                return null;
+            }
+        }
+    }
+    return null;
+}
+
 function bearerToken(req) {
     const header = req.headers.authorization || '';
     return header.startsWith('Bearer ') ? header.slice(7).trim() : null;
@@ -1459,6 +1495,7 @@ app.get('/api/stream', (req, res) => {
     }
 
     const token = signViewerToken(channel.streamKey);
+    setViewerCookie(res, channel.streamKey, token);
     res.json({
         channel: channel.streamKey,
         token,
@@ -1488,7 +1525,9 @@ app.post('/api/token', (req, res) => {
         return res.status(401).json({ error: 'Invalid token' });
     }
 
-    res.json({ token: signViewerToken(decoded.channel), expiresIn: TOKEN_EXPIRATION_SECONDS });
+    const renewed = signViewerToken(decoded.channel);
+    setViewerCookie(res, decoded.channel, renewed);
+    res.json({ token: renewed, expiresIn: TOKEN_EXPIRATION_SECONDS });
 });
 
 // Internal Nginx auth_request endpoint. 200 = allow, 401 = missing/invalid/expired, 403 = channel mismatch
@@ -1498,7 +1537,8 @@ function handleEdgeAuth(req, res) {
     }
 
     const originalUri = req.headers['x-original-uri'] || '';
-    const token = bearerToken(req) || tokenFromOriginalUri(originalUri);
+    // Precedence: Authorization header, then ?token= from the original URI, then the stream_auth cookie
+    const token = bearerToken(req) || tokenFromOriginalUri(originalUri) || cookieToken(req);
     if (!token) {
         return res.status(401).set('WWW-Authenticate', 'Bearer error="token_missing"').send('Unauthorized: Token missing');
     }

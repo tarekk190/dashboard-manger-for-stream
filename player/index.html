@@ -355,7 +355,11 @@
         }
 
         async function fetchViewerToken(channel) {
-            const res = await fetch(`/api/stream?channel=${encodeURIComponent(channel)}`, { headers: { 'Accept': 'application/json' } });
+            // credentials: 'include' so the browser stores the stream_auth playlist cookie
+            const res = await fetch(`/api/stream?channel=${encodeURIComponent(channel)}`, {
+                headers: { 'Accept': 'application/json' },
+                credentials: 'include'
+            });
             if (!res.ok) throw new Error(res.status === 404 ? 'Channel not found' : `Token request failed (HTTP ${res.status})`);
             const data = await res.json();
             viewerToken = data.token;
@@ -367,6 +371,7 @@
                 const res = await fetch('/api/token', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include', // response refreshes the stream_auth cookie
                     body: JSON.stringify({ token: viewerToken })
                 });
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -453,16 +458,16 @@
                     statusMsg.innerText = `Unable to start stream: ${err.message}`;
                     return;
                 }
+            } else {
+                // Token passed via ?token=: renew it once so the stream_auth cookie gets set
+                await renewViewerToken();
             }
 
-            // hls.js sends the token as an Authorization header on .css playlists only (see xhrSetup).
-            // Native Safari HLS cannot set headers, so the playlist URL carries ?token= there.
-            // Our playlists are single-level media playlists (no child .css), and their segment
-            // URIs are relative, so Safari requests segments without any token.
-            let streamUrl = `/live/${encodeURIComponent(channel)}/index.css`;
-            if (!Hls.isSupported()) {
-                streamUrl += `?token=${encodeURIComponent(viewerToken)}`;
-            }
+            // Playlist auth: hls.js sends the Bearer header AND the cookie on .css requests (see
+            // xhrSetup). Native Safari HLS uses the plain URL: every playlist reload carries the
+            // stream_auth cookie, which /api/token keeps refreshing, so playback survives token
+            // expiry. Segments (.js) are requested without token, header or cookie.
+            const streamUrl = `/live/${encodeURIComponent(channel)}/index.css`;
 
             streamManifestUrl = streamUrl;
             return initHls(streamManifestUrl);
@@ -491,10 +496,15 @@
                         // Token goes ONLY on same-origin .css playlist requests. .js segments stay
                         // header-free and token-free so every viewer requests the identical,
                         // CDN-cacheable URL (segments are not auth-checked at the edge).
-                        if (!viewerToken || !requestUrl.startsWith(window.location.origin + '/')) return;
+                        // withCredentials is limited to same-origin .css as well: R2 (cross-origin,
+                        // wildcard CORS) rejects credentialed requests.
+                        if (!requestUrl.startsWith(window.location.origin + '/')) return;
                         const pathname = new URL(requestUrl).pathname;
                         if (pathname.endsWith('.css')) {
-                            xhr.setRequestHeader('Authorization', `Bearer ${viewerToken}`);
+                            xhr.withCredentials = true; // sends the stream_auth cookie
+                            // Bearer header kept: works even where third-party cookies are blocked
+                            // (Safari/Brave inside cross-site iframe embeds)
+                            if (viewerToken) xhr.setRequestHeader('Authorization', `Bearer ${viewerToken}`);
                         }
                     }
                 });

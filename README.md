@@ -311,13 +311,17 @@ Because live streaming playlists change every 2 seconds while media segments are
 
 ## 7. Viewer Tokens (Nginx edge mode)
 
-1. `GET /api/stream?channel=match1` → `{ channel, token, expiresIn, streamUrl }`. `channel` must match `[a-z0-9_-]` and exist (404 otherwise). `streamUrl` already carries `?token=`.
-2. Send the token on **playlist (`.css`) requests only**, either as `Authorization: Bearer <token>` (hls.js `xhrSetup`) or as `?token=`. Segment (`.js`) requests carry no token or header: every viewer requests the identical URL, so nginx and Cloudflare serve them from cache.
+1. `GET /api/stream?channel=match1` → `{ channel, token, expiresIn, streamUrl }`. `channel` must match `[a-z0-9_-]` and exist (404 otherwise). `streamUrl` already carries `?token=`. The response also sets the playlist cookie:
+   `Set-Cookie: stream_auth=<token>; Max-Age=<TOKEN_EXPIRATION_SECONDS>; Path=/live/match1/; HttpOnly; Secure; Partitioned; SameSite=None`
+   (one cookie per channel path, so several channels in one browser don't overwrite each other).
+2. Send the token on **playlist (`.css`) requests only**: `Authorization: Bearer <token>`, `?token=`, or the `stream_auth` cookie (checked in that order). Segment (`.js`) requests carry no token or header: every viewer requests the identical URL, so nginx and Cloudflare serve them from cache.
    - **Trade-off:** segment names are predictable (Unix-epoch numbers), so anyone who knows a channel's `streamKey` can fetch its segments without a token. The token only gates the playlist.
-3. Renew before expiry with `POST /api/token {"token": "<current>"}`. Tokens expired by more than `TOKEN_RENEW_GRACE_SECONDS` return 401 and the client must call `/api/stream` again.
+3. Renew before expiry with `POST /api/token {"token": "<current>"}`; the response also refreshes the `stream_auth` cookie. Tokens expired by more than `TOKEN_RENEW_GRACE_SECONDS` return 401 and the client must call `/api/stream` again.
 4. Nginx `auth_request /auth` answers **401** for a missing, invalid or expired token and **403** when the token's channel differs from the channel in the URL. Results are micro-cached (200: 5s, 401/403: 1s) under a key of *channel + query token + Authorization header* from the original request.
 
-The bundled player (`/player/?channel=...`) does all of this automatically. With native Safari HLS (no hls.js) the token travels as `?token=` on the playlist URL and segments need nothing. **Limitation:** Safari keeps reloading that same playlist URL and cannot pick up a renewed token, so playback stops about `TOKEN_EXPIRATION_SECONDS` (+ up to 5s auth cache) after start unless the token lifetime is raised.
+The bundled player (`/player/?channel=...`) does all of this automatically. hls.js sends the Bearer header plus the cookie (`withCredentials`) on `.css` requests only. Native Safari HLS loads the plain playlist URL and authenticates every reload with the `stream_auth` cookie, which the player keeps renewing via `/api/token`, so playback continues past token expiry.
+
+**Cookie limitation in cross-site iframes:** inside an iframe on another site the cookie is a third-party cookie. Chrome/Edge (and Firefox, partitioned) accept it; Safari and Brave block third-party cookies by default. There, hls.js still works through the Bearer header, but native-HLS playback (no MSE) works only when the player is opened on `EDGE_DOMAIN` itself.
 
 ---
 
