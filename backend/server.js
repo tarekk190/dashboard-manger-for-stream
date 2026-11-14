@@ -1107,16 +1107,46 @@ const viewerCors = cors({
 });
 app.use(['/api/stream', '/api/token'], viewerCors);
 
-// Reject cross-origin browser requests to admin endpoints.
+// Admin endpoints: same-origin, plus the external control panels listed in ADMIN_ALLOWED_ORIGINS.
+// Entries are exact origins ("https://panel.example.com") or "scheme://host:*" for any port
+// ("http://localhost:*"). Admin auth is a Bearer header (no cookies), so CORS here never sends
+// credentials; the allow-list only limits which web pages may drive the admin API.
+const ADMIN_ALLOWED_ORIGINS = (process.env.ADMIN_ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
+if (ADMIN_ALLOWED_ORIGINS.includes('*')) {
+    fatal('ADMIN_ALLOWED_ORIGINS="*" is not allowed. List explicit origins, e.g. http://localhost:*');
+}
+
+function isAdminOriginAllowed(origin) {
+    let o;
+    try { o = new URL(origin); } catch { return false; }
+    return ADMIN_ALLOWED_ORIGINS.some(entry => {
+        const anyPort = entry.endsWith(':*');
+        let e;
+        try { e = new URL(anyPort ? entry.slice(0, -2) : entry); } catch { return false; }
+        if (e.protocol !== o.protocol || e.hostname.toLowerCase() !== o.hostname.toLowerCase()) return false;
+        return anyPort || e.port === o.port;
+    });
+}
+
+const adminCors = cors({
+    origin: (origin, callback) => callback(null, Boolean(origin) && isAdminOriginAllowed(origin)),
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Authorization', 'Content-Type'],
+    maxAge: 600,
+    credentials: false
+});
+
+// Reject cross-origin browser requests to admin endpoints unless the origin is allow-listed.
 function sameOriginOnly(req, res, next) {
     const origin = req.headers.origin;
     if (!origin) return next();
     try {
         if (new URL(origin).host.toLowerCase() === String(req.headers.host || '').toLowerCase()) return next();
     } catch { /* fall through */ }
+    if (isAdminOriginAllowed(origin)) return next();
     return res.status(403).json({ success: false, error: 'Forbidden: cross-origin admin request' });
 }
-app.use(['/api/admin', '/api/channels', '/api/stats', '/api/config'], sameOriginOnly);
+app.use(['/api/admin', '/api/channels', '/api/stats', '/api/config'], adminCors, sameOriginOnly);
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));

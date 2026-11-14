@@ -135,6 +135,7 @@ Optional:
 | `TOKEN_EXPIRATION_SECONDS` | `60` | Viewer token lifetime |
 | `TOKEN_RENEW_GRACE_SECONDS` | `15` | How long after expiry `POST /api/token` still renews a token |
 | `ALLOWED_ORIGINS` | empty | Comma-separated origins allowed to call `/api/stream` and `/api/token` cross-origin. `*` is refused when `NODE_ENV=production`. |
+| `ADMIN_ALLOWED_ORIGINS` | empty | Extra origins allowed to call the admin API (`/api/admin`, `/api/channels`, `/api/stats`, `/api/config`) from a browser, e.g. an external control panel. Exact origins or `scheme://host:*` for any port (`http://localhost:*,http://127.0.0.1:*`). `*` is refused. No cookies are involved: the panel sends the admin Bearer token. |
 | `RESTREAM_MAX_RETRIES` | `10` | Consecutive auto-restarts before a restream is marked `failed` (`0` = unlimited) |
 | `RESTREAM_COPY_AUDIO` | `false` | `true` = pure `-c copy` (no transcoding at all). Only safe when every source's audio is already AAC/MP3; otherwise audio is re-encoded to AAC (video is always copied) |
 | `R2_*`, `R2_CUSTOM_DOMAIN` | empty | Cloudflare R2. Empty credentials = DRY-RUN (no uploads). |
