@@ -15,6 +15,7 @@
 
 require('dotenv').config();
 const fs = require('fs');
+const fsp = fs.promises;
 const path = require('path');
 const net = require('net');
 const dns = require('dns').promises;
@@ -191,10 +192,14 @@ class ChannelManager {
     }
 
     save() {
+        // Atomic write: a crash mid-write can never leave a truncated channels.json behind
+        const tmpPath = `${this.filePath}.${process.pid}.tmp`;
         try {
             const list = Array.from(this.channels.values());
-            fs.writeFileSync(this.filePath, JSON.stringify(list, null, 2), 'utf8');
+            fs.writeFileSync(tmpPath, JSON.stringify(list, null, 2), 'utf8');
+            fs.renameSync(tmpPath, this.filePath);
         } catch (err) {
+            try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
             console.error('[CHANNELS-ERROR] Failed to save channels:', err.message);
         }
     }
@@ -270,6 +275,8 @@ class ChannelManager {
         if (updates.name) channel.name = updates.name.trim();
         if (updates.sourceUrl !== undefined) channel.sourceUrl = updates.sourceUrl.trim();
         if (updates.r2_slug) channel.r2_slug = updates.r2_slug.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+        // Desired restream state ('running' | 'stopped'), resumed on backend start
+        if (updates.desiredState) channel.desiredState = updates.desiredState;
 
         this.channels.set(id, channel);
         this.save();
@@ -357,56 +364,69 @@ async function validateSourceUrl(rawUrl) {
 }
 
 // ------------------------------------------------------------------------------
-// FFmpeg Process & Restream Manager
+// FFmpeg Process & Restream Manager (supervised)
+// - Auto-restarts on unexpected exit with exponential backoff (2s -> 60s cap)
+// - Desired state ('running' | 'stopped') persisted per channel and resumed on boot
+// - stop() is awaitable and escalates SIGINT -> SIGKILL after 5s
 // ------------------------------------------------------------------------------
+const RESTREAM_BACKOFF_MIN_MS = 2000;
+const RESTREAM_BACKOFF_MAX_MS = 60000;
+const RESTREAM_STOP_TIMEOUT_MS = 5000;
+// A run lasting this long counts as healthy and resets the retry counter
+const RESTREAM_STABLE_RUN_MS = 60000;
+// Consecutive failed restarts before giving up (0 = retry forever)
+const RESTREAM_MAX_RETRIES = parseInt(process.env.RESTREAM_MAX_RETRIES || '10', 10);
+
 class FFmpegRestreamManager {
     constructor() {
         // Map of channelId -> RestreamJob
         this.jobs = new Map();
+        // Per-channel promise chain so start/stop/restart never interleave
+        this.locks = new Map();
+    }
+
+    withLock(channelId, fn) {
+        const prev = this.locks.get(channelId) || Promise.resolve();
+        const next = prev.catch(() => {}).then(fn);
+        this.locks.set(channelId, next);
+        return next.finally(() => {
+            if (this.locks.get(channelId) === next) this.locks.delete(channelId);
+        });
     }
 
     start(channelId, sourceUrl) {
+        return this.withLock(channelId, () => this._start(channelId, sourceUrl));
+    }
+
+    stop(channelId, options = {}) {
+        return this.withLock(channelId, () => this._stop(channelId, options));
+    }
+
+    restart(channelId) {
+        return this.withLock(channelId, () => {
+            const job = this.jobs.get(channelId);
+            const sourceUrl = job ? job.sourceUrl : (channelManager.getById(channelId)?.sourceUrl || '');
+            if (!sourceUrl) {
+                throw new Error('No source URL available to restart restream.');
+            }
+            return this._start(channelId, sourceUrl);
+        });
+    }
+
+    async _start(channelId, sourceUrl) {
         const channel = channelManager.getById(channelId);
         if (!channel) throw new Error('Channel not found');
         if (!sourceUrl || !sourceUrl.trim()) throw new Error('Source URL is required for pull restreaming');
 
-        // Stop existing restream process if running
-        this.stop(channelId);
-
-        // Publish with the channel's secret key; MediaMTX validates it via POST /internal/mediamtx-auth
-        const rtmpTarget = `rtmp://${MEDIAMTX_RTMP_HOST}:${MEDIAMTX_RTMP_PORT}/live/${channel.streamKey}` +
-            `?user=publish&pass=${channel.publishKey}`;
-        console.log(`[RESTREAMER] Starting FFmpeg restream: ${channel.name} (${sourceUrl} -> live/${channel.streamKey})`);
-
-        // FFmpeg command arguments:
-        // - High resilience network flags (-reconnect, etc.)
-        // - Realtime stream throttling (-re)
-        // - Copy video codec (-c:v copy) to save CPU
-        // - Normalize audio to AAC (-c:a aac) for FLV RTMP container compatibility
-        const args = [
-            '-nostdin',
-            '-hide_banner',
-            '-loglevel', 'info',
-            '-protocol_whitelist', FFMPEG_PROTOCOL_WHITELIST,
-            '-reconnect', '1',
-            '-reconnect_at_eof', '1',
-            '-reconnect_streamed', '1',
-            '-reconnect_delay_max', '2',
-            '-re',
-            '-i', sourceUrl.trim(),
-            '-c:v', 'copy',
-            '-c:a', 'aac',
-            '-b:a', '128k',
-            '-ar', '44100',
-            '-f', 'flv',
-            rtmpTarget
-        ];
+        // Wait for any previous process to fully exit before spawning a new one
+        const previous = this.jobs.get(channelId);
+        await this._stop(channelId, { persist: false });
 
         const job = {
             channelId,
             streamKey: channel.streamKey,
             sourceUrl: sourceUrl.trim(),
-            status: 'running',
+            status: 'starting',
             pid: null,
             startedAt: new Date().toISOString(),
             metrics: {
@@ -417,88 +437,197 @@ class FFmpegRestreamManager {
                 time: '00:00:00.00',
                 lastUpdate: Date.now()
             },
-            logs: [],
-            process: null
+            logs: previous ? previous.logs : [],
+            process: null,
+            exited: true,
+            exitPromise: Promise.resolve(),
+            stopRequested: false,
+            retries: 0,
+            restartTimer: null
         };
+        this.jobs.set(channelId, job);
+
+        // Persist desired state + source so the job resumes after a backend restart
+        channelManager.update(channelId, { sourceUrl: job.sourceUrl, desiredState: 'running' });
+
+        this.spawnProcess(job);
+        return this.getStatus(channelId);
+    }
+
+    buildArgs(channel, sourceUrl) {
+        // Publish with the channel's secret key; MediaMTX validates it via POST /internal/mediamtx-auth
+        const rtmpTarget = `rtmp://${MEDIAMTX_RTMP_HOST}:${MEDIAMTX_RTMP_PORT}/live/${channel.streamKey}` +
+            `?user=publish&pass=${channel.publishKey}`;
+
+        // FFmpeg command arguments:
+        // - Only network protocols allowed (-protocol_whitelist), no file:/pipe:/concat:
+        // - High resilience network flags (-reconnect, etc.)
+        // - No -re: sources are live network streams (files are not allowed), -re only adds latency
+        // - Copy video codec (-c:v copy) to save CPU
+        // - Normalize audio to AAC (-c:a aac) for FLV RTMP container compatibility
+        return [
+            '-nostdin',
+            '-hide_banner',
+            '-loglevel', 'info',
+            '-protocol_whitelist', FFMPEG_PROTOCOL_WHITELIST,
+            '-reconnect', '1',
+            '-reconnect_at_eof', '1',
+            '-reconnect_streamed', '1',
+            '-reconnect_delay_max', '2',
+            '-i', sourceUrl,
+            '-c:v', 'copy',
+            '-c:a', 'aac',
+            '-b:a', '128k',
+            '-ar', '44100',
+            '-f', 'flv',
+            rtmpTarget
+        ];
+    }
+
+    spawnProcess(job) {
+        const channel = channelManager.getById(job.channelId);
+        if (!channel) {
+            job.status = 'stopped';
+            return;
+        }
+
+        const args = this.buildArgs(channel, job.sourceUrl);
+        console.log(`[RESTREAMER] Starting FFmpeg restream: ${channel.name} (${job.sourceUrl} -> live/${channel.streamKey})`);
 
         const proc = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+        const spawnedAt = Date.now();
         job.process = proc;
-        job.pid = proc.pid;
+        job.pid = proc.pid || null;
+        job.exited = false;
+        job.status = 'running';
+        job.startedAt = new Date().toISOString();
+
+        let resolveExit;
+        job.exitPromise = new Promise(resolve => { resolveExit = resolve; });
+
+        let finished = false;
+        const finish = (code, signal) => {
+            if (finished) return;
+            finished = true;
+            job.exited = true;
+            job.pid = null;
+            resolveExit();
+            this.appendLog(job, `[SYSTEM] Process exited with code ${code}, signal ${signal}`);
+            console.log(`[RESTREAMER] Channel ${job.streamKey} restream exited (${code}, ${signal})`);
+            this.onProcessExit(job, proc, Date.now() - spawnedAt);
+        };
 
         this.appendLog(job, `[SYSTEM] Spawned FFmpeg process PID ${proc.pid}`);
         this.appendLog(job, `[COMMAND] ffmpeg ${args.join(' ')}`);
 
         // Process stderr output for status & telemetry
-        proc.stderr.on('data', (chunk) => {
-            const text = chunk.toString();
-            this.handleOutput(job, text);
-        });
-
-        proc.stdout.on('data', (chunk) => {
-            const text = chunk.toString();
-            this.appendLog(job, text.trim());
-        });
+        proc.stderr.on('data', (chunk) => this.handleOutput(job, chunk.toString()));
+        proc.stdout.on('data', (chunk) => this.appendLog(job, chunk.toString().trim()));
 
         proc.on('error', (err) => {
-            job.status = 'error';
             this.appendLog(job, `[ERROR] Process error: ${err.message}`);
-            console.error(`[RESTREAMER-ERROR] Channel ${channel.streamKey}:`, err.message);
+            console.error(`[RESTREAMER-ERROR] Channel ${job.streamKey}:`, err.message);
+            // Spawn failures (e.g. ENOENT) never emit 'close'
+            if (!proc.pid) finish(null, null);
         });
 
-        proc.on('close', (code, signal) => {
-            job.status = 'stopped';
-            this.appendLog(job, `[SYSTEM] Process exited with code ${code}, signal ${signal}`);
-            console.log(`[RESTREAMER] Channel ${channel.streamKey} restream exited (${code})`);
-        });
-
-        this.jobs.set(channelId, job);
-
-        // Update channel sourceUrl in storage
-        channelManager.update(channelId, { sourceUrl: sourceUrl.trim() });
-
-        return this.getStatus(channelId);
+        proc.on('close', (code, signal) => finish(code, signal));
     }
 
-    stop(channelId) {
+    onProcessExit(job, proc, runMs) {
+        // Ignore exits of processes that were replaced by a newer one
+        if (job.process !== proc || this.jobs.get(job.channelId) !== job) return;
+
+        if (job.stopRequested) {
+            job.status = 'stopped';
+            return;
+        }
+
+        if (runMs >= RESTREAM_STABLE_RUN_MS) job.retries = 0;
+
+        if (RESTREAM_MAX_RETRIES > 0 && job.retries >= RESTREAM_MAX_RETRIES) {
+            job.status = 'failed';
+            this.appendLog(job, `[SYSTEM] Giving up after ${job.retries} consecutive restart attempts (RESTREAM_MAX_RETRIES).`);
+            return;
+        }
+
+        const delay = Math.min(RESTREAM_BACKOFF_MIN_MS * 2 ** job.retries, RESTREAM_BACKOFF_MAX_MS);
+        job.retries++;
+        job.status = 'restarting';
+        this.appendLog(job, `[SYSTEM] Unexpected exit. Restart attempt ${job.retries} in ${delay / 1000}s...`);
+        job.restartTimer = setTimeout(() => {
+            job.restartTimer = null;
+            if (!job.stopRequested && this.jobs.get(job.channelId) === job) {
+                this.spawnProcess(job);
+            }
+        }, delay);
+    }
+
+    /**
+     * Stops the channel's restream and resolves once the FFmpeg process has exited.
+     * persist=true records desiredState 'stopped' (explicit Stop); false keeps it (restart/shutdown).
+     */
+    async _stop(channelId, { persist = true } = {}) {
+        if (persist && channelManager.getById(channelId)) {
+            channelManager.update(channelId, { desiredState: 'stopped' });
+        }
+
         const job = this.jobs.get(channelId);
         if (!job) return false;
 
-        if (job.process && !job.process.killed) {
+        job.stopRequested = true;
+        if (job.restartTimer) {
+            clearTimeout(job.restartTimer);
+            job.restartTimer = null;
+        }
+
+        if (job.process && !job.exited) {
+            this.appendLog(job, '[SYSTEM] Stopping restream process...');
             try {
-                this.appendLog(job, '[SYSTEM] Stopping restream process...');
                 job.process.kill('SIGINT');
-                setTimeout(() => {
-                    if (job.process && !job.process.killed) {
-                        job.process.kill('SIGKILL');
-                    }
-                }, 2000);
             } catch (err) {
                 console.error('[RESTREAMER-STOP-ERROR]', err.message);
             }
+            // `process.killed` turns true as soon as a signal is sent, so track the real exit instead
+            const killTimer = setTimeout(() => {
+                if (!job.exited) {
+                    this.appendLog(job, `[SYSTEM] No exit after ${RESTREAM_STOP_TIMEOUT_MS / 1000}s, sending SIGKILL`);
+                    try { job.process.kill('SIGKILL'); } catch { /* already gone */ }
+                }
+            }, RESTREAM_STOP_TIMEOUT_MS);
+            await job.exitPromise;
+            clearTimeout(killTimer);
         }
 
         job.status = 'stopped';
         return true;
     }
 
-    restart(channelId) {
-        const job = this.jobs.get(channelId);
-        const sourceUrl = job ? job.sourceUrl : (channelManager.getById(channelId)?.sourceUrl || '');
-        if (!sourceUrl) {
-            throw new Error('No source URL available to restart restream.');
+    // Resume every channel whose persisted desired state is 'running'
+    async resumeAll() {
+        for (const channel of channelManager.getAll()) {
+            if (channel.desiredState !== 'running' || !channel.sourceUrl) continue;
+            try {
+                const url = await validateSourceUrl(channel.sourceUrl);
+                await this.start(channel.id, url);
+                console.log(`[RESTREAMER] Resumed restream for channel ${channel.streamKey}`);
+            } catch (err) {
+                console.error(`[RESTREAMER] Could not resume channel ${channel.streamKey}: ${err.message}`);
+            }
         }
-        return this.start(channelId, sourceUrl);
     }
 
     getStatus(channelId) {
         const job = this.jobs.get(channelId);
+        const channel = channelManager.getById(channelId);
         if (!job) {
             return {
                 channelId,
                 status: 'idle',
                 pid: null,
                 metrics: { fps: 0, bitrate: '0kbits/s', speed: '0x', time: '00:00:00' },
-                sourceUrl: channelManager.getById(channelId)?.sourceUrl || ''
+                sourceUrl: channel?.sourceUrl || '',
+                desiredState: channel?.desiredState || 'stopped'
             };
         }
 
@@ -508,7 +637,9 @@ class FFmpegRestreamManager {
             pid: job.pid,
             startedAt: job.startedAt,
             metrics: job.metrics,
-            sourceUrl: job.sourceUrl
+            sourceUrl: job.sourceUrl,
+            retries: job.retries,
+            desiredState: channel?.desiredState || 'stopped'
         };
     }
 
@@ -539,7 +670,6 @@ class FFmpegRestreamManager {
                 if (timeMatch) job.metrics.time = timeMatch[1];
                 if (frameMatch) job.metrics.frame = parseInt(frameMatch[1], 10);
                 job.metrics.lastUpdate = Date.now();
-                job.status = 'running';
             }
         }
     }
@@ -554,13 +684,10 @@ class FFmpegRestreamManager {
         }
     }
 
-    cleanupAll() {
+    // Shutdown: stop every process but keep desiredState so jobs resume on next start
+    async shutdownAll() {
         console.log('[RESTREAMER] Terminating all active FFmpeg restream processes...');
-        for (const [id, job] of this.jobs.entries()) {
-            if (job.process && !job.process.killed) {
-                job.process.kill('SIGTERM');
-            }
-        }
+        await Promise.all(Array.from(this.jobs.keys()).map(id => this._stop(id, { persist: false })));
     }
 }
 
@@ -568,7 +695,17 @@ const restreamManager = new FFmpegRestreamManager();
 
 // ------------------------------------------------------------------------------
 // Real-Time Cloudflare R2 Watcher & Uploader
+// - Segments are always uploaded BEFORE any playlist that references them
+// - Async fs, streamed segment uploads, bounded concurrency, retries
 // ------------------------------------------------------------------------------
+const R2_UPLOAD_CONCURRENCY = 4;
+const R2_UPLOAD_RETRIES = 3;          // retries after the first attempt
+const R2_DELETE_BATCH_SIZE = 1000;    // S3 DeleteObjects hard limit
+const PLAYLIST_CACHE_CONTROL = 'no-store, no-cache, must-revalidate, max-age=0';
+// Long-lived segment caching is only safe because segment names are never reused
+// (mediamtx.yml: -hls_start_number_source epoch).
+const SEGMENT_CACHE_CONTROL = 'public, max-age=3600, immutable';
+
 class R2PipelineManager {
     constructor() {
         this.watcher = null;
@@ -577,8 +714,17 @@ class R2PipelineManager {
             uploadedSegments: 0,
             uploadedPlaylists: 0,
             deletedSegments: 0,
+            failedUploads: 0,
             lastPruneTime: null
         };
+        // R2 keys of segments uploaded successfully (dropped once the local file is deleted)
+        this.uploadedSegments = new Set();
+        // Latest not-yet-uploaded playlist per R2 prefix, waiting for its segments
+        this.pendingPlaylists = new Map();
+        this.flushingPlaylists = new Set();
+        // Upload concurrency limiter
+        this.activeUploads = 0;
+        this.uploadWaiters = [];
     }
 
     start() {
@@ -605,25 +751,20 @@ class R2PipelineManager {
 
         this.watcher.on('add', (filePath) => this.processFile(filePath));
         this.watcher.on('change', (filePath) => this.processFile(filePath));
+        this.watcher.on('unlink', (filePath) => this.forgetFile(filePath));
         this.watcher.on('error', (err) => console.error('[R2-WATCHER-ERROR]', err));
 
         // Start pruning loop for R2 bucket
         this.pruneInterval = setInterval(() => this.pruneOldSegments(), 20000);
     }
 
-    async processFile(filePath) {
-        const ext = path.extname(filePath).toLowerCase();
-        if (ext !== '.ts' && ext !== '.m3u8') return;
-
-        // Extract stream path relative to HLS_DIR
-        // e.g. /hls/live/match1/seg_00001.ts -> live/match1/seg_00001.ts
+    // Maps /hls/live/{streamKey}/{file} (or /hls/{streamKey}/{file}) to { r2Prefix, fileName }
+    resolveTarget(filePath) {
         const relativePath = path.relative(HLS_DIR, filePath).replace(/\\/g, '/');
         const parts = relativePath.split('/');
 
-        // Expect structure: live/{streamKey}/{filename} or {streamKey}/{filename}
         let streamKey = '';
         let fileName = '';
-
         if (parts.length >= 3 && parts[0] === 'live') {
             streamKey = parts[1];
             fileName = parts.slice(2).join('/');
@@ -631,92 +772,163 @@ class R2PipelineManager {
             streamKey = parts[0];
             fileName = parts.slice(1).join('/');
         } else {
-            return;
+            return null;
         }
 
         // Map stream key to randomized R2 folder slug
         const channel = channelManager.getByStreamKey(streamKey);
         const folderSlug = channel ? channel.r2_slug : streamKey;
-        const r2Prefix = `hd/${folderSlug}`;
+        return { r2Prefix: `hd/${folderSlug}`, fileName };
+    }
+
+    segmentKey(r2Prefix, fileName) {
+        // Camouflage segment extension: seg_001.ts -> seg_001.js
+        return `${r2Prefix}/${fileName.replace(/\.ts$/i, '.js')}`;
+    }
+
+    async processFile(filePath) {
+        const ext = path.extname(filePath).toLowerCase();
+        if (ext !== '.ts' && ext !== '.m3u8') return;
+
+        const target = this.resolveTarget(filePath);
+        if (!target) return;
 
         if (ext === '.ts') {
-            await this.handleSegment(filePath, r2Prefix, fileName);
-        } else if (ext === '.m3u8') {
-            await this.handlePlaylist(filePath, r2Prefix, fileName);
+            await this.handleSegment(filePath, target.r2Prefix, target.fileName);
+        } else {
+            await this.handlePlaylist(filePath, target.r2Prefix);
         }
+    }
+
+    forgetFile(filePath) {
+        if (path.extname(filePath).toLowerCase() !== '.ts') return;
+        const target = this.resolveTarget(filePath);
+        // A deleted local segment is no longer in any current playlist
+        if (target) this.uploadedSegments.delete(this.segmentKey(target.r2Prefix, target.fileName));
     }
 
     async handleSegment(filePath, r2Prefix, fileName) {
+        const r2Key = this.segmentKey(r2Prefix, fileName);
         try {
-            if (!fs.existsSync(filePath)) return;
-            const fileBuffer = fs.readFileSync(filePath);
-            if (fileBuffer.length === 0) return;
-
-            // Camouflage segment extension: seg_001.ts -> seg_001.js
-            const camouflagedName = fileName.replace(/\.ts$/i, '.js');
-            const r2Key = `${r2Prefix}/${camouflagedName}`;
+            const stat = await fsp.stat(filePath).catch(() => null);
+            if (!stat || stat.size === 0) return;
 
             await this.uploadObject(
-                r2Key, 
-                fileBuffer, 
-                'application/javascript', 
-                'public, max-age=3600, immutable'
+                r2Key,
+                () => fs.createReadStream(filePath), // fresh stream per attempt
+                stat.size,
+                'application/javascript',
+                SEGMENT_CACHE_CONTROL
             );
+            this.uploadedSegments.add(r2Key);
             this.stats.uploadedSegments++;
+            // A playlist may have been waiting for exactly this segment
+            this.flushPlaylist(r2Prefix);
         } catch (err) {
-            console.error(`[R2-SEGMENT-ERROR] Failed to process ${filePath}:`, err.message);
+            console.error(`[R2-SEGMENT-ERROR] Failed to upload ${filePath}:`, err.message);
         }
     }
 
-    async handlePlaylist(filePath, r2Prefix, fileName) {
+    async handlePlaylist(filePath, r2Prefix) {
+        let content;
         try {
-            if (!fs.existsSync(filePath)) return;
-            const content = fs.readFileSync(filePath, 'utf8');
-            if (!content || !content.includes('#EXTM3U')) return;
+            content = await fsp.readFile(filePath, 'utf8');
+        } catch {
+            return; // rotated away between event and read
+        }
+        if (!content || !content.includes('#EXTM3U')) return;
 
-            // Rewrite manifest internal segment links: .ts -> .js
-            const rewritten = content.replace(/([a-zA-Z0-9_\-]+)\.ts/g, '$1.js');
-            const buffer = Buffer.from(rewritten, 'utf8');
+        const segmentKeys = content
+            .split(/\r?\n/)
+            .map(line => line.trim())
+            .filter(line => line && !line.startsWith('#') && /\.ts$/i.test(line))
+            .map(line => this.segmentKey(r2Prefix, path.posix.basename(line)));
 
+        // Rewrite manifest internal segment links: .ts -> .js
+        const rewritten = content.replace(/([a-zA-Z0-9_\-]+)\.ts/g, '$1.js');
+
+        // Newest playlist wins; older pending versions are superseded
+        this.pendingPlaylists.set(r2Prefix, { body: Buffer.from(rewritten, 'utf8'), segmentKeys });
+        await this.flushPlaylist(r2Prefix);
+    }
+
+    /**
+     * Uploads the pending playlist for a prefix once every segment it lists is in R2.
+     * Otherwise it stays pending and is retried after each successful segment upload.
+     */
+    async flushPlaylist(r2Prefix) {
+        if (this.flushingPlaylists.has(r2Prefix)) return; // re-checked when the current flush ends
+        const pending = this.pendingPlaylists.get(r2Prefix);
+        if (!pending || !pending.segmentKeys.every(k => this.uploadedSegments.has(k))) return;
+
+        this.pendingPlaylists.delete(r2Prefix);
+        this.flushingPlaylists.add(r2Prefix);
+        try {
+            const size = pending.body.length;
             // 1. Upload as index.html (Direct browser and player friendly)
-            await this.uploadObject(
-                `${r2Prefix}/index.html`,
-                buffer,
-                'text/html; charset=utf-8',
-                'no-store, no-cache, must-revalidate, max-age=0'
-            );
-
             // 2. Upload as index.css (Camouflaged stylesheet delivery)
-            await this.uploadObject(
-                `${r2Prefix}/index.css`,
-                buffer,
-                'text/css; charset=utf-8',
-                'no-store, no-cache, must-revalidate, max-age=0'
-            );
-
+            await Promise.all([
+                this.uploadObject(`${r2Prefix}/index.html`, () => pending.body, size, 'text/html; charset=utf-8', PLAYLIST_CACHE_CONTROL),
+                this.uploadObject(`${r2Prefix}/index.css`, () => pending.body, size, 'text/css; charset=utf-8', PLAYLIST_CACHE_CONTROL)
+            ]);
             this.stats.uploadedPlaylists++;
         } catch (err) {
-            console.error(`[R2-PLAYLIST-ERROR] Failed to rewrite playlist ${filePath}:`, err.message);
+            console.error(`[R2-PLAYLIST-ERROR] Failed to upload playlist for ${r2Prefix}:`, err.message);
+        } finally {
+            this.flushingPlaylists.delete(r2Prefix);
         }
+        // A newer playlist may have arrived while uploading
+        if (this.pendingPlaylists.has(r2Prefix)) await this.flushPlaylist(r2Prefix);
     }
 
-    async uploadObject(r2Key, body, contentType, cacheControl) {
+    async acquireUploadSlot() {
+        if (this.activeUploads < R2_UPLOAD_CONCURRENCY) {
+            this.activeUploads++;
+            return;
+        }
+        await new Promise(resolve => this.uploadWaiters.push(resolve));
+    }
+
+    releaseUploadSlot() {
+        const next = this.uploadWaiters.shift();
+        if (next) next(); // hand the slot over directly
+        else this.activeUploads--;
+    }
+
+    /**
+     * Uploads with bounded concurrency and up to R2_UPLOAD_RETRIES retries.
+     * makeBody() must return a fresh Body (stream or buffer) for every attempt. Throws on final failure.
+     */
+    async uploadObject(r2Key, makeBody, contentLength, contentType, cacheControl) {
         if (!s3Client) {
             // DRY-RUN mode
             return;
         }
 
+        await this.acquireUploadSlot();
         try {
-            const command = new PutObjectCommand({
-                Bucket: R2_BUCKET_NAME,
-                Key: r2Key,
-                Body: body,
-                ContentType: contentType,
-                CacheControl: cacheControl
-            });
-            await s3Client.send(command);
-        } catch (err) {
-            console.error(`[R2-UPLOAD-FAIL] Failed to upload ${r2Key}:`, err.message);
+            for (let attempt = 0; ; attempt++) {
+                try {
+                    await s3Client.send(new PutObjectCommand({
+                        Bucket: R2_BUCKET_NAME,
+                        Key: r2Key,
+                        Body: makeBody(),
+                        ContentLength: contentLength,
+                        ContentType: contentType,
+                        CacheControl: cacheControl
+                    }));
+                    return;
+                } catch (err) {
+                    if (attempt >= R2_UPLOAD_RETRIES) {
+                        this.stats.failedUploads++;
+                        console.error(`[R2-UPLOAD-FAIL] Failed to upload ${r2Key} after ${attempt + 1} attempts:`, err.message);
+                        throw err;
+                    }
+                    await new Promise(resolve => setTimeout(resolve, 500 * 2 ** attempt));
+                }
+            }
+        } finally {
+            this.releaseUploadSlot();
         }
     }
 
@@ -724,45 +936,50 @@ class R2PipelineManager {
         if (!s3Client) return;
 
         try {
-            const listCommand = new ListObjectsV2Command({
-                Bucket: R2_BUCKET_NAME,
-                Prefix: 'hd/'
-            });
-
-            const listResponse = await s3Client.send(listCommand);
-            if (!listResponse.Contents || listResponse.Contents.length === 0) return;
-
             const now = Date.now();
             const maxAgeMs = MAX_SEGMENT_AGE_SECONDS * 1000;
             const toDelete = [];
 
-            for (const item of listResponse.Contents) {
-                // Never delete playlist manifests
-                if (item.Key.endsWith('index.html') || item.Key.endsWith('index.css') || item.Key.endsWith('.m3u8')) {
-                    continue;
-                }
+            // Paginate until the listing is complete
+            let continuationToken;
+            do {
+                const listResponse = await s3Client.send(new ListObjectsV2Command({
+                    Bucket: R2_BUCKET_NAME,
+                    Prefix: 'hd/',
+                    ContinuationToken: continuationToken
+                }));
 
-                // Delete .js segments older than MAX_SEGMENT_AGE_SECONDS
-                if (item.Key.endsWith('.js') && item.LastModified) {
-                    const age = now - new Date(item.LastModified).getTime();
-                    if (age > maxAgeMs) {
-                        toDelete.push({ Key: item.Key });
+                for (const item of listResponse.Contents || []) {
+                    // Never delete playlist manifests
+                    if (item.Key.endsWith('index.html') || item.Key.endsWith('index.css') || item.Key.endsWith('.m3u8')) {
+                        continue;
+                    }
+
+                    // Delete .js segments older than MAX_SEGMENT_AGE_SECONDS
+                    if (item.Key.endsWith('.js') && item.LastModified) {
+                        const age = now - new Date(item.LastModified).getTime();
+                        if (age > maxAgeMs) {
+                            toDelete.push({ Key: item.Key });
+                        }
                     }
                 }
+
+                continuationToken = listResponse.IsTruncated ? listResponse.NextContinuationToken : undefined;
+            } while (continuationToken);
+
+            for (let i = 0; i < toDelete.length; i += R2_DELETE_BATCH_SIZE) {
+                const batch = toDelete.slice(i, i + R2_DELETE_BATCH_SIZE);
+                await s3Client.send(new DeleteObjectsCommand({
+                    Bucket: R2_BUCKET_NAME,
+                    Delete: { Objects: batch, Quiet: true }
+                }));
+                batch.forEach(obj => this.uploadedSegments.delete(obj.Key));
+                this.stats.deletedSegments += batch.length;
             }
 
             if (toDelete.length > 0) {
-                // Batch delete in chunks of 500
-                const batch = toDelete.slice(0, 500);
-                const deleteCommand = new DeleteObjectsCommand({
-                    Bucket: R2_BUCKET_NAME,
-                    Delete: { Objects: batch }
-                });
-
-                await s3Client.send(deleteCommand);
-                this.stats.deletedSegments += batch.length;
                 this.stats.lastPruneTime = new Date().toISOString();
-                console.log(`[R2-PRUNE] Cleaned ${batch.length} expired segment(s) from R2 bucket.`);
+                console.log(`[R2-PRUNE] Cleaned ${toDelete.length} expired segment(s) from R2 bucket.`);
             }
         } catch (err) {
             console.error('[R2-PRUNE-ERROR] Error while pruning old segments:', err.message);
@@ -1044,9 +1261,9 @@ app.put('/api/channels/:id', verifyAdminAuth, async (req, res) => {
 });
 
 // Delete Channel
-app.delete('/api/channels/:id', verifyAdminAuth, (req, res) => {
+app.delete('/api/channels/:id', verifyAdminAuth, async (req, res) => {
     const { id } = req.params;
-    restreamManager.stop(id);
+    await restreamManager.stop(id);
     const deleted = channelManager.delete(id);
     if (!deleted) {
         return res.status(404).json({ success: false, error: 'Channel not found' });
@@ -1071,7 +1288,7 @@ app.post('/api/channels/:id/restream/start', verifyAdminAuth, async (req, res) =
         }
 
         const validUrl = await validateSourceUrl(effectiveUrl);
-        const status = restreamManager.start(id, validUrl);
+        const status = await restreamManager.start(id, validUrl);
         res.json({ success: true, status });
     } catch (err) {
         res.status(err.status || 500).json({ success: false, error: err.message });
@@ -1079,9 +1296,9 @@ app.post('/api/channels/:id/restream/start', verifyAdminAuth, async (req, res) =
 });
 
 // Pull Restreaming: Stop
-app.post('/api/channels/:id/restream/stop', verifyAdminAuth, (req, res) => {
+app.post('/api/channels/:id/restream/stop', verifyAdminAuth, async (req, res) => {
     const { id } = req.params;
-    const stopped = restreamManager.stop(id);
+    await restreamManager.stop(id);
     res.json({ success: true, status: restreamManager.getStatus(id) });
 });
 
@@ -1092,7 +1309,7 @@ app.post('/api/channels/:id/restream/restart', verifyAdminAuth, async (req, res)
         const job = restreamManager.jobs.get(id);
         const sourceUrl = job ? job.sourceUrl : (channelManager.getById(id)?.sourceUrl || '');
         if (sourceUrl) await validateSourceUrl(sourceUrl);
-        const status = restreamManager.restart(id);
+        const status = await restreamManager.restart(id);
         res.json({ success: true, status });
     } catch (err) {
         res.status(err.status || 500).json({ success: false, error: err.message });
@@ -1288,19 +1505,20 @@ app.post('/internal/mediamtx-auth', (req, res) => {
 // ------------------------------------------------------------------------------
 // Process Termination Handling
 // ------------------------------------------------------------------------------
-process.on('SIGTERM', () => {
-    console.log('[SYSTEM] SIGTERM received. Gracefully shutting down...');
+let shuttingDown = false;
+async function gracefulShutdown(signal) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[SYSTEM] ${signal} received. Gracefully shutting down...`);
     r2Pipeline.stop();
-    restreamManager.cleanupAll();
+    // Desired states stay 'running' so restreams resume when the backend starts again.
+    // Each process gets SIGINT, then SIGKILL after 5s (inside docker stop's 10s grace period).
+    await restreamManager.shutdownAll();
     process.exit(0);
-});
+}
 
-process.on('SIGINT', () => {
-    console.log('[SYSTEM] SIGINT received. Gracefully shutting down...');
-    r2Pipeline.stop();
-    restreamManager.cleanupAll();
-    process.exit(0);
-});
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 // ------------------------------------------------------------------------------
 // Start Express HTTP Server
@@ -1313,4 +1531,7 @@ app.listen(PORT, '0.0.0.0', () => {
     console.log(`[BACKEND] R2 Custom Domain: ${R2_CUSTOM_DOMAIN}`);
     console.log(`[BACKEND] Admin Dashboard: http://localhost:${PORT}/admin`);
     console.log('==============================================================');
+
+    // Resume restreams whose persisted desired state is 'running'
+    restreamManager.resumeAll();
 });

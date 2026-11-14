@@ -55,6 +55,11 @@ paths:
     # - Sliding playlist window of 6 segments (-hls_list_size 6)
     # - Automatic removal of old segments from disk (-hls_flags delete_segments+split_by_time)
     # - Zero CPU re-encoding (-c copy)
+    # - Segment numbering starts at the current Unix time (-hls_start_number_source epoch)
+    #   instead of 0 on every (re)start. Names are never reused across restarts: with
+    #   2s segments the counter grows slower than the clock, so a restarted packager always
+    #   starts above the previous run's last number. Reused names would make the nginx
+    #   segment cache (60s, key = $uri) and the R2/Cloudflare immutable cache serve stale video.
     runOnReady: >
       sh -c 'mkdir -p /hls/$MTX_PATH &&
       exec ffmpeg -nostdin -loglevel warning -rtsp_transport tcp -i rtsp://127.0.0.1:8554/$MTX_PATH
@@ -63,6 +68,7 @@ paths:
       -hls_time 2
       -hls_list_size 6
       -hls_flags delete_segments+split_by_time
+      -hls_start_number_source epoch
       -hls_segment_filename "/hls/$MTX_PATH/seg_%05d.ts"
       /hls/$MTX_PATH/index.m3u8'
     runOnReadyRestart: yes
@@ -70,6 +76,7 @@ paths:
   # Catch-all rule for all other published paths
   all_others:
     source: publisher
+    # Same packaging (and same epoch numbering rationale) as above
     runOnReady: >
       sh -c 'mkdir -p /hls/$MTX_PATH &&
       exec ffmpeg -nostdin -loglevel warning -rtsp_transport tcp -i rtsp://127.0.0.1:8554/$MTX_PATH
@@ -78,6 +85,7 @@ paths:
       -hls_time 2
       -hls_list_size 6
       -hls_flags delete_segments+split_by_time
+      -hls_start_number_source epoch
       -hls_segment_filename "/hls/$MTX_PATH/seg_%05d.ts"
       /hls/$MTX_PATH/index.m3u8'
     runOnReadyRestart: yes

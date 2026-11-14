@@ -506,7 +506,8 @@
             }
 
             channelsContainer.innerHTML = channels.map(channel => {
-                const isRestreamRunning = channel.restream && channel.restream.status === 'running';
+                // 'restarting' (auto-restart backoff) still needs the Stop button
+                const isRestreamRunning = channel.restream && ['running', 'starting', 'restarting'].includes(channel.restream.status);
                 const metrics = (channel.restream && channel.restream.metrics) || {};
                 
                 return `
