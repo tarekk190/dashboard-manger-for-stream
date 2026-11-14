@@ -369,19 +369,226 @@ async function validateSourceUrl(rawUrl) {
 // - Desired state ('running' | 'stopped') persisted per channel and resumed on boot
 // - stop() is awaitable and escalates SIGINT -> SIGKILL after 5s
 // ------------------------------------------------------------------------------
-const RESTREAM_BACKOFF_MIN_MS = 2000;
-const RESTREAM_BACKOFF_MAX_MS = 60000;
+// Auto-restart: an unexpected FFmpeg exit is retried after 3s; after RESTREAM_FAST_RETRIES
+// consecutive failures (source down for ~1 min) the delay grows to 30s so a dead source
+// does not hammer the server. A run that stays up 60s resets the counter.
+const RESTREAM_RETRY_DELAY_MS = 3000;
+const RESTREAM_SLOW_RETRY_DELAY_MS = 30000;
+const RESTREAM_FAST_RETRIES = 20;
 const RESTREAM_STOP_TIMEOUT_MS = 5000;
 // A run lasting this long counts as healthy and resets the retry counter
 const RESTREAM_STABLE_RUN_MS = 60000;
-// Consecutive failed restarts before giving up (0 = retry forever)
-const RESTREAM_MAX_RETRIES = parseInt(process.env.RESTREAM_MAX_RETRIES || '10', 10);
+// Consecutive failed restarts before giving up (0 = retry forever, the default)
+const RESTREAM_MAX_RETRIES = parseInt(process.env.RESTREAM_MAX_RETRIES || '0', 10);
 // A source that sends nothing for this long makes FFmpeg exit, so the supervisor reconnects it
 const RESTREAM_RW_TIMEOUT_US = 15 * 1000 * 1000;
-// true = pure `-c copy` (zero transcoding; source audio must already be AAC/MP3)
+// Output profile: '480p' (default) transcodes every restream to 854x480 H.264 + AAC,
+// 'copy' relays the source untouched (video copy, audio AAC unless RESTREAM_COPY_AUDIO=true).
+const RESTREAM_PROFILE = String(process.env.RESTREAM_PROFILE || '480p').toLowerCase();
+if (!['480p', 'copy'].includes(RESTREAM_PROFILE)) {
+    fatal(`RESTREAM_PROFILE must be "480p" or "copy" (got "${RESTREAM_PROFILE}").`);
+}
+const RESTREAM_TARGET_HEIGHT = 480;
+const RESTREAM_VIDEO_KBPS = Math.min(Math.max(parseInt(process.env.RESTREAM_VIDEO_KBPS || '900', 10) || 900, 300), 4000);
+const X264_PRESETS = ['ultrafast', 'superfast', 'veryfast', 'faster', 'fast', 'medium'];
+const RESTREAM_X264_PRESET = X264_PRESETS.includes(process.env.RESTREAM_X264_PRESET) ? process.env.RESTREAM_X264_PRESET : 'veryfast';
+// true = pure `-c copy` in 'copy' profile (source audio must already be AAC/MP3)
 const RESTREAM_COPY_AUDIO = String(process.env.RESTREAM_COPY_AUDIO || 'false').toLowerCase() === 'true';
-// ONLINE only while FFmpeg reports progress; no progress line for this long = not delivering frames
+// ONLINE only while the frame counter advances; FFmpeg keeps printing progress lines while stalled
 const RESTREAM_PROGRESS_STALE_MS = 10 * 1000;
+// Watchdog: FFmpeg alive but no new frame for this long -> kill it so the supervisor restarts it
+const RESTREAM_STALL_TIMEOUT_MS = 30 * 1000;
+// A looped (frozen) HLS source is re-checked this often; when it is live again we switch back
+const RESTREAM_FROZEN_RECHECK_MS = 5 * 60 * 1000;
+
+// ------------------------------------------------------------------------------
+// Source probing: decides HOW FFmpeg reads a source
+// - hls-live   : live playlist, followed normally (only the chosen variant is downloaded)
+// - hls-vod    : playlist with #EXT-X-ENDLIST          -> looped forever at real-time speed
+// - hls-frozen : "live" playlist that stopped updating -> looped (re-checked every 5 min)
+// - file       : finite HTTP file (mp4/ts with a size) -> looped forever at real-time speed
+// - stream     : endless HTTP stream (IPTV .ts)        -> reconnect at EOF
+// - live       : rtmp/rtsp/srt                         -> read as-is
+// Every redirect and every segment host passes validateSourceUrl (SSRF protection).
+// ------------------------------------------------------------------------------
+const LOOP_PLAYLIST_DIR = path.join(require('os').tmpdir(), 'restream-loops');
+const PROBE_TIMEOUT_MS = 8000;
+const PROBE_MAX_BYTES = 512 * 1024;
+const HLS_FROZEN_MIN_AGE_MS = 60 * 1000;
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+async function fetchLimited(url) {
+    let current = url;
+    for (let hop = 0; hop < 4; hop++) {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), PROBE_TIMEOUT_MS);
+        try {
+            const res = await fetch(current, {
+                redirect: 'manual',
+                signal: ctrl.signal,
+                headers: { 'User-Agent': 'Mozilla/5.0 (StreamOps restreamer)' }
+            });
+            const location = res.headers.get('location');
+            if (res.status >= 300 && res.status < 400 && location) {
+                try { await res.body?.cancel(); } catch { /* ignore */ }
+                current = await validateSourceUrl(new URL(location, current).href);
+                continue;
+            }
+            const chunks = [];
+            let size = 0;
+            if (res.body) {
+                const reader = res.body.getReader();
+                while (size < PROBE_MAX_BYTES) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    chunks.push(value);
+                    size += value.length;
+                }
+                try { await reader.cancel(); } catch { /* ignore */ }
+            }
+            return { url: current, status: res.status, headers: res.headers, text: Buffer.concat(chunks).toString('utf8') };
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+    throw new Error('Too many redirects');
+}
+
+function parseHlsAttributes(attrText) {
+    const attrs = {};
+    attrText.replace(/([A-Z0-9-]+)=("[^"]*"|[^,]*)/g, (_, key, value) => {
+        attrs[key] = value.replace(/^"|"$/g, '');
+        return '';
+    });
+    return attrs;
+}
+
+function hlsFingerprint(text) {
+    const seq = (text.match(/#EXT-X-MEDIA-SEQUENCE:(\d+)/) || [])[1] || '';
+    const uris = text.split(/\r?\n/).filter(l => l.trim() && !l.startsWith('#'));
+    return `${seq}|${uris[uris.length - 1] || ''}|${uris.length}`;
+}
+
+// Rewrites a media playlist to absolute http(s) URLs and appends #EXT-X-ENDLIST so that
+// FFmpeg treats it as VOD and `-stream_loop -1` can loop it.
+async function buildLoopPlaylist(text, baseUrl) {
+    const origins = new Set();
+    const absolutize = (uri) => {
+        const abs = new URL(uri.trim(), baseUrl);
+        if (abs.protocol !== 'http:' && abs.protocol !== 'https:') {
+            throw new ValidationError(`Playlist entry uses a forbidden scheme '${abs.protocol}'`);
+        }
+        origins.add(abs.origin);
+        return abs.href;
+    };
+    let segments = 0;
+    const out = text.split(/\r?\n/).filter(l => !/^#EXT-X-ENDLIST/.test(l)).map(line => {
+        if (!line.trim()) return line;
+        if (line.startsWith('#')) {
+            return line.replace(/URI="([^"]+)"/g, (_, uri) => `URI="${absolutize(uri)}"`);
+        }
+        segments++;
+        return absolutize(line);
+    });
+    if (segments === 0) throw new Error('Playlist has no segments');
+    for (const origin of origins) await validateSourceUrl(`${origin}/`);
+    return { content: `${out.join('\n')}\n#EXT-X-ENDLIST\n`, segments };
+}
+
+function fallbackSourceKind(url) {
+    if (!/^https?:/i.test(url)) return 'live';
+    return /\.m3u8?(\?|$)/i.test(new URL(url).pathname) ? 'hls-live' : 'stream';
+}
+
+async function probeSource(sourceUrl) {
+    if (!/^https?:/i.test(sourceUrl)) return { kind: 'live', inputUrl: sourceUrl, note: '' };
+
+    let res = await fetchLimited(sourceUrl);
+    if (res.status >= 400) throw new Error(`source answered HTTP ${res.status}`);
+    let text = res.text.replace(/^﻿/, '');
+
+    if (!text.startsWith('#EXTM3U')) {
+        const type = (res.headers.get('content-type') || '').toLowerCase();
+        const length = parseInt(res.headers.get('content-length') || '0', 10);
+        // A fixed-size response is a file; endless IPTV streams have no Content-Length
+        if (length > 0 && !type.includes('mpegurl')) {
+            return { kind: 'file', inputUrl: res.url, note: `${(length / 1048576).toFixed(1)} MB` };
+        }
+        return { kind: 'stream', inputUrl: res.url, note: '' };
+    }
+
+    const notes = [];
+    if (text.includes('#EXT-X-STREAM-INF')) {
+        // Master playlist: pick ONE variant (FFmpeg would otherwise download all of them)
+        const lines = text.split(/\r?\n/);
+        const variants = [];
+        for (let i = 0; i < lines.length; i++) {
+            if (!lines[i].startsWith('#EXT-X-STREAM-INF')) continue;
+            const attrs = parseHlsAttributes(lines[i].slice(lines[i].indexOf(':') + 1));
+            const uri = lines.slice(i + 1).find(l => l.trim() && !l.startsWith('#'));
+            if (!uri) continue;
+            variants.push({
+                uri: uri.trim(),
+                height: parseInt((attrs.RESOLUTION || '').split('x')[1] || '0', 10),
+                bandwidth: parseInt(attrs.BANDWIDTH || '0', 10)
+            });
+        }
+        if (variants.length === 0) throw new Error('master playlist has no variants');
+        const known = variants.filter(v => v.height > 0);
+        let pick;
+        if (RESTREAM_PROFILE === '480p' && known.length) {
+            // Smallest variant that is still >= 480p (less download + decode), else the largest
+            pick = known.filter(v => v.height >= RESTREAM_TARGET_HEIGHT).sort((a, b) => a.height - b.height || a.bandwidth - b.bandwidth)[0]
+                || known.sort((a, b) => b.height - a.height)[0];
+        } else {
+            pick = variants.slice().sort((a, b) => b.bandwidth - a.bandwidth)[0];
+        }
+        const variantUrl = await validateSourceUrl(new URL(pick.uri, res.url).href);
+        notes.push(`variant ${pick.height ? pick.height + 'p' : pick.uri} (${variants.length} available)`);
+        res = await fetchLimited(variantUrl);
+        if (res.status >= 400) throw new Error(`variant playlist answered HTTP ${res.status}`);
+        text = res.text.replace(/^﻿/, '');
+        if (!text.startsWith('#EXTM3U')) throw new Error('variant is not an HLS playlist');
+    }
+
+    const targetSec = parseFloat((text.match(/#EXT-X-TARGETDURATION:(\d+(?:\.\d+)?)/) || [])[1] || '4');
+    let kind = 'hls-live';
+    if (/#EXT-X-ENDLIST|#EXT-X-PLAYLIST-TYPE:VOD/.test(text)) {
+        kind = 'hls-vod';
+    } else {
+        // Frozen = a "live" playlist that is no longer updated (no ENDLIST, no new segments)
+        const lastModified = Date.parse(res.headers.get('last-modified') || '');
+        const serverNow = Date.parse(res.headers.get('date') || '') || Date.now();
+        if (!Number.isNaN(lastModified)) {
+            const age = serverNow - lastModified;
+            if (age > Math.max(HLS_FROZEN_MIN_AGE_MS, targetSec * 6000)) {
+                kind = 'hls-frozen';
+                notes.push(`playlist not updated for ${Math.round(age / 60000)} min`);
+            }
+        } else {
+            await sleep(Math.min(Math.max(targetSec, 2) * 1.5, 10) * 1000);
+            const again = await fetchLimited(res.url);
+            if (again.status < 400 && hlsFingerprint(again.text) === hlsFingerprint(text)) {
+                kind = 'hls-frozen';
+                notes.push('playlist did not advance');
+            }
+        }
+    }
+
+    if (kind === 'hls-live') return { kind, inputUrl: res.url, note: notes.join(', ') };
+    const loop = await buildLoopPlaylist(text, res.url);
+    notes.push(`${loop.segments} segments looped`);
+    return { kind, inputUrl: res.url, loopPlaylist: loop.content, note: notes.join(', ') };
+}
+
+const SOURCE_KIND_LABELS = {
+    'hls-live': 'Live HLS',
+    'hls-vod': 'HLS VOD (looping)',
+    'hls-frozen': 'Frozen live HLS (looping its last segments)',
+    file: 'Finite file (looping)',
+    stream: 'Continuous HTTP stream',
+    live: 'Live stream'
+};
 
 class FFmpegRestreamManager {
     constructor() {
@@ -389,6 +596,8 @@ class FFmpegRestreamManager {
         this.jobs = new Map();
         // Per-channel promise chain so start/stop/restart never interleave
         this.locks = new Map();
+        // Stall watchdog + periodic re-check of looped (frozen) sources
+        setInterval(() => this.checkStalls(), 5000).unref();
     }
 
     withLock(channelId, fn) {
@@ -456,57 +665,130 @@ class FFmpegRestreamManager {
         // Persist desired state + source so the job resumes after a backend restart
         channelManager.update(channelId, { sourceUrl: job.sourceUrl, desiredState: 'running' });
 
-        this.spawnProcess(job);
+        this.launch(job);
         return this.getStatus(channelId);
     }
 
-    buildArgs(channel, sourceUrl) {
+    // spawnProcess is async (it probes the source first); never leave its promise unhandled
+    launch(job) {
+        this.spawnProcess(job).catch(err => {
+            this.appendLog(job, `[ERROR] ${err.message}`);
+            console.error(`[RESTREAMER-ERROR] Channel ${job.streamKey}:`, err.message);
+        });
+    }
+
+    buildArgs(channel, probe, inputPath) {
         // Publish with the channel's secret key; MediaMTX validates it via POST /internal/mediamtx-auth
         const rtmpTarget = `rtmp://${MEDIAMTX_RTMP_HOST}:${MEDIAMTX_RTMP_PORT}/live/${channel.streamKey}` +
             `?user=publish&pass=${channel.publishKey}`;
 
-        // FFmpeg command arguments:
-        // - Only network protocols allowed (-protocol_whitelist), no file:/pipe:/concat:
-        // - -rw_timeout (microseconds, any protocol): a stalled source exits after 15s and the
-        //   supervisor's backoff restarts it. NOT -timeout: for RTMP inputs it means "listen for
-        //   incoming connections" (implies -rtmp_listen 1), for HTTP it is a socket timeout.
-        // - -reconnect* are HTTP(S)-only options (.m3u8 / .ts sources), so only added there
-        // - No -re: sources are live network streams (files are not allowed), -re only adds latency
-        // - Video is always copied (-c:v copy). Audio is copied too when RESTREAM_COPY_AUDIO=true,
-        //   otherwise normalized to AAC: FLV/RTMP only carries AAC/MP3, and many HLS/TS sources
-        //   use AC-3/Opus/E-AC-3, which would make `-c copy` fail. AAC audio costs ~1% of one core.
-        const isHttp = /^https?:/i.test(sourceUrl);
-        const input = [
-            '-nostdin',
-            '-hide_banner',
-            '-loglevel', 'info',
-            '-protocol_whitelist', FFMPEG_PROTOCOL_WHITELIST,
+        // Input side (depends on what probeSource found):
+        // - -rw_timeout (microseconds, any protocol): a source that sends nothing for 15s makes
+        //   FFmpeg exit. NOT -timeout: on RTMP inputs it implies -rtmp_listen 1.
+        // - Live HLS: NO -reconnect_at_eof. The playlist is a small file that ends after every
+        //   download; with at_eof FFmpeg re-reads it forever instead of advancing (stall bug).
+        //   -m3u8_hold_counters 10: a playlist that stops advancing ends the run (restart + re-probe).
+        // - VOD / frozen HLS and finite files: real-time pacing + -stream_loop -1 (endless).
+        //   Pacing is -readrate 1 with an 8s initial burst and 1.5x catch-up, NOT -re: with -re,
+        //   time spent downloading each segment is never made up (measured 0.8x = constant stalls).
+        //   Looped HLS is read from a local rewritten playlist, hence 'file' in its whitelist.
+        // - Endless HTTP streams (IPTV .ts): reconnect at EOF.
+        const realtimeLoop = ['-readrate', '1', '-readrate_initial_burst', '8', '-readrate_catchup', '1.5', '-stream_loop', '-1'];
+        const httpReconnect = ['-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_on_network_error', '1', '-reconnect_delay_max', '5'];
+        let input;
+        switch (probe.kind) {
+            case 'hls-live':
+                input = ['-protocol_whitelist', FFMPEG_PROTOCOL_WHITELIST, ...httpReconnect,
+                    '-live_start_index', '-3', '-m3u8_hold_counters', '10', '-seg_max_retry', '3'];
+                break;
+            case 'hls-vod':
+            case 'hls-frozen':
+                input = ['-protocol_whitelist', 'file,http,https,tcp,tls,crypto',
+                    '-allowed_extensions', 'ALL', '-extension_picky', '0', '-seg_max_retry', '3',
+                    ...realtimeLoop];
+                break;
+            case 'file':
+                input = ['-protocol_whitelist', FFMPEG_PROTOCOL_WHITELIST, ...httpReconnect, ...realtimeLoop];
+                break;
+            case 'stream':
+                input = ['-protocol_whitelist', FFMPEG_PROTOCOL_WHITELIST, ...httpReconnect, '-reconnect_at_eof', '1'];
+                break;
+            default:
+                input = ['-protocol_whitelist', FFMPEG_PROTOCOL_WHITELIST];
+        }
+
+        // Output side:
+        // - 480p profile: scale to 480 lines (width keeps aspect, even), max 30 fps, H.264 main,
+        //   ~RESTREAM_VIDEO_KBPS, keyframe every 2s (clean 2s HLS segments), AAC 128k stereo.
+        // - copy profile: video copied; audio AAC unless RESTREAM_COPY_AUDIO (FLV only carries AAC/MP3).
+        let codecs;
+        if (RESTREAM_PROFILE === 'copy') {
+            codecs = RESTREAM_COPY_AUDIO
+                ? ['-c', 'copy']
+                : ['-c:v', 'copy', '-c:a', 'aac', '-b:a', '128k', '-ar', '44100'];
+        } else {
+            codecs = [
+                '-vf', `scale=-2:${RESTREAM_TARGET_HEIGHT}:flags=bicubic,format=yuv420p`,
+                '-fpsmax', '30',
+                '-c:v', 'libx264', '-preset', RESTREAM_X264_PRESET, '-tune', 'zerolatency', '-profile:v', 'main',
+                '-b:v', `${RESTREAM_VIDEO_KBPS}k`,
+                '-maxrate', `${Math.round(RESTREAM_VIDEO_KBPS * 1.1)}k`,
+                '-bufsize', `${RESTREAM_VIDEO_KBPS * 2}k`,
+                '-force_key_frames', 'expr:gte(t,n_forced*2)', '-sc_threshold', '0',
+                '-c:a', 'aac', '-b:a', '128k', '-ar', '44100', '-ac', '2'
+            ];
+        }
+
+        return [
+            '-nostdin', '-hide_banner', '-loglevel', 'info',
             '-rw_timeout', String(RESTREAM_RW_TIMEOUT_US),
-            ...(isHttp ? [
-                '-reconnect', '1',
-                '-reconnect_at_eof', '1',
-                '-reconnect_streamed', '1',
-                '-reconnect_on_network_error', '1',
-                '-reconnect_delay_max', '5'
-            ] : []),
-            '-fflags', '+genpts',
-            '-i', sourceUrl
+            ...input,
+            // nobuffer: no extra input buffering for live sources (looped ones are paced by -readrate)
+            '-fflags', probe.loopPlaylist || probe.kind === 'file' ? '+genpts+discardcorrupt' : '+genpts+discardcorrupt+nobuffer',
+            '-i', inputPath,
+            '-map', '0:v:0?', '-map', '0:a:0?',
+            ...codecs,
+            '-f', 'flv', rtmpTarget
         ];
-        const codecs = RESTREAM_COPY_AUDIO
-            ? ['-c', 'copy']
-            : ['-c:v', 'copy', '-c:a', 'aac', '-b:a', '128k', '-ar', '44100'];
-        return [...input, '-map', '0:v:0?', '-map', '0:a:0?', ...codecs, '-f', 'flv', rtmpTarget];
     }
 
-    spawnProcess(job) {
+    async spawnProcess(job) {
         const channel = channelManager.getById(job.channelId);
         if (!channel) {
             job.status = 'stopped';
             return;
         }
 
-        const args = this.buildArgs(channel, job.sourceUrl);
-        console.log(`[RESTREAMER] Starting FFmpeg restream: ${channel.name} (${job.sourceUrl} -> live/${channel.streamKey})`);
+        // Probe the source on every (re)start: a live source may have frozen or resumed meanwhile
+        let probe;
+        try {
+            probe = await probeSource(job.sourceUrl);
+        } catch (err) {
+            if (err instanceof ValidationError) {
+                // e.g. a redirect or segment host pointing into a private network: never start
+                job.status = 'failed';
+                this.appendLog(job, `[ERROR] Source rejected: ${err.message}`);
+                return;
+            }
+            probe = { kind: fallbackSourceKind(job.sourceUrl), inputUrl: job.sourceUrl, note: `probe failed: ${err.message}` };
+        }
+        // Stopped or replaced while probing
+        if (job.stopRequested || this.jobs.get(job.channelId) !== job) return;
+
+        job.sourceKind = probe.kind;
+        job.probedAt = Date.now();
+        this.appendLog(job, `[SOURCE] ${SOURCE_KIND_LABELS[probe.kind] || probe.kind}${probe.note ? ` (${probe.note})` : ''}`);
+
+        let inputPath = probe.inputUrl;
+        if (probe.loopPlaylist) {
+            await fsp.mkdir(LOOP_PLAYLIST_DIR, { recursive: true });
+            inputPath = this.loopPlaylistPath(job.channelId);
+            await fsp.writeFile(inputPath, probe.loopPlaylist, 'utf8');
+        }
+        if (job.stopRequested || this.jobs.get(job.channelId) !== job) return;
+
+        const args = this.buildArgs(channel, probe, inputPath);
+        console.log(`[RESTREAMER] Starting FFmpeg restream: ${channel.name} (${job.sourceUrl} -> live/${channel.streamKey}, ${probe.kind}, profile ${RESTREAM_PROFILE})`);
 
         const proc = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
         const spawnedAt = Date.now();
@@ -515,7 +797,10 @@ class FFmpegRestreamManager {
         job.exited = false;
         job.status = 'running';
         job.startedAt = new Date().toISOString();
-        job.metrics.lastUpdate = 0; // ONLINE again only once this process reports progress
+        job.metrics.lastUpdate = 0; // ONLINE again only once this process delivers new frames
+        job.lastFrame = -1;
+        job.lastProgressAt = spawnedAt;
+        job.stallKilled = false;
 
         let resolveExit;
         job.exitPromise = new Promise(resolve => { resolveExit = resolve; });
@@ -566,14 +851,14 @@ class FFmpegRestreamManager {
             return;
         }
 
-        const delay = Math.min(RESTREAM_BACKOFF_MIN_MS * 2 ** job.retries, RESTREAM_BACKOFF_MAX_MS);
+        const delay = job.retries < RESTREAM_FAST_RETRIES ? RESTREAM_RETRY_DELAY_MS : RESTREAM_SLOW_RETRY_DELAY_MS;
         job.retries++;
         job.status = 'restarting';
         this.appendLog(job, `[SYSTEM] Unexpected exit. Restart attempt ${job.retries} in ${delay / 1000}s...`);
         job.restartTimer = setTimeout(() => {
             job.restartTimer = null;
             if (!job.stopRequested && this.jobs.get(job.channelId) === job) {
-                this.spawnProcess(job);
+                this.launch(job);
             }
         }, delay);
     }
@@ -615,7 +900,42 @@ class FFmpegRestreamManager {
         }
 
         job.status = 'stopped';
+        fsp.unlink(this.loopPlaylistPath(channelId)).catch(() => {});
         return true;
+    }
+
+    loopPlaylistPath(channelId) {
+        return path.join(LOOP_PLAYLIST_DIR, `${String(channelId).replace(/[^a-zA-Z0-9_-]/g, '_')}.m3u8`);
+    }
+
+    // FFmpeg keeps running (and printing the same frame number) when a source silently stops
+    // delivering media. Kill such processes so the supervisor restarts and re-probes the source.
+    checkStalls() {
+        const now = Date.now();
+        for (const job of this.jobs.values()) {
+            if (!job.process || job.exited || job.stopRequested) continue;
+
+            if (!job.stallKilled && now - (job.lastProgressAt || now) > RESTREAM_STALL_TIMEOUT_MS) {
+                job.stallKilled = true;
+                this.appendLog(job, `[SYSTEM] No new frames for ${RESTREAM_STALL_TIMEOUT_MS / 1000}s (source stalled). Restarting FFmpeg...`);
+                try { job.process.kill('SIGKILL'); } catch { /* already gone */ }
+                continue;
+            }
+
+            if (job.sourceKind === 'hls-frozen' && !job.reprobing && now - (job.probedAt || now) > RESTREAM_FROZEN_RECHECK_MS) {
+                job.reprobing = true;
+                const proc = job.process;
+                probeSource(job.sourceUrl)
+                    .then(result => {
+                        if (result.kind === 'hls-live' && job.process === proc && !job.exited) {
+                            this.appendLog(job, '[SOURCE] Source is live again: switching from loop to live.');
+                            proc.kill('SIGTERM');
+                        }
+                    })
+                    .catch(() => { /* keep looping */ })
+                    .finally(() => { job.probedAt = Date.now(); job.reprobing = false; });
+            }
+        }
     }
 
     // Resume every channel whose persisted desired state is 'running'
@@ -656,6 +976,8 @@ class FFmpegRestreamManager {
             sourceUrl: job.sourceUrl,
             retries: job.retries,
             desiredState: channel?.desiredState || 'stopped',
+            sourceKind: job.sourceKind || null,
+            profile: RESTREAM_PROFILE,
             state: FFmpegRestreamManager.panelState(job)
         };
     }
@@ -698,8 +1020,16 @@ class FFmpegRestreamManager {
                 if (bitrateMatch) job.metrics.bitrate = bitrateMatch[1].trim();
                 if (speedMatch) job.metrics.speed = speedMatch[1] + 'x';
                 if (timeMatch) job.metrics.time = timeMatch[1];
-                if (frameMatch) job.metrics.frame = parseInt(frameMatch[1], 10);
-                job.metrics.lastUpdate = Date.now();
+                if (frameMatch) {
+                    const frame = parseInt(frameMatch[1], 10);
+                    job.metrics.frame = frame;
+                    // Progress = the frame counter moved (FFmpeg repeats the same line while stalled)
+                    if (frame > (job.lastFrame ?? -1)) {
+                        job.lastFrame = frame;
+                        job.lastProgressAt = Date.now();
+                        job.metrics.lastUpdate = job.lastProgressAt;
+                    }
+                }
             }
         }
     }
@@ -1754,6 +2084,7 @@ app.listen(PORT, '0.0.0.0', () => {
     console.log(`[BACKEND] Port: ${PORT} | Mode: ${NODE_ENV}`);
     console.log(`[BACKEND] Server IP: ${SERVER_IP} | Edge Domain: ${EDGE_DOMAIN}`);
     console.log(`[BACKEND] R2 Custom Domain: ${R2_CUSTOM_DOMAIN}`);
+    console.log(`[BACKEND] Restream profile: ${RESTREAM_PROFILE}${RESTREAM_PROFILE === '480p' ? ` (libx264 ${RESTREAM_X264_PRESET}, ${RESTREAM_VIDEO_KBPS}k video, 128k AAC)` : ''}`);
     console.log(`[BACKEND] Admin Dashboard: http://localhost:${PORT}/admin`);
     console.log('==============================================================');
 

@@ -53,8 +53,15 @@ paths:
     # Parameters:
     # - Low latency 2-second segments (-hls_time 2)
     # - Sliding playlist window of 6 segments (-hls_list_size 6)
-    # - Automatic removal of old segments from disk (-hls_flags delete_segments+split_by_time)
+    # - Automatic removal of old segments from disk (-hls_flags delete_segments)
+    # - omit_endlist: when the publisher drops (restream restart) the packager exits; without
+    #   this flag it writes #EXT-X-ENDLIST and players treat the live stream as finished.
+    # - Segments are cut on keyframes (no split_by_time), so every segment starts with an IDR
+    #   frame. Restreams force a keyframe every 2s; for OBS set "Keyframe Interval" to 2s.
     # - Zero CPU re-encoding (-c copy)
+    # - -bsf:v dump_extra=freq=keyframe: H.264 SPS/PPS are repeated in front of every keyframe.
+    #   Encoders behind RTMP (x264 in OBS / the restreamer) send them only once in the stream
+    #   header; without this, viewers joining after the first segment cannot decode the video.
     # - Before each (re)start the channel directory is emptied (rm -f) so no stale
     #   playlist/segments from a previous run are served or uploaded, and it is chowned to
     #   uid 1000 (the backend's 'node' user) so the backend can prune stale files.
@@ -69,10 +76,11 @@ paths:
       chown 1000:1000 /hls/$MTX_PATH &&
       exec ffmpeg -nostdin -loglevel warning -rtsp_transport tcp -i rtsp://127.0.0.1:8554/$MTX_PATH
       -c copy
+      -bsf:v dump_extra=freq=keyframe
       -f hls
       -hls_time 2
       -hls_list_size 6
-      -hls_flags delete_segments+split_by_time
+      -hls_flags delete_segments+omit_endlist
       -hls_start_number_source epoch
       -hls_segment_filename "/hls/$MTX_PATH/seg_%05d.ts"
       /hls/$MTX_PATH/index.m3u8'
@@ -88,10 +96,11 @@ paths:
       chown 1000:1000 /hls/$MTX_PATH &&
       exec ffmpeg -nostdin -loglevel warning -rtsp_transport tcp -i rtsp://127.0.0.1:8554/$MTX_PATH
       -c copy
+      -bsf:v dump_extra=freq=keyframe
       -f hls
       -hls_time 2
       -hls_list_size 6
-      -hls_flags delete_segments+split_by_time
+      -hls_flags delete_segments+omit_endlist
       -hls_start_number_source epoch
       -hls_segment_filename "/hls/$MTX_PATH/seg_%05d.ts"
       /hls/$MTX_PATH/index.m3u8'

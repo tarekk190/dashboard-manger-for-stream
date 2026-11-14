@@ -15,7 +15,7 @@ flowchart TD
         OBS["OBS Studio Broadcaster\n(rtmp://SERVER_IP:1935/live,\nkey: {streamKey}?user=publish&pass={publishKey})"] -->|RTMP Port 1935| MTX["MediaMTX Server"]
         RESTREAM["Admin Restreamer\n(FFmpeg Background Pull, supervised)"] -->|RTMP Relay + publishKey| MTX
         MTX -.->|authMethod: http\nPOST /internal/mediamtx-auth| AUTHHOOK["Backend publish/read check"]
-        MTX -->|runOnReady Hook\n(RTSP 127.0.0.1:8554)| FFMPEG_PKG["FFmpeg Packager\n(-c copy, 2s segments, list 6,\nepoch segment numbers)"]
+        MTX -->|runOnReady Hook\n(RTSP 127.0.0.1:8554)| FFMPEG_PKG["FFmpeg Packager\n(-c copy, SPS/PPS on keyframes,\n2s keyframe-aligned segments, list 6,\nepoch numbers, no ENDLIST)"]
         FFMPEG_PKG -->|Outputs HLS| HLS_VOL[("Shared Volume: /hls/live/{streamKey}/\n(index.m3u8 + seg_{epoch}.ts)")]
     end
 
@@ -136,8 +136,11 @@ Optional:
 | `TOKEN_RENEW_GRACE_SECONDS` | `15` | How long after expiry `POST /api/token` still renews a token |
 | `ALLOWED_ORIGINS` | empty | Comma-separated origins allowed to call `/api/stream` and `/api/token` cross-origin. `*` is refused when `NODE_ENV=production`. |
 | `ADMIN_ALLOWED_ORIGINS` | empty | Extra origins allowed to call the admin API (`/api/admin`, `/api/channels`, `/api/stats`, `/api/config`) from a browser, e.g. an external control panel. Exact origins or `scheme://host:*` for any port (`http://localhost:*,http://127.0.0.1:*`). `*` is refused. No cookies are involved: the panel sends the admin Bearer token. |
-| `RESTREAM_MAX_RETRIES` | `10` | Consecutive auto-restarts before a restream is marked `failed` (`0` = unlimited) |
-| `RESTREAM_COPY_AUDIO` | `false` | `true` = pure `-c copy` (no transcoding at all). Only safe when every source's audio is already AAC/MP3; otherwise audio is re-encoded to AAC (video is always copied) |
+| `RESTREAM_PROFILE` | `480p` | `480p` = every restream is transcoded to 854x480 H.264 (max 30 fps, keyframe every 2s) + AAC 128k stereo. `copy` = relay the source untouched (video copied) |
+| `RESTREAM_VIDEO_KBPS` | `900` | Video bitrate of the `480p` profile (maxrate +10%, buffer 2x). Range 300-4000 |
+| `RESTREAM_X264_PRESET` | `veryfast` | x264 preset of the `480p` profile (`ultrafast` ... `medium`). Faster = less CPU, lower quality |
+| `RESTREAM_MAX_RETRIES` | `0` | Consecutive auto-restarts before a restream is marked `failed` (`0` = never give up) |
+| `RESTREAM_COPY_AUDIO` | `false` | `copy` profile only: `true` = pure `-c copy`. Only safe when every source's audio is already AAC/MP3; otherwise audio is re-encoded to AAC |
 | `R2_*`, `R2_CUSTOM_DOMAIN` | empty | Cloudflare R2. Empty credentials = DRY-RUN (no uploads). |
 | `MAX_SEGMENT_AGE_SECONDS` | `120` | R2 segment retention. Keep it well above the 12s playlist window. |
 
@@ -198,8 +201,23 @@ Open `https://EDGE_DOMAIN/admin` (plain HTTP redirects to HTTPS).
    Publishing without the right key is rejected by MediaMTX. Reading streams over RTMP/RTSP from outside is rejected too; only the packager inside the MediaMTX container may read.
 4. **Pull Restreaming:** paste an `http(s)`, `rtmp(s)`, `rtsp` or `srt` source URL and click **Start Restream**.
    - Other schemes (`file:`, `concat:`, `pipe:`, `data:` …) and hosts that resolve to loopback, link-local or private ranges, or to the docker service names, are rejected with HTTP 400. FFmpeg also runs with `-protocol_whitelist`.
-   - FFmpeg is supervised: an unexpected exit triggers a restart after 2s, 4s, 8s … (max 60s, `RESTREAM_MAX_RETRIES`). **Stop** is final. Running jobs resume automatically after a backend restart.
-   - A source that sends no data for 15s (`-rw_timeout`) makes FFmpeg exit, so the supervisor reconnects it. HTTP(S) sources also get `-reconnect*`.
+   - FFmpeg is supervised: an unexpected exit is restarted after **3s** (after 20 consecutive failures every 30s; a run of 60s resets the counter). It never gives up unless `RESTREAM_MAX_RETRIES` is set. **Stop** is final. Running jobs resume automatically after a backend restart.
+   - Stall watchdog: FFmpeg can stay alive while the source delivers nothing (its frame counter stops). No new frame for 30s = the process is killed and restarted. The dashboard shows `ONLINE` only while the frame counter advances.
+   - A source that sends no data for 15s (`-rw_timeout`) makes FFmpeg exit, so the supervisor reconnects it.
+   - Every (re)start probes the source first and picks the input mode (query-string tokens such as `?sig=` are kept):
+
+     | Detected source | How it is read |
+     | :--- | :--- |
+     | Live HLS | Only one variant is pulled (smallest >= 480p in the `480p` profile). No `-reconnect_at_eof` (it makes FFmpeg re-read the same playlist forever). A playlist that stops advancing ends the run (restart + re-probe) |
+     | HLS VOD (`#EXT-X-ENDLIST`) | Looped forever (`-stream_loop -1`) at real-time speed |
+     | Frozen live HLS (no ENDLIST, not updated for > 1 min) | Its remaining segments are looped; re-checked every 5 min and switched back to live when the source resumes |
+     | Finite HTTP file (`.mp4`, `.ts` with a size) | Looped forever at real-time speed |
+     | Endless HTTP stream (IPTV `.ts`, no size) | Read live, reconnect at EOF. Not looped: looping would break it |
+     | `rtmp(s)://`, `rtsp://`, `srt://` | Read live |
+
+     Real-time pacing uses `-readrate 1 -readrate_initial_burst 8 -readrate_catchup 1.5`, not `-re`: with `-re` the time spent downloading each segment is never made up (measured 0.8x = constant stalls).
+   - CPU: the `480p` profile decodes and re-encodes every restream (roughly 0.5-1 CPU core per channel for a 720p50 source). Use `RESTREAM_PROFILE=copy` for zero-CPU relaying.
+   - OBS: set **Keyframe Interval = 2 s**; HLS segments are cut on keyframes.
    - **Name-based API** (for external panels; admin Bearer token, same origin):
      - `POST /api/channels/start {"channelName","sourceUrl"}`: creates the channel on first use (201), otherwise restarts it with the new source (200)
      - `POST /api/channels/stop {"channelName"}`
@@ -377,7 +395,7 @@ curl -s -X POST https://edge-domain.com/api/channels/<id>/restream/start \
   -d '{"sourceUrl":"file:///etc/passwd"}' -w ' %{http_code}\n'          # 400
 
 # Restream supervision
-docker compose exec backend pkill -9 ffmpeg     # dashboard shows "restarting", new PID after 2s, 4s, ...
+docker compose exec backend pkill -9 ffmpeg     # dashboard shows "restarting", new PID after ~3s (+ source probe)
 docker compose restart backend                  # running jobs resume ("Resumed restream" in logs)
 
 # Admin login rate limit: the 6th wrong attempt within 15 minutes -> 429
