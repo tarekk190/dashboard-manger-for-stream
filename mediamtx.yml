@@ -52,7 +52,9 @@ paths:
     # Automatically trigger FFmpeg on publish to package clean HLS
     # Parameters:
     # - Low latency 2-second segments (-hls_time 2)
-    # - Sliding playlist window of 6 segments (-hls_list_size 6)
+    # - Sliding playlist window of 10 segments = 20s (-hls_list_size 10). The player holds a
+    #   stable 5s delay behind the live edge; the longer window keeps segments available for
+    #   players that fall further behind during a network spike (and for CDN/R2 lag).
     # - Automatic removal of old segments from disk (-hls_flags delete_segments)
     # - omit_endlist: when the publisher drops (restream restart) the packager exits; without
     #   this flag it writes #EXT-X-ENDLIST and players treat the live stream as finished.
@@ -79,7 +81,7 @@ paths:
       -bsf:v dump_extra=freq=keyframe
       -f hls
       -hls_time 2
-      -hls_list_size 6
+      -hls_list_size 10
       -hls_flags delete_segments+omit_endlist
       -hls_start_number_source epoch
       -hls_segment_filename "/hls/$MTX_PATH/seg_%05d.ts"
@@ -99,7 +101,7 @@ paths:
       -bsf:v dump_extra=freq=keyframe
       -f hls
       -hls_time 2
-      -hls_list_size 6
+      -hls_list_size 10
       -hls_flags delete_segments+omit_endlist
       -hls_start_number_source epoch
       -hls_segment_filename "/hls/$MTX_PATH/seg_%05d.ts"

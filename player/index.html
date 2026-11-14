@@ -642,12 +642,17 @@
 
                 hlsInstance = new Hls({
                     enableWorker: true,
+                    // Stable 5s delay: play 5s behind the live edge with a deeper forward buffer, so
+                    // source jitter / network spikes are absorbed instead of stalling playback.
+                    // lowLatencyMode only enables hls.js' playback-rate drift toward the target
+                    // (our playlists have no LL-HLS parts, so nothing else changes).
                     lowLatencyMode: true,
+                    liveSyncDuration: 5,          // target distance from the live edge (seconds)
+                    liveMaxLatencyDuration: 15,   // only jump forward when more than 15s behind
+                    maxLiveSyncPlaybackRate: 1.05, // drift back toward the 5s target at most 5% faster (inaudible)
+                    maxBufferLength: 20,
+                    maxMaxBufferLength: 30,
                     backBufferLength: 30,
-                    maxBufferLength: 8,
-                    maxMaxBufferLength: 15,
-                    liveSyncDurationCount: 3,
-                    liveMaxLatencyDurationCount: 6,
                     liveDurationInfinity: true,
                     xhrSetup: function(xhr, requestUrl) {
                         // Token goes ONLY on same-origin .css playlist requests. .js segments stay
