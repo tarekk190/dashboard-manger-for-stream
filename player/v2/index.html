@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Live Edge Stream Player v2</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- Hls.js Primary High-Performance MSE Engine -->
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.8/dist/hls.min.js"></script>
+    <!-- Shaka Player Fallback Library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/shaka-player/4.7.11/shaka-player.compiled.js"></script>
+</head>
+<body>
+    <div class="player-container">
+        <!-- Video Canvas -->
+        <video id="video-player" playsinline autoplay muted controls></video>
+
+        <!-- Dynamic Header Badges -->
+        <div class="overlay-header">
+            <div class="left-badges">
+                <div id="badge-live" class="badge badge-live">
+                    <span class="pulse-dot"></span> LIVE
+                </div>
+                <div id="badge-channel" class="badge badge-channel">
+                    STREAM
+                </div>
+            </div>
+            <div class="right-badges">
+                <div id="badge-cache" class="badge badge-cache">
+                    CDN PROBING
+                </div>
+            </div>
+        </div>
+
+        <!-- Floating Telemetry & Anti-Leech HUD -->
+        <div class="diagnostics-hud" id="diagnostics-hud">
+            <div class="diagnostics-title">
+                <span>STREAM TELEMETRY</span>
+                <span style="font-size: 10px; color: var(--accent-color);">10K+ VIEWERS ARCH</span>
+            </div>
+            <div class="diag-row">
+                <span>Resolution:</span>
+                <span class="diag-value" id="diag-resolution">Detecting...</span>
+            </div>
+            <div class="diag-row">
+                <span>Latency to Edge:</span>
+                <span class="diag-value" id="diag-latency">~1.8s</span>
+            </div>
+            <div class="diag-row">
+                <span>Buffer Ahead:</span>
+                <span class="diag-value" id="diag-buffer">0.0s</span>
+            </div>
+            <div class="diag-row">
+                <span>Segment Cache Hit:</span>
+                <span class="diag-value" id="diag-cache-hit">100%</span>
+            </div>
+            <div class="diag-row">
+                <span>Dynamic Token TTL:</span>
+                <span class="diag-value" id="diag-token-ttl">60s</span>
+            </div>
+            <!-- Progress bar reflecting token expiration countdown -->
+            <div class="token-bar-container">
+                <div class="token-bar" id="token-bar"></div>
+            </div>
+        </div>
+
+        <!-- User Click-to-Play Center Overlay (for strict autoplay policies) -->
+        <div class="player-center-overlay" id="center-prompt">
+            <button class="action-btn" id="play-btn">Play Live Stream</button>
+        </div>
+    </div>
+
+    <!-- Dynamic Stream Routing & Token Lifecycle -->
+    <script src="config.js"></script>
+    <!-- Core Player Integration -->
+    <script src="player.js"></script>
+</body>
+</html>

@@ -1,0 +1,2 @@
+# SSL/TLS certificates directory
+# In production, replace with certificates from Certbot or Cloudflare Origin CA.

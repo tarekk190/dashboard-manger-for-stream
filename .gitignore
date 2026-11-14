@@ -1,0 +1,18 @@
+# Environment files
+.env
+auth/.env
+*.env.local
+
+# SSL / TLS certificates
+certs/*.pem
+!certs/.gitkeep
+
+# Node dependencies & logs
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS artifacts
+.DS_Store
+Thumbs.db

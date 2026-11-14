@@ -1,0 +1,69 @@
+################################################################################
+# MediaMTX Production Ingestion & Packaging Configuration
+# High-Scale Live Streaming Ingestion for OBS & FFmpeg Pull Relays
+################################################################################
+
+# Log level: error, warn, info, debug
+logLevel: info
+logDestinations: [stdout]
+
+################################################################################
+# Ingestion Protocols
+################################################################################
+
+# RTMP Ingestion (Primary ingest port for OBS Studio, hardware encoders, and backend restreamer)
+rtmp: yes
+rtmpAddress: :1935
+
+# RTSP Server (Used internally by FFmpeg hooks for zero-overhead demuxing and HLS packaging)
+rtsp: yes
+rtspAddress: :8554
+protocols: [tcp]
+
+# Native HLS engine disabled: we use dedicated container FFmpeg runOnReady for exact
+# camouflaged packaging (2s segments, list size 6, delete_segments) into /hls
+hls: no
+webrtc: no
+srt: no
+
+################################################################################
+# Stream Paths & Packaging Triggers
+################################################################################
+
+paths:
+  # Path pattern for standard live streams: rtmp://SERVER_IP:1935/live/{stream_key}
+  live/*:
+    source: publisher
+
+    # Automatically trigger FFmpeg on publish to package clean HLS
+    # Parameters:
+    # - Low latency 2-second segments (-hls_time 2)
+    # - Sliding playlist window of 6 segments (-hls_list_size 6)
+    # - Automatic removal of old segments from disk (-hls_flags delete_segments+split_by_time)
+    # - Zero CPU re-encoding (-c copy)
+    runOnReady: >
+      sh -c 'mkdir -p /hls/$MTX_PATH &&
+      exec ffmpeg -nostdin -loglevel warning -rtsp_transport tcp -i rtsp://127.0.0.1:8554/$MTX_PATH
+      -c copy
+      -f hls
+      -hls_time 2
+      -hls_list_size 6
+      -hls_flags delete_segments+split_by_time
+      -hls_segment_filename "/hls/$MTX_PATH/seg_%05d.ts"
+      /hls/$MTX_PATH/index.m3u8'
+    runOnReadyRestart: yes
+
+  # Catch-all rule for all other published paths
+  all_others:
+    source: publisher
+    runOnReady: >
+      sh -c 'mkdir -p /hls/$MTX_PATH &&
+      exec ffmpeg -nostdin -loglevel warning -rtsp_transport tcp -i rtsp://127.0.0.1:8554/$MTX_PATH
+      -c copy
+      -f hls
+      -hls_time 2
+      -hls_list_size 6
+      -hls_flags delete_segments+split_by_time
+      -hls_segment_filename "/hls/$MTX_PATH/seg_%05d.ts"
+      /hls/$MTX_PATH/index.m3u8'
+    runOnReadyRestart: yes

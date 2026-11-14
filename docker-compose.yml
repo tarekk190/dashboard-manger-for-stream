@@ -1,0 +1,126 @@
+# ==============================================================================
+# Live Streaming Infrastructure & Admin Dashboard Stack
+# Architecture:
+# 1. MediaMTX (bluenviron/mediamtx:latest-ffmpeg) - RTMP Ingest & HLS Packaging
+# 2. Backend (Node.js + FFmpeg) - Admin Panel, Restreamer Manager & R2 Uploader
+# 3. Nginx Edge (nginx:alpine) - Camouflaged Caching (.css/.js), SSL & Player Hosting
+# ==============================================================================
+
+services:
+  # ============================================================================
+  # 1. MediaMTX Live Ingestion & HLS Transmuxer
+  # Ingests OBS RTMP pushes and FFmpeg pull restreams on port 1935
+  # ============================================================================
+  mediamtx:
+    image: bluenviron/mediamtx:latest-ffmpeg
+    container_name: stream_mediamtx
+    restart: unless-stopped
+    ports:
+      - "1935:1935"   # Public RTMP ingestion port
+    expose:
+      - "8554"        # Internal RTSP relay for FFmpeg packaging hook
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+      - hls_data:/hls
+    networks:
+      - streaming_net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+  # ============================================================================
+  # 2. Live Streaming Backend, Admin Panel & Cloudflare R2 Pipeline
+  # Admin Dashboard, Channel Management, FFmpeg Restreamer & R2 Real-Time Watcher
+  # ============================================================================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: stream_backend
+    restart: unless-stopped
+    expose:
+      - "3000"
+    environment:
+      - PORT=3000
+      - NODE_ENV=${NODE_ENV:-production}
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123456}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
+      - SERVER_IP=${SERVER_IP:-127.0.0.1}
+      - EDGE_DOMAIN=${EDGE_DOMAIN:-localhost}
+      - R2_CUSTOM_DOMAIN=${R2_CUSTOM_DOMAIN:-r2-custom-domain.shop}
+      - MEDIAMTX_RTMP_HOST=mediamtx
+      - MEDIAMTX_RTMP_PORT=1935
+      - R2_ACCOUNT_ID=${R2_ACCOUNT_ID:-}
+      - R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID:-}
+      - R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY:-}
+      - R2_BUCKET_NAME=${R2_BUCKET_NAME:-live-streams}
+      - R2_ENDPOINT=${R2_ENDPOINT:-}
+      - HLS_DIR=/hls
+      - DATA_FILE=/app/data/channels.json
+      - MAX_SEGMENT_AGE_SECONDS=${MAX_SEGMENT_AGE_SECONDS:-120}
+      - ENABLE_AUTH_ON_PLAYLISTS=${ENABLE_AUTH_ON_PLAYLISTS:-false}
+      - TOKEN_EXPIRATION_SECONDS=${TOKEN_EXPIRATION_SECONDS:-60}
+    volumes:
+      - hls_data:/hls
+      - backend_data:/app/data
+    networks:
+      - streaming_net
+    depends_on:
+      - mediamtx
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:3000/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+  # ============================================================================
+  # 3. Nginx Edge Reverse Proxy, Caching & Obfuscation Engine
+  # Masks .m3u8 as .css, masks .ts as .js, caches segments via proxy_cache
+  # ============================================================================
+  nginx:
+    image: nginx:alpine
+    container_name: stream_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"       # HTTP edge traffic & Let's Encrypt ACME challenge
+      - "443:443"     # Production HTTPS edge traffic
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/snippets:/etc/nginx/snippets:ro
+      - ./certs:/etc/nginx/certs:ro
+      - ./player:/var/www/player:ro
+      - hls_data:/hls:ro
+      - nginx_cache:/var/cache/nginx
+    depends_on:
+      backend:
+        condition: service_healthy
+      mediamtx:
+        condition: service_started
+    networks:
+      - streaming_net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+
+volumes:
+  hls_data:
+    driver: local
+  nginx_cache:
+    driver: local
+  backend_data:
+    driver: local
+
+networks:
+  streaming_net:
+    driver: bridge
