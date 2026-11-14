@@ -376,6 +376,12 @@ const RESTREAM_STOP_TIMEOUT_MS = 5000;
 const RESTREAM_STABLE_RUN_MS = 60000;
 // Consecutive failed restarts before giving up (0 = retry forever)
 const RESTREAM_MAX_RETRIES = parseInt(process.env.RESTREAM_MAX_RETRIES || '10', 10);
+// A source that sends nothing for this long makes FFmpeg exit, so the supervisor reconnects it
+const RESTREAM_RW_TIMEOUT_US = 15 * 1000 * 1000;
+// true = pure `-c copy` (zero transcoding; source audio must already be AAC/MP3)
+const RESTREAM_COPY_AUDIO = String(process.env.RESTREAM_COPY_AUDIO || 'false').toLowerCase() === 'true';
+// ONLINE only while FFmpeg reports progress; no progress line for this long = not delivering frames
+const RESTREAM_PROGRESS_STALE_MS = 10 * 1000;
 
 class FFmpegRestreamManager {
     constructor() {
@@ -435,7 +441,7 @@ class FFmpegRestreamManager {
                 speed: '0x',
                 frame: 0,
                 time: '00:00:00.00',
-                lastUpdate: Date.now()
+                lastUpdate: 0 // set by FFmpeg progress lines only
             },
             logs: previous ? previous.logs : [],
             process: null,
@@ -461,27 +467,35 @@ class FFmpegRestreamManager {
 
         // FFmpeg command arguments:
         // - Only network protocols allowed (-protocol_whitelist), no file:/pipe:/concat:
-        // - High resilience network flags (-reconnect, etc.)
+        // - -rw_timeout (microseconds, any protocol): a stalled source exits after 15s and the
+        //   supervisor's backoff restarts it. NOT -timeout: for RTMP inputs it means "listen for
+        //   incoming connections" (implies -rtmp_listen 1), for HTTP it is a socket timeout.
+        // - -reconnect* are HTTP(S)-only options (.m3u8 / .ts sources), so only added there
         // - No -re: sources are live network streams (files are not allowed), -re only adds latency
-        // - Copy video codec (-c:v copy) to save CPU
-        // - Normalize audio to AAC (-c:a aac) for FLV RTMP container compatibility
-        return [
+        // - Video is always copied (-c:v copy). Audio is copied too when RESTREAM_COPY_AUDIO=true,
+        //   otherwise normalized to AAC: FLV/RTMP only carries AAC/MP3, and many HLS/TS sources
+        //   use AC-3/Opus/E-AC-3, which would make `-c copy` fail. AAC audio costs ~1% of one core.
+        const isHttp = /^https?:/i.test(sourceUrl);
+        const input = [
             '-nostdin',
             '-hide_banner',
             '-loglevel', 'info',
             '-protocol_whitelist', FFMPEG_PROTOCOL_WHITELIST,
-            '-reconnect', '1',
-            '-reconnect_at_eof', '1',
-            '-reconnect_streamed', '1',
-            '-reconnect_delay_max', '2',
-            '-i', sourceUrl,
-            '-c:v', 'copy',
-            '-c:a', 'aac',
-            '-b:a', '128k',
-            '-ar', '44100',
-            '-f', 'flv',
-            rtmpTarget
+            '-rw_timeout', String(RESTREAM_RW_TIMEOUT_US),
+            ...(isHttp ? [
+                '-reconnect', '1',
+                '-reconnect_at_eof', '1',
+                '-reconnect_streamed', '1',
+                '-reconnect_on_network_error', '1',
+                '-reconnect_delay_max', '5'
+            ] : []),
+            '-fflags', '+genpts',
+            '-i', sourceUrl
         ];
+        const codecs = RESTREAM_COPY_AUDIO
+            ? ['-c', 'copy']
+            : ['-c:v', 'copy', '-c:a', 'aac', '-b:a', '128k', '-ar', '44100'];
+        return [...input, '-map', '0:v:0?', '-map', '0:a:0?', ...codecs, '-f', 'flv', rtmpTarget];
     }
 
     spawnProcess(job) {
@@ -501,6 +515,7 @@ class FFmpegRestreamManager {
         job.exited = false;
         job.status = 'running';
         job.startedAt = new Date().toISOString();
+        job.metrics.lastUpdate = 0; // ONLINE again only once this process reports progress
 
         let resolveExit;
         job.exitPromise = new Promise(resolve => { resolveExit = resolve; });
@@ -627,7 +642,8 @@ class FFmpegRestreamManager {
                 pid: null,
                 metrics: { fps: 0, bitrate: '0kbits/s', speed: '0x', time: '00:00:00' },
                 sourceUrl: channel?.sourceUrl || '',
-                desiredState: channel?.desiredState || 'stopped'
+                desiredState: channel?.desiredState || 'stopped',
+                state: 'OFFLINE'
             };
         }
 
@@ -639,8 +655,22 @@ class FFmpegRestreamManager {
             metrics: job.metrics,
             sourceUrl: job.sourceUrl,
             retries: job.retries,
-            desiredState: channel?.desiredState || 'stopped'
+            desiredState: channel?.desiredState || 'stopped',
+            state: FFmpegRestreamManager.panelState(job)
         };
+    }
+
+    /**
+     * Panel state: ONLINE = FFmpeg is alive and reported progress (frames pushed) in the last
+     * RESTREAM_PROGRESS_STALE_MS; CONNECTING = started/restarting but no frames yet;
+     * FAILED = gave up after RESTREAM_MAX_RETRIES; OFFLINE = stopped/idle.
+     */
+    static panelState(job) {
+        if (job.status === 'failed') return 'FAILED';
+        if (job.status === 'stopped' || job.stopRequested) return 'OFFLINE';
+        const fresh = job.metrics.lastUpdate > 0 && Date.now() - job.metrics.lastUpdate < RESTREAM_PROGRESS_STALE_MS;
+        if (job.status === 'running' && !job.exited && fresh) return 'ONLINE';
+        return 'CONNECTING';
     }
 
     getLogs(channelId, limit = 100) {
@@ -1286,6 +1316,83 @@ app.post('/api/channels', verifyAdminAuth, async (req, res) => {
     } catch (err) {
         res.status(400).json({ success: false, error: err.message });
     }
+});
+
+// ------------------------------------------------------------------------------
+// Name-based Restream API (GO Match panel): { channelName, sourceUrl }
+// Thin wrappers over the id-based routes below: same validation, supervisor, locking,
+// persistence (desiredState in channels.json) and resume-after-restart.
+// ------------------------------------------------------------------------------
+function channelKeyFromName(channelName) {
+    const key = String(channelName || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+    return CHANNEL_RE.test(key) ? key : null;
+}
+
+function panelChannelView(channel) {
+    const status = restreamManager.getStatus(channel.id);
+    return {
+        id: channel.id,
+        channelName: channel.name,
+        streamKey: channel.streamKey,
+        state: status.state,          // ONLINE | CONNECTING | OFFLINE | FAILED
+        status: status.status,        // supervisor detail: idle | running | restarting | stopped | failed
+        pid: status.pid,
+        retries: status.retries || 0,
+        startedAt: status.startedAt || null,
+        sourceUrl: status.sourceUrl,
+        metrics: status.metrics,
+        links: buildChannelLinks(channel)
+    };
+}
+
+// Start (creates the channel on first use; restarts with the new source if already running)
+app.post('/api/channels/start', verifyAdminAuth, async (req, res) => {
+    const { channelName, sourceUrl } = req.body || {};
+    const key = channelKeyFromName(channelName);
+    if (!key) {
+        return res.status(400).json({ success: false, error: 'channelName is required (letters, digits, _ or -, max 64)' });
+    }
+    try {
+        let channel = channelManager.getByStreamKey(key);
+        const effectiveUrl = String(sourceUrl || channel?.sourceUrl || '').trim();
+        if (!effectiveUrl) {
+            return res.status(400).json({ success: false, error: 'sourceUrl is required' });
+        }
+        const validUrl = await validateSourceUrl(effectiveUrl);
+
+        const created = !channel;
+        if (created) {
+            channel = channelManager.create({ name: String(channelName).trim(), streamKey: key, sourceUrl: validUrl });
+        }
+        await restreamManager.start(channel.id, validUrl);
+        res.status(created ? 201 : 200).json({ success: true, created, channel: panelChannelView(channel) });
+    } catch (err) {
+        res.status(err.status || 500).json({ success: false, error: err.message });
+    }
+});
+
+// Stop (waits for FFmpeg to exit; SIGKILL after 5s)
+app.post('/api/channels/stop', verifyAdminAuth, async (req, res) => {
+    const key = channelKeyFromName((req.body || {}).channelName);
+    const channel = key && channelManager.getByStreamKey(key);
+    if (!channel) {
+        return res.status(404).json({ success: false, error: 'Channel not found' });
+    }
+    await restreamManager.stop(channel.id);
+    res.json({ success: true, channel: panelChannelView(channel) });
+});
+
+// Status: one channel (?channelName=match1) or all channels
+app.get('/api/channels/status', verifyAdminAuth, (req, res) => {
+    if (req.query.channelName !== undefined) {
+        const key = channelKeyFromName(req.query.channelName);
+        const channel = key && channelManager.getByStreamKey(key);
+        if (!channel) {
+            return res.status(404).json({ success: false, error: 'Channel not found' });
+        }
+        return res.json({ success: true, channel: panelChannelView(channel) });
+    }
+    res.json({ success: true, channels: channelManager.getAll().map(panelChannelView) });
 });
 
 // Update Channel

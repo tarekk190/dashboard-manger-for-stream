@@ -136,6 +136,7 @@ Optional:
 | `TOKEN_RENEW_GRACE_SECONDS` | `15` | How long after expiry `POST /api/token` still renews a token |
 | `ALLOWED_ORIGINS` | empty | Comma-separated origins allowed to call `/api/stream` and `/api/token` cross-origin. `*` is refused when `NODE_ENV=production`. |
 | `RESTREAM_MAX_RETRIES` | `10` | Consecutive auto-restarts before a restream is marked `failed` (`0` = unlimited) |
+| `RESTREAM_COPY_AUDIO` | `false` | `true` = pure `-c copy` (no transcoding at all). Only safe when every source's audio is already AAC/MP3; otherwise audio is re-encoded to AAC (video is always copied) |
 | `R2_*`, `R2_CUSTOM_DOMAIN` | empty | Cloudflare R2. Empty credentials = DRY-RUN (no uploads). |
 | `MAX_SEGMENT_AGE_SECONDS` | `120` | R2 segment retention. Keep it well above the 12s playlist window. |
 
@@ -197,6 +198,13 @@ Open `https://EDGE_DOMAIN/admin` (plain HTTP redirects to HTTPS).
 4. **Pull Restreaming:** paste an `http(s)`, `rtmp(s)`, `rtsp` or `srt` source URL and click **Start Restream**.
    - Other schemes (`file:`, `concat:`, `pipe:`, `data:` …) and hosts that resolve to loopback, link-local or private ranges, or to the docker service names, are rejected with HTTP 400. FFmpeg also runs with `-protocol_whitelist`.
    - FFmpeg is supervised: an unexpected exit triggers a restart after 2s, 4s, 8s … (max 60s, `RESTREAM_MAX_RETRIES`). **Stop** is final. Running jobs resume automatically after a backend restart.
+   - A source that sends no data for 15s (`-rw_timeout`) makes FFmpeg exit, so the supervisor reconnects it. HTTP(S) sources also get `-reconnect*`.
+   - **Name-based API** (for external panels; admin Bearer token, same origin):
+     - `POST /api/channels/start {"channelName","sourceUrl"}`: creates the channel on first use (201), otherwise restarts it with the new source (200)
+     - `POST /api/channels/stop {"channelName"}`
+     - `GET /api/channels/status[?channelName=]`
+     
+     Each channel in the response has a `state` of `ONLINE` (FFmpeg pushed frames in the last 10s), `CONNECTING`, `OFFLINE` or `FAILED`, plus `pid`, `metrics` and `links`.
 5. **Output links:**
    - **Nginx edge:** `https://EDGE_DOMAIN/live/{streamKey}/index.css` (needs a viewer token, see section 7)
    - **Cloudflare R2:** `https://R2_CUSTOM_DOMAIN/hd/{r2_slug}/index.html` (or `.css`)
