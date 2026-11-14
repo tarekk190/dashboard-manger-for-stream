@@ -15,7 +15,7 @@ flowchart TD
         OBS["OBS Studio Broadcaster\n(rtmp://SERVER_IP:1935/live,\nkey: {streamKey}?user=publish&pass={publishKey})"] -->|RTMP Port 1935| MTX["MediaMTX Server"]
         RESTREAM["Admin Restreamer\n(FFmpeg Background Pull, supervised)"] -->|RTMP Relay + publishKey| MTX
         MTX -.->|authMethod: http\nPOST /internal/mediamtx-auth| AUTHHOOK["Backend publish/read check"]
-        MTX -->|runOnReady Hook\n(RTSP 127.0.0.1:8554)| FFMPEG_PKG["FFmpeg Packager\n(-c copy, SPS/PPS on keyframes,\n2s keyframe-aligned segments, list 6,\nepoch numbers, no ENDLIST)"]
+        MTX -->|runOnReady Hook\n(RTSP 127.0.0.1:8554)| FFMPEG_PKG["FFmpeg Packager\n(-c copy, SPS/PPS on keyframes,\n2s keyframe-aligned segments, list 10 = 20s,\nepoch numbers, no ENDLIST)"]
         FFMPEG_PKG -->|Outputs HLS| HLS_VOL[("Shared Volume: /hls/live/{streamKey}/\n(index.m3u8 + seg_{epoch}.ts)")]
     end
 
@@ -218,6 +218,7 @@ Open `https://EDGE_DOMAIN/admin` (plain HTTP redirects to HTTPS).
      Real-time pacing uses `-readrate 1 -readrate_initial_burst 8 -readrate_catchup 1.5`, not `-re`: with `-re` the time spent downloading each segment is never made up (measured 0.8x = constant stalls).
    - CPU: the `480p` profile decodes and re-encodes every restream (roughly 0.5-1 CPU core per channel for a 720p50 source). Use `RESTREAM_PROFILE=copy` for zero-CPU relaying.
    - OBS: set **Keyframe Interval = 2 s**; HLS segments are cut on keyframes.
+   - **Playback delay:** the player (hls.js) holds a stable **5 s** distance behind the live edge (`liveSyncDuration: 5`). Those 5 s are the buffer that absorbs source jitter and network spikes. If it falls behind it drifts back at most 5 % faster (inaudible); it only jumps forward when more than 15 s behind. The packager keeps a 20 s playlist window (10 x 2 s) so a player that lags during a spike still finds its segments. Native Safari HLS chooses its own delay (about 3 segments = 6 s).
    - **Name-based API** (for external panels; admin Bearer token, same origin):
      - `POST /api/channels/start {"channelName","sourceUrl"}`: creates the channel on first use (201), otherwise restarts it with the new source (200)
      - `POST /api/channels/stop {"channelName"}`
