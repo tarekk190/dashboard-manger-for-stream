@@ -1,7 +1,7 @@
 # ==============================================================================
 # Live Streaming Infrastructure & Admin Dashboard Stack
 # Architecture:
-# 1. MediaMTX (bluenviron/mediamtx:latest-ffmpeg) - RTMP Ingest & HLS Packaging
+# 1. MediaMTX (bluenviron/mediamtx:1.21.3-ffmpeg) - RTMP Ingest & HLS Packaging
 # 2. Backend (Node.js + FFmpeg) - Admin Panel, Restreamer Manager & R2 Uploader
 # 3. Nginx Edge (nginx:alpine) - Camouflaged Caching (.css/.js), SSL & Player Hosting
 # ==============================================================================
@@ -12,7 +12,8 @@ services:
   # Ingests OBS RTMP pushes and FFmpeg pull restreams on port 1935
   # ============================================================================
   mediamtx:
-    image: bluenviron/mediamtx:latest-ffmpeg
+    # Pinned: mediamtx.yml (auth keys, regex path names) is validated against 1.21.3
+    image: bluenviron/mediamtx:1.21.3-ffmpeg
     container_name: stream_mediamtx
     restart: unless-stopped
     ports:
@@ -71,7 +72,8 @@ services:
       - TOKEN_RENEW_GRACE_SECONDS=${TOKEN_RENEW_GRACE_SECONDS:-15}
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-}
     volumes:
-      - hls_data:/hls:ro
+      # read-write: the backend prunes stale local HLS files (> 5 min old)
+      - hls_data:/hls
       - backend_data:/app/data
     networks:
       - streaming_net

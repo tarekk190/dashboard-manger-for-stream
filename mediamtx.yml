@@ -55,6 +55,9 @@ paths:
     # - Sliding playlist window of 6 segments (-hls_list_size 6)
     # - Automatic removal of old segments from disk (-hls_flags delete_segments+split_by_time)
     # - Zero CPU re-encoding (-c copy)
+    # - Before each (re)start the channel directory is emptied (rm -f) so no stale
+    #   playlist/segments from a previous run are served or uploaded, and it is chowned to
+    #   uid 1000 (the backend's 'node' user) so the backend can prune stale files.
     # - Segment numbering starts at the current Unix time (-hls_start_number_source epoch)
     #   instead of 0 on every (re)start. Names are never reused across restarts: with
     #   2s segments the counter grows slower than the clock, so a restarted packager always
@@ -62,6 +65,8 @@ paths:
     #   segment cache (60s, key = $uri) and the R2/Cloudflare immutable cache serve stale video.
     runOnReady: >
       sh -c 'mkdir -p /hls/$MTX_PATH &&
+      rm -f /hls/$MTX_PATH/* &&
+      chown 1000:1000 /hls/$MTX_PATH &&
       exec ffmpeg -nostdin -loglevel warning -rtsp_transport tcp -i rtsp://127.0.0.1:8554/$MTX_PATH
       -c copy
       -f hls
@@ -79,6 +84,8 @@ paths:
     # Same packaging (and same epoch numbering rationale) as above
     runOnReady: >
       sh -c 'mkdir -p /hls/$MTX_PATH &&
+      rm -f /hls/$MTX_PATH/* &&
+      chown 1000:1000 /hls/$MTX_PATH &&
       exec ffmpeg -nostdin -loglevel warning -rtsp_transport tcp -i rtsp://127.0.0.1:8554/$MTX_PATH
       -c copy
       -f hls

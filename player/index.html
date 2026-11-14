@@ -455,8 +455,10 @@
                 }
             }
 
-            // hls.js sends the token as an Authorization header (see xhrSetup). Native Safari HLS
-            // cannot set headers, so the playlist URL carries ?token= there.
+            // hls.js sends the token as an Authorization header on .css playlists only (see xhrSetup).
+            // Native Safari HLS cannot set headers, so the playlist URL carries ?token= there.
+            // Our playlists are single-level media playlists (no child .css), and their segment
+            // URIs are relative, so Safari requests segments without any token.
             let streamUrl = `/live/${encodeURIComponent(channel)}/index.css`;
             if (!Hls.isSupported()) {
                 streamUrl += `?token=${encodeURIComponent(viewerToken)}`;
@@ -486,8 +488,12 @@
                     liveMaxLatencyDurationCount: 6,
                     liveDurationInfinity: true,
                     xhrSetup: function(xhr, requestUrl) {
-                        // Attach the current (auto-renewed) viewer token to edge playlist & segment requests only
-                        if (viewerToken && requestUrl.startsWith(window.location.origin + '/')) {
+                        // Token goes ONLY on same-origin .css playlist requests. .js segments stay
+                        // header-free and token-free so every viewer requests the identical,
+                        // CDN-cacheable URL (segments are not auth-checked at the edge).
+                        if (!viewerToken || !requestUrl.startsWith(window.location.origin + '/')) return;
+                        const pathname = new URL(requestUrl).pathname;
+                        if (pathname.endsWith('.css')) {
                             xhr.setRequestHeader('Authorization', `Bearer ${viewerToken}`);
                         }
                     }

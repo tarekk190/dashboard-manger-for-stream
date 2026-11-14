@@ -2,7 +2,7 @@
 
 A Dockerized live video streaming stack with an admin control panel. It supports **two delivery modes**:
 
-1. **Nginx Edge Mode (token-protected):** RTMP ingest -> MediaMTX -> FFmpeg HLS packaging (`2s` segments, sliding window 6) -> Nginx serves `.m3u8` as `.css` and `.ts` as `.js`, with `proxy_cache_lock` segment micro-caching. Every playlist and segment request is checked against a short-lived viewer token.
+1. **Nginx Edge Mode (playlist token-protected):** RTMP ingest -> MediaMTX -> FFmpeg HLS packaging (`2s` segments, sliding window 6) -> Nginx serves `.m3u8` as `.css` and `.ts` as `.js`, with `proxy_cache_lock` segment micro-caching. Every playlist (`.css`) request is checked against a short-lived viewer token; segments (`.js`) are public and fully cacheable (see section 7).
 2. **Cloudflare R2 Zero-Egress Mode (public):** the backend's R2 watcher watches `/hls`, rewrites segment links to `.js`, uploads segments first and then manifests (`index.html` / `index.css`) to R2 under randomized folder slugs (`/hd/{random_slug}/`), and purges segments older than `MAX_SEGMENT_AGE_SECONDS`. R2 delivery is not token-protected.
 
 ---
@@ -131,7 +131,7 @@ Optional:
 
 | Variable | Default | Meaning |
 | :--- | :--- | :--- |
-| `ENABLE_AUTH_ON_PLAYLISTS` | `true` | Require a viewer token on every edge playlist **and** segment. `false` makes `/auth` allow everything (debug only). |
+| `ENABLE_AUTH_ON_PLAYLISTS` | `true` | Require a viewer token on every edge playlist (`.css`). Segments are never token-checked. `false` makes `/auth` allow everything (debug only). |
 | `TOKEN_EXPIRATION_SECONDS` | `60` | Viewer token lifetime |
 | `TOKEN_RENEW_GRACE_SECONDS` | `15` | How long after expiry `POST /api/token` still renews a token |
 | `ALLOWED_ORIGINS` | empty | Comma-separated origins allowed to call `/api/stream` and `/api/token` cross-origin. `*` is refused when `NODE_ENV=production`. |
@@ -312,11 +312,12 @@ Because live streaming playlists change every 2 seconds while media segments are
 ## 7. Viewer Tokens (Nginx edge mode)
 
 1. `GET /api/stream?channel=match1` → `{ channel, token, expiresIn, streamUrl }`. `channel` must match `[a-z0-9_-]` and exist (404 otherwise). `streamUrl` already carries `?token=`.
-2. Send the token on every playlist **and** segment request, either as `Authorization: Bearer <token>` (hls.js `xhrSetup`) or as `?token=`.
+2. Send the token on **playlist (`.css`) requests only**, either as `Authorization: Bearer <token>` (hls.js `xhrSetup`) or as `?token=`. Segment (`.js`) requests carry no token or header: every viewer requests the identical URL, so nginx and Cloudflare serve them from cache.
+   - **Trade-off:** segment names are predictable (Unix-epoch numbers), so anyone who knows a channel's `streamKey` can fetch its segments without a token. The token only gates the playlist.
 3. Renew before expiry with `POST /api/token {"token": "<current>"}`. Tokens expired by more than `TOKEN_RENEW_GRACE_SECONDS` return 401 and the client must call `/api/stream` again.
 4. Nginx `auth_request /auth` answers **401** for a missing, invalid or expired token and **403** when the token's channel differs from the channel in the URL. Results are micro-cached (200: 5s, 401/403: 1s) under a key of *channel + query token + Authorization header* from the original request.
 
-The bundled player (`/player/?channel=...`) does all of this automatically. Native Safari HLS (no hls.js) can only pass the token in the playlist URL, so its segment requests fail with 401; use hls.js there.
+The bundled player (`/player/?channel=...`) does all of this automatically. With native Safari HLS (no hls.js) the token travels as `?token=` on the playlist URL and segments need nothing. **Limitation:** Safari keeps reloading that same playlist URL and cannot pick up a renewed token, so playback stops about `TOKEN_EXPIRATION_SECONDS` (+ up to 5s auth cache) after start unless the token lifetime is raised.
 
 ---
 
@@ -341,9 +342,9 @@ curl -s -o /dev/null -w '%{http_code}\n' https://edge-domain.com/live/match1/ind
 TOKEN=$(curl -s 'https://edge-domain.com/api/stream?channel=match1' | jq -r .token)
 curl -s -D - -o /tmp/pl.css -H "Authorization: Bearer $TOKEN" https://edge-domain.com/live/match1/index.css | grep -ci '^content-type'   # 1
 
-# Same segment twice: the second response is a cache HIT
+# Same segment twice WITHOUT any token: 200, MISS then HIT
 SEG=$(grep -m1 '\.js$' /tmp/pl.css)
-for i in 1 2; do curl -s -D - -o /dev/null -H "Authorization: Bearer $TOKEN" "https://edge-domain.com/live/match1/$SEG" | grep -i x-cache-status; done
+for i in 1 2; do curl -s -D - -o /dev/null "https://edge-domain.com/live/match1/$SEG" | grep -iE '^HTTP|x-cache-status'; done
 
 # Token for match1 used on another channel -> 403
 curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOKEN" https://edge-domain.com/live/match2/index.css
@@ -397,3 +398,4 @@ grep -rnE "admin12345[6]|fallback_[d]efault|super_[s]ecret" --exclude-dir=.git .
 - **Nginx:** `docker compose logs -f nginx`
 - **Clear the edge cache:** `docker compose exec nginx sh -c 'rm -rf /var/cache/nginx/hls/*'`
 - **R2 pruning** runs every 20 seconds and paginates the full `hd/` listing.
+- **Local /hls cleanup:** each packager start empties its channel directory, and the backend removes local files older than 5 minutes every minute (`[HLS-JANITOR]` in the logs).

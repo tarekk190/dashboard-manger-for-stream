@@ -996,6 +996,51 @@ const r2Pipeline = new R2PipelineManager();
 r2Pipeline.start();
 
 // ------------------------------------------------------------------------------
+// Local /hls janitor: removes files older than 5 minutes (e.g. leftovers of an ended stream).
+// Live files are rewritten/rotated every few seconds and are never that old. Channel
+// directories are chowned to uid 1000 by the packaging hook (mediamtx.yml) so this can delete.
+// ------------------------------------------------------------------------------
+const LOCAL_HLS_MAX_AGE_MS = 5 * 60 * 1000;
+const LOCAL_HLS_SWEEP_INTERVAL_MS = 60 * 1000;
+
+async function pruneLocalHls(dir = HLS_DIR) {
+    let removed = 0;
+    let failed = 0;
+    let entries;
+    try {
+        entries = await fsp.readdir(dir, { withFileTypes: true });
+    } catch {
+        return { removed, failed };
+    }
+    const cutoff = Date.now() - LOCAL_HLS_MAX_AGE_MS;
+    for (const entry of entries) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+            const sub = await pruneLocalHls(full);
+            removed += sub.removed;
+            failed += sub.failed;
+        } else if (entry.isFile()) {
+            try {
+                const stat = await fsp.stat(full);
+                if (stat.mtimeMs < cutoff) {
+                    await fsp.unlink(full);
+                    removed++;
+                }
+            } catch (err) {
+                if (err.code !== 'ENOENT') failed++;
+            }
+        }
+    }
+    return { removed, failed };
+}
+
+setInterval(async () => {
+    const { removed, failed } = await pruneLocalHls();
+    if (removed > 0) console.log(`[HLS-JANITOR] Removed ${removed} stale local file(s) older than 5 minutes.`);
+    if (failed > 0) console.warn(`[HLS-JANITOR] Could not remove ${failed} stale file(s) (permissions?).`);
+}, LOCAL_HLS_SWEEP_INTERVAL_MS).unref();
+
+// ------------------------------------------------------------------------------
 // Express App & Routing Setup
 // ------------------------------------------------------------------------------
 const app = express();
@@ -1006,7 +1051,10 @@ app.set('trust proxy', 1);
 // Security Middlewares
 app.use(helmet({
     contentSecurityPolicy: false,
-    crossOriginEmbedderPolicy: false
+    crossOriginEmbedderPolicy: false,
+    // HSTS is set once by nginx (plain max-age); helmet's default would add a second,
+    // conflicting header with includeSubDomains
+    strictTransportSecurity: false
 }));
 
 // CORS for the public viewer API only. Admin routes get no CORS headers (same-origin only).
