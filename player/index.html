@@ -1,9 +1,13 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ar" dir="rtl">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>StreamOps Live Player</title>
+    <title>مشغّل البث المباشر | StreamOps</title>
+    <!-- Cairo (Arabic UI font) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap">
     <!-- Hls.js Engine CDN -->
     <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.8/dist/hls.min.js"></script>
     <style>
@@ -29,7 +33,7 @@
             height: 100%;
             background-color: var(--bg-color);
             color: var(--text-color);
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            font-family: "Cairo", Tahoma, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
             overflow: hidden;
         }
 
@@ -79,8 +83,6 @@
             border-radius: 8px;
             font-size: 11px;
             font-weight: 700;
-            letter-spacing: 0.05em;
-            text-transform: uppercase;
             background: var(--card-bg);
             border: 1px solid var(--border-color);
             backdrop-filter: blur(8px);
@@ -110,6 +112,9 @@
             color: var(--accent-color);
             border-color: rgba(14, 165, 233, 0.3);
             font-family: monospace;
+            letter-spacing: 0.05em;
+            direction: ltr;
+            unicode-bidi: isolate;
         }
 
         .badge-mode {
@@ -125,6 +130,7 @@
             padding: 5px 9px;
             font-size: 11px;
             font-weight: 600;
+            font-family: inherit;
             cursor: pointer;
             backdrop-filter: blur(8px);
             transition: all 0.2s;
@@ -139,15 +145,14 @@
         .telemetry-panel {
             position: absolute;
             top: 55px;
-            right: 14px;
-            width: 260px;
+            inset-inline-end: 14px;
+            width: 270px;
             background: rgba(15, 23, 42, 0.92);
             border: 1px solid var(--border-color);
             border-radius: 12px;
             padding: 12px;
-            font-family: monospace;
             font-size: 11px;
-            line-height: 1.6;
+            line-height: 1.7;
             backdrop-filter: blur(12px);
             z-index: 25;
             box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
@@ -162,8 +167,6 @@
             font-size: 10px;
             font-weight: 700;
             color: var(--accent-color);
-            text-transform: uppercase;
-            letter-spacing: 0.08em;
             border-bottom: 1px solid var(--border-color);
             padding-bottom: 6px;
             margin-bottom: 8px;
@@ -180,6 +183,9 @@
         .telemetry-val {
             color: #f1f5f9;
             font-weight: 600;
+            /* direction follows the value: "1280x720" / "0.0s" read LTR, Arabic text reads RTL */
+            unicode-bidi: plaintext;
+            font-variant-numeric: tabular-nums;
         }
 
         /* Center Play Overlay */
@@ -210,6 +216,7 @@
             border-radius: 50px;
             font-size: 14px;
             font-weight: 700;
+            font-family: inherit;
             cursor: pointer;
             box-shadow: 0 4px 20px rgba(14, 165, 233, 0.4);
             display: flex;
@@ -224,8 +231,10 @@
         }
 
         .status-msg {
-            font-size: 12px;
+            font-size: 13px;
             color: #94a3b8;
+            text-align: center;
+            padding: 0 16px;
         }
 
         /* Loading Spinner */
@@ -247,22 +256,22 @@
 
     <div class="player-wrapper">
         <!-- Native Video Element -->
-        <video id="video" playsinline webkit-playsinline controls></video>
+        <video id="video" dir="ltr" playsinline webkit-playsinline controls></video>
 
         <!-- Dynamic Header Badges -->
         <div class="top-hud">
             <div class="badge-group">
-                <div class="badge badge-live" id="badge-live-btn" title="Click to sync to live edge">
+                <div class="badge badge-live" id="badge-live-btn" title="اضغط للانتقال إلى اللحظة المباشرة">
                     <span class="live-dot"></span>
-                    <span>LIVE</span>
+                    <span>مباشر</span>
                 </div>
-                <div class="badge badge-channel" id="badge-channel-name">FEED</div>
-                <div class="badge badge-mode" id="badge-stream-mode">DIRECT CDN</div>
+                <div class="badge badge-channel" id="badge-channel-name">القناة</div>
+                <div class="badge badge-mode" id="badge-stream-mode">شبكة توزيع مباشرة</div>
             </div>
 
             <div class="badge-group">
-                <button class="hud-toggle-btn" id="btn-toggle-hud" title="Toggle Stream Telemetry (Shortcut: D)">
-                    STATS (D)
+                <button class="hud-toggle-btn" id="btn-toggle-hud" title="إظهار/إخفاء إحصائيات البث (الاختصار: D)">
+                    الإحصائيات (D)
                 </button>
             </div>
         </div>
@@ -270,44 +279,44 @@
         <!-- Floating Telemetry HUD -->
         <div class="telemetry-panel" id="telemetry-panel">
             <div class="telemetry-title">
-                <span>Stream Telemetry</span>
-                <span id="telemetry-latency-status">SYNCED</span>
+                <span>إحصائيات البث</span>
+                <span id="telemetry-latency-status">متزامن</span>
             </div>
             <div class="telemetry-row">
-                <span>Mode:</span>
+                <span>الوضع:</span>
                 <span class="telemetry-val" id="tel-mode">-</span>
             </div>
             <div class="telemetry-row">
-                <span>Resolution:</span>
-                <span class="telemetry-val" id="tel-res">Detecting...</span>
+                <span>الدقة:</span>
+                <span class="telemetry-val" id="tel-res">جارٍ الاكتشاف...</span>
             </div>
             <div class="telemetry-row">
-                <span>Edge Latency:</span>
+                <span>زمن التأخير:</span>
                 <span class="telemetry-val" id="tel-latency">~1.8s</span>
             </div>
             <div class="telemetry-row">
-                <span>Buffer Ahead:</span>
+                <span>المخزَّن مسبقًا:</span>
                 <span class="telemetry-val" id="tel-buffer">0.0s</span>
             </div>
             <div class="telemetry-row">
-                <span>Dropped Frames:</span>
+                <span>الإطارات المفقودة:</span>
                 <span class="telemetry-val" id="tel-dropped">0</span>
             </div>
             <div class="telemetry-row">
-                <span>Playlist Format:</span>
-                <span class="telemetry-val" id="tel-format">Camouflaged HLS</span>
+                <span>صيغة قائمة التشغيل:</span>
+                <span class="telemetry-val" id="tel-format">مموّه (HLS)</span>
             </div>
         </div>
 
         <!-- Center Click to Play Prompt -->
         <div class="center-overlay" id="center-overlay">
             <div class="spinner" id="loading-spinner"></div>
-            <p class="status-msg" id="status-msg">Connecting to live edge...</p>
+            <p class="status-msg" id="status-msg">جارٍ الاتصال بالبث المباشر...</p>
             <button class="btn-play-trigger" id="btn-play-action" style="display: none;">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
                     <path d="M8 5v14l11-7z"/>
                 </svg>
-                <span>Play Live Stream</span>
+                <span>تشغيل البث المباشر</span>
             </button>
         </div>
     </div>
@@ -342,7 +351,7 @@
 
         let hlsInstance = null;
         let streamManifestUrl = '';
-        let playbackMode = 'Edge CDN';
+        let playbackMode = 'حافة CDN';
 
         // Viewer token for the Nginx edge (/auth). Fetched from /api/stream and renewed before expiry.
         let viewerToken = tokenParam || null;
@@ -360,7 +369,7 @@
                 headers: { 'Accept': 'application/json' },
                 credentials: 'include'
             });
-            if (!res.ok) throw new Error(res.status === 404 ? 'Channel not found' : `Token request failed (HTTP ${res.status})`);
+            if (!res.ok) throw new Error(res.status === 404 ? 'القناة غير موجودة' : `تعذّر الحصول على رمز المشاهدة (HTTP ${res.status})`);
             const data = await res.json();
             viewerToken = data.token;
             scheduleTokenRenewal(data.expiresIn || 60);
@@ -413,19 +422,19 @@
         async function resolveStream() {
             // Case 1: Direct src provided
             if (srcParam) {
-                playbackMode = 'Direct Source';
-                badgeChannel.innerText = 'CUSTOM';
-                badgeMode.innerText = 'DIRECT';
+                playbackMode = 'مصدر مباشر';
+                badgeChannel.innerText = 'مخصّص';
+                badgeMode.innerText = 'مصدر مباشر';
                 streamManifestUrl = srcParam;
                 return initHls(streamManifestUrl);
             }
 
             // Case 2: Cloudflare R2 Direct Mode (?r2={random_slug})
             if (r2SlugParam) {
-                playbackMode = 'Cloudflare R2 Direct';
+                playbackMode = 'مباشر عبر Cloudflare R2';
                 badgeChannel.innerText = r2SlugParam.substring(0, 8).toUpperCase();
-                badgeMode.innerText = 'R2 ZERO-EGRESS';
-                telFormat.innerText = 'R2 index.html (Camouflaged)';
+                badgeMode.innerText = 'R2 بدون رسوم نقل';
+                telFormat.innerText = 'مموّه عبر R2 ‏(index.html)';
 
                 // Fetch R2 Custom Domain from backend config if accessible
                 let r2Domain = 'r2-custom-domain.shop';
@@ -445,17 +454,17 @@
 
             // Case 3: Nginx Edge Camouflaged Mode (?channel={channel})
             const channel = channelParam || 'match1';
-            playbackMode = 'Nginx Edge Camouflage';
+            playbackMode = 'حافة Nginx المموّهة';
             badgeChannel.innerText = channel.toUpperCase();
-            badgeMode.innerText = 'EDGE CDN (.CSS)';
-            telFormat.innerText = 'index.css -> HLS Camouflage';
+            badgeMode.innerText = 'حافة CDN (‎.css‎)';
+            telFormat.innerText = 'مموّه عبر index.css';
 
             if (!viewerToken) {
                 try {
                     await fetchViewerToken(channel);
                 } catch (err) {
                     loadingSpinner.style.display = 'none';
-                    statusMsg.innerText = `Unable to start stream: ${err.message}`;
+                    statusMsg.innerText = `تعذّر بدء البث: ${err.message}`;
                     return;
                 }
             } else {
@@ -476,7 +485,7 @@
         // Initialize Hls.js with Camouflage Handlers & Low-Latency Tuning
         function initHls(url) {
             telMode.innerText = playbackMode;
-            statusMsg.innerText = `Buffering: ${playbackMode}...`;
+            statusMsg.innerText = `جارٍ التحميل: ${playbackMode}...`;
 
             if (Hls.isSupported()) {
                 if (hlsInstance) {
@@ -513,7 +522,7 @@
                 hlsInstance.attachMedia(video);
 
                 hlsInstance.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
-                    statusMsg.innerText = 'Stream manifest loaded. Playing...';
+                    statusMsg.innerText = 'تم تحميل قائمة التشغيل. جارٍ التشغيل...';
                     attemptAutoplay();
                 });
 
@@ -531,15 +540,15 @@
                     if (data.fatal) {
                         switch (data.type) {
                             case Hls.ErrorTypes.NETWORK_ERROR:
-                                statusMsg.innerText = 'Network error. Reconnecting to live stream...';
+                                statusMsg.innerText = 'خطأ في الشبكة. جارٍ إعادة الاتصال بالبث...';
                                 setTimeout(() => hlsInstance.startLoad(), 2000);
                                 break;
                             case Hls.ErrorTypes.MEDIA_ERROR:
-                                statusMsg.innerText = 'Media decoding error. Recovering...';
+                                statusMsg.innerText = 'خطأ في فك ترميز الفيديو. جارٍ الاستعادة...';
                                 hlsInstance.recoverMediaError();
                                 break;
                             default:
-                                statusMsg.innerText = 'Stream offline or waiting for ingest. Retrying...';
+                                statusMsg.innerText = 'البث غير متاح حاليًا أو بانتظار وصول الإشارة. جارٍ إعادة المحاولة...';
                                 setTimeout(() => hlsInstance.loadSource(url), 3000);
                                 break;
                         }
@@ -551,7 +560,7 @@
                 video.src = url;
                 attemptAutoplay();
             } else {
-                statusMsg.innerText = 'HLS streaming is not supported on this browser.';
+                statusMsg.innerText = 'هذا المتصفح لا يدعم تشغيل بث HLS.';
             }
         }
 
@@ -566,7 +575,7 @@
                 }).catch(() => {
                     // Autoplay blocked by browser policy -> show click-to-play button
                     loadingSpinner.style.display = 'none';
-                    statusMsg.innerText = 'Click to start live stream audio & video:';
+                    statusMsg.innerText = 'اضغط لتشغيل البث المباشر بالصوت والصورة:';
                     btnPlayAction.style.display = 'flex';
                 });
             }

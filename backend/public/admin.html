@@ -1,10 +1,14 @@
 <!DOCTYPE html>
-<html lang="en" class="dark">
+<html lang="ar" dir="rtl" class="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>StreamOps // Live Restreaming & R2 CDN Control Panel</title>
-    <!-- Tailwind CSS CDN -->
+    <title>StreamOps | لوحة التحكم بالبث المباشر وإعادة البث وشبكة R2</title>
+    <!-- Cairo (Arabic UI font) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap">
+    <!-- Tailwind CSS CDN (v3.4: logical ps/pe/ms/me/start/end utilities used for RTL) -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
         tailwind.config = {
@@ -27,6 +31,7 @@
                         }
                     },
                     fontFamily: {
+                        sans: ['Cairo', 'Tahoma', 'Segoe UI', 'sans-serif'],
                         mono: ['JetBrains Mono', 'Menlo', 'Monaco', 'Courier New', 'monospace']
                     }
                 }
@@ -36,6 +41,9 @@
     <!-- FontAwesome 6 CDN -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <style>
+        body { font-family: 'Cairo', Tahoma, 'Segoe UI', sans-serif; }
+        /* Technical values (URLs, keys, logs, code) always read left-to-right */
+        .ltr { direction: ltr; unicode-bidi: isolate; text-align: left; }
         /* Custom scrollbar for dark terminal */
         ::-webkit-scrollbar { width: 6px; height: 6px; }
         ::-webkit-scrollbar-track { background: #0f172a; }
@@ -51,43 +59,43 @@
 <body class="bg-dark-950 text-slate-200 min-h-screen flex flex-col font-sans antialiased selection:bg-brand-500 selection:text-white">
 
     <!-- Toast Notification Container -->
-    <div id="toast-container" class="fixed top-5 right-5 z-50 flex flex-col space-y-2 pointer-events-none"></div>
+    <div id="toast-container" class="fixed top-20 end-5 z-50 flex flex-col gap-2 pointer-events-none"></div>
 
     <!-- Login Modal / Screen -->
     <div id="login-modal" class="fixed inset-0 z-50 bg-dark-950/90 backdrop-blur-md flex items-center justify-center p-4 hidden">
         <div class="bg-dark-900 border border-slate-800 rounded-2xl w-full max-w-md p-8 shadow-2xl shadow-cyan-950/20">
-            <div class="flex items-center space-x-3 mb-6">
+            <div class="flex items-center gap-3 mb-6">
                 <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-brand-600 to-cyan-400 flex items-center justify-center text-white text-lg shadow-lg shadow-brand-500/20">
                     <i class="fa-solid fa-satellite-dish"></i>
                 </div>
                 <div>
-                    <h2 class="text-xl font-bold text-white tracking-tight">StreamOps Admin</h2>
-                    <p class="text-xs text-slate-400">Restreamer & R2 CDN Gateway</p>
+                    <h2 class="text-xl font-bold text-white">لوحة تحكم StreamOps</h2>
+                    <p class="text-xs text-slate-400">بوابة إعادة البث وشبكة توزيع R2</p>
                 </div>
             </div>
 
             <form id="login-form" class="space-y-4">
                 <div>
-                    <label class="block text-xs font-medium text-slate-400 mb-1.5 uppercase tracking-wider">Username</label>
+                    <label for="login-username" class="block text-xs font-semibold text-slate-400 mb-1.5">اسم المستخدم</label>
                     <div class="relative">
-                        <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-500"><i class="fa-solid fa-user text-sm"></i></span>
-                        <input id="login-username" type="text" value="admin" required class="w-full bg-dark-850 border border-slate-700/80 rounded-xl pl-9 pr-4 py-2.5 text-sm text-white focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 transition-all">
+                        <span class="absolute inset-y-0 start-0 ps-3 flex items-center text-slate-500"><i class="fa-solid fa-user text-sm"></i></span>
+                        <input id="login-username" type="text" value="admin" required autocomplete="username" class="w-full bg-dark-850 border border-slate-700/80 rounded-xl ps-9 pe-4 py-2.5 text-sm text-white focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 transition-all">
                     </div>
                 </div>
                 <div>
-                    <label class="block text-xs font-medium text-slate-400 mb-1.5 uppercase tracking-wider">Password</label>
+                    <label for="login-password" class="block text-xs font-semibold text-slate-400 mb-1.5">كلمة المرور</label>
                     <div class="relative">
-                        <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-500"><i class="fa-solid fa-lock text-sm"></i></span>
-                        <input id="login-password" type="password" required placeholder="••••••••" class="w-full bg-dark-850 border border-slate-700/80 rounded-xl pl-9 pr-4 py-2.5 text-sm text-white focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 transition-all">
+                        <span class="absolute inset-y-0 start-0 ps-3 flex items-center text-slate-500"><i class="fa-solid fa-lock text-sm"></i></span>
+                        <input id="login-password" type="password" required autocomplete="current-password" placeholder="••••••••" class="w-full bg-dark-850 border border-slate-700/80 rounded-xl ps-9 pe-4 py-2.5 text-sm text-white focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 transition-all">
                     </div>
                 </div>
-                <div id="login-error" class="text-xs text-rose-400 hidden flex items-center space-x-1.5">
+                <div id="login-error" class="text-xs text-rose-400 hidden flex items-center gap-1.5">
                     <i class="fa-solid fa-triangle-exclamation"></i>
-                    <span id="login-error-text">Invalid credentials</span>
+                    <span id="login-error-text">بيانات الدخول غير صحيحة</span>
                 </div>
-                <button type="submit" class="w-full py-2.5 bg-gradient-to-r from-brand-500 to-cyan-500 hover:from-brand-600 hover:to-cyan-600 text-white font-medium text-sm rounded-xl transition-all shadow-lg shadow-brand-500/20 active:scale-[0.98] flex items-center justify-center space-x-2">
-                    <span>Sign In to Dashboard</span>
-                    <i class="fa-solid fa-arrow-right text-xs"></i>
+                <button type="submit" class="w-full py-2.5 bg-gradient-to-l from-brand-500 to-cyan-500 hover:from-brand-600 hover:to-cyan-600 text-white font-semibold text-sm rounded-xl transition-all shadow-lg shadow-brand-500/20 active:scale-[0.98] flex items-center justify-center gap-2">
+                    <span>تسجيل الدخول إلى لوحة التحكم</span>
+                    <i class="fa-solid fa-arrow-left text-xs"></i>
                 </button>
             </form>
         </div>
@@ -95,41 +103,41 @@
 
     <!-- Main Navigation Bar -->
     <header class="bg-dark-900 border-b border-slate-800 sticky top-0 z-40">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-            <div class="flex items-center space-x-4">
-                <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-brand-600 to-cyan-400 flex items-center justify-center text-white text-base shadow-lg shadow-brand-500/20">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+            <div class="flex items-center gap-4 min-w-0">
+                <div class="w-9 h-9 shrink-0 rounded-xl bg-gradient-to-tr from-brand-600 to-cyan-400 flex items-center justify-center text-white text-base shadow-lg shadow-brand-500/20">
                     <i class="fa-solid fa-satellite-dish"></i>
                 </div>
-                <div>
-                    <div class="flex items-center space-x-2">
-                        <h1 class="text-base font-bold text-white tracking-wide">STREAM<span class="text-brand-400">OPS</span></h1>
-                        <span class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-brand-500/10 text-brand-400 border border-brand-500/20">PRO v2.0</span>
+                <div class="min-w-0">
+                    <div class="flex items-center gap-2">
+                        <h1 class="text-base font-bold text-white ltr">STREAM<span class="text-brand-400">OPS</span></h1>
+                        <span class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-brand-500/10 text-brand-400 border border-brand-500/20 ltr whitespace-nowrap">PRO v2.0</span>
                     </div>
-                    <p class="text-xs text-slate-400 hidden sm:block">MediaMTX + Nginx Camouflage + Cloudflare R2 CDN</p>
+                    <p class="text-xs text-slate-400 hidden sm:block truncate">لوحة التحكم بالبث المباشر: MediaMTX + تمويه Nginx + شبكة Cloudflare R2</p>
                 </div>
             </div>
 
             <!-- Health Badges & Actions -->
-            <div class="flex items-center space-x-3">
-                <div id="badge-rtmp" class="hidden md:flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-dark-800 border border-slate-700/60 text-xs">
+            <div class="flex items-center gap-3 shrink-0">
+                <div id="badge-rtmp" class="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-dark-800 border border-slate-700/60 text-xs">
                     <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                    <span class="text-slate-400">RTMP:</span>
-                    <span class="font-mono text-emerald-400 font-semibold" id="cfg-rtmp-port">:1935</span>
+                    <span class="text-slate-400">منفذ RTMP:</span>
+                    <span class="font-mono text-emerald-400 font-semibold ltr" id="cfg-rtmp-port">1935</span>
                 </div>
 
-                <div id="badge-r2" class="hidden md:flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-dark-800 border border-slate-700/60 text-xs">
+                <div id="badge-r2" class="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-dark-800 border border-slate-700/60 text-xs">
                     <i class="fa-solid fa-cloud text-amber-400 text-xs"></i>
-                    <span class="text-slate-400">R2 Storage:</span>
-                    <span class="font-semibold text-slate-200" id="cfg-r2-status">Checking...</span>
+                    <span class="text-slate-400">تخزين R2:</span>
+                    <span class="font-semibold text-slate-200" id="cfg-r2-status">جارٍ التحقق...</span>
                 </div>
 
-                <button id="btn-create-channel-nav" class="px-3.5 py-1.5 bg-brand-500 hover:bg-brand-600 text-white text-xs font-semibold rounded-lg shadow-md shadow-brand-500/20 flex items-center space-x-1.5 transition-all active:scale-95">
+                <button id="btn-create-channel-nav" class="px-3.5 py-1.5 bg-brand-500 hover:bg-brand-600 text-white text-xs font-semibold rounded-lg shadow-md shadow-brand-500/20 flex items-center gap-1.5 transition-all active:scale-95">
                     <i class="fa-solid fa-plus"></i>
-                    <span>New Channel</span>
+                    <span>قناة جديدة</span>
                 </button>
 
-                <button id="btn-logout" title="Sign Out" class="p-2 text-slate-400 hover:text-rose-400 hover:bg-dark-800 rounded-lg transition-colors">
-                    <i class="fa-solid fa-arrow-right-from-bracket"></i>
+                <button id="btn-logout" title="تسجيل الخروج" aria-label="تسجيل الخروج" class="p-2 text-slate-400 hover:text-rose-400 hover:bg-dark-800 rounded-lg transition-colors">
+                    <i class="fa-solid fa-arrow-right-from-bracket fa-flip-horizontal"></i>
                 </button>
             </div>
         </div>
@@ -140,46 +148,42 @@
 
         <!-- Top Telemetry & Status Cards -->
         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <!-- Active Channels -->
-            <div class="bg-dark-900 border border-slate-800 rounded-xl p-4 flex items-center justify-between">
+            <div class="bg-dark-900 border border-slate-800 rounded-xl p-4 flex items-center justify-between gap-3">
                 <div>
-                    <p class="text-xs font-medium text-slate-400 uppercase tracking-wider">Total Channels</p>
+                    <p class="text-xs font-semibold text-slate-400">إجمالي القنوات</p>
                     <p id="stat-total-channels" class="text-2xl font-bold text-white mt-1">0</p>
                 </div>
-                <div class="w-10 h-10 rounded-lg bg-brand-500/10 border border-brand-500/20 flex items-center justify-center text-brand-400">
+                <div class="w-10 h-10 shrink-0 rounded-lg bg-brand-500/10 border border-brand-500/20 flex items-center justify-center text-brand-400">
                     <i class="fa-solid fa-tower-broadcast text-lg"></i>
                 </div>
             </div>
 
-            <!-- Active Restreams -->
-            <div class="bg-dark-900 border border-slate-800 rounded-xl p-4 flex items-center justify-between">
+            <div class="bg-dark-900 border border-slate-800 rounded-xl p-4 flex items-center justify-between gap-3">
                 <div>
-                    <p class="text-xs font-medium text-slate-400 uppercase tracking-wider">Active Restreams</p>
+                    <p class="text-xs font-semibold text-slate-400">عمليات إعادة البث النشطة</p>
                     <p id="stat-active-restreams" class="text-2xl font-bold text-emerald-400 mt-1">0</p>
                 </div>
-                <div class="w-10 h-10 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
+                <div class="w-10 h-10 shrink-0 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
                     <i class="fa-solid fa-bolt text-lg"></i>
                 </div>
             </div>
 
-            <!-- R2 Zero-Egress Status -->
-            <div class="bg-dark-900 border border-slate-800 rounded-xl p-4 flex items-center justify-between">
+            <div class="bg-dark-900 border border-slate-800 rounded-xl p-4 flex items-center justify-between gap-3">
                 <div>
-                    <p class="text-xs font-medium text-slate-400 uppercase tracking-wider">R2 Segments Cleaned</p>
+                    <p class="text-xs font-semibold text-slate-400">مقاطع R2 المحذوفة تلقائيًا</p>
                     <p id="stat-pruned-segments" class="text-2xl font-bold text-cyan-400 mt-1">0</p>
                 </div>
-                <div class="w-10 h-10 rounded-lg bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400">
+                <div class="w-10 h-10 shrink-0 rounded-lg bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400">
                     <i class="fa-solid fa-broom text-lg"></i>
                 </div>
             </div>
 
-            <!-- Global Ingest IP -->
-            <div class="bg-dark-900 border border-slate-800 rounded-xl p-4 flex items-center justify-between">
-                <div>
-                    <p class="text-xs font-medium text-slate-400 uppercase tracking-wider">Server IP / Edge Domain</p>
-                    <p id="stat-edge-domain" class="text-sm font-mono font-semibold text-slate-200 mt-1 truncate max-w-[170px]">127.0.0.1</p>
+            <div class="bg-dark-900 border border-slate-800 rounded-xl p-4 flex items-center justify-between gap-3">
+                <div class="min-w-0">
+                    <p class="text-xs font-semibold text-slate-400">عنوان الخادم / نطاق الحافة</p>
+                    <p id="stat-edge-domain" class="text-sm font-mono font-semibold text-slate-200 mt-1 truncate max-w-[170px] ltr">127.0.0.1</p>
                 </div>
-                <div class="w-10 h-10 rounded-lg bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400">
+                <div class="w-10 h-10 shrink-0 rounded-lg bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400">
                     <i class="fa-solid fa-globe text-lg"></i>
                 </div>
             </div>
@@ -188,17 +192,17 @@
         <!-- Channel Management Header & Filter -->
         <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pt-2">
             <div>
-                <h2 class="text-lg font-bold text-white tracking-tight flex items-center space-x-2">
-                    <span>Streaming Channels & Pull Restreamer</span>
-                    <span class="text-xs font-normal text-slate-400">(Auto-generating RTMP, Camouflaged .css and R2 CDN endpoints)</span>
+                <h2 class="text-lg font-bold text-white flex flex-wrap items-baseline gap-x-2">
+                    <span>قنوات البث وإعادة البث</span>
+                    <span class="text-xs font-normal text-slate-400">(تُنشأ روابط RTMP وروابط ‎.css‎ المموّهة وروابط شبكة R2 تلقائيًا)</span>
                 </h2>
             </div>
-            <div class="flex items-center space-x-2 w-full sm:w-auto">
+            <div class="flex items-center gap-2 w-full sm:w-auto">
                 <div class="relative flex-1 sm:w-64">
-                    <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-500 text-xs"><i class="fa-solid fa-magnifying-glass"></i></span>
-                    <input id="channel-search" type="text" placeholder="Search channels..." class="w-full bg-dark-900 border border-slate-800 rounded-lg pl-8 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-brand-500 transition-all">
+                    <span class="absolute inset-y-0 start-0 ps-3 flex items-center text-slate-500 text-xs"><i class="fa-solid fa-magnifying-glass"></i></span>
+                    <input id="channel-search" type="text" placeholder="ابحث في القنوات..." class="w-full bg-dark-900 border border-slate-800 rounded-lg ps-8 pe-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-brand-500 transition-all">
                 </div>
-                <button id="btn-refresh" title="Refresh Channels" class="p-2 bg-dark-900 border border-slate-800 hover:bg-dark-800 text-slate-300 rounded-lg transition-colors">
+                <button id="btn-refresh" title="تحديث القنوات" aria-label="تحديث القنوات" class="p-2 bg-dark-900 border border-slate-800 hover:bg-dark-800 text-slate-300 rounded-lg transition-colors">
                     <i class="fa-solid fa-arrows-rotate text-xs"></i>
                 </button>
             </div>
@@ -206,10 +210,9 @@
 
         <!-- Channels Grid / Cards Container -->
         <div id="channels-container" class="space-y-4">
-            <!-- Dynamic channel cards will be injected here via JavaScript -->
             <div class="p-12 text-center text-slate-500 bg-dark-900/50 rounded-2xl border border-slate-800/80">
                 <i class="fa-solid fa-circle-notch fa-spin text-2xl mb-3 text-brand-400"></i>
-                <p class="text-sm">Loading channels and restream processes...</p>
+                <p class="text-sm">جارٍ تحميل القنوات وعمليات إعادة البث...</p>
             </div>
         </div>
 
@@ -219,51 +222,51 @@
     <div id="modal-create-channel" class="fixed inset-0 z-50 bg-dark-950/80 backdrop-blur-sm flex items-center justify-center p-4 hidden">
         <div class="bg-dark-900 border border-slate-800 rounded-2xl w-full max-w-lg p-6 shadow-2xl space-y-5">
             <div class="flex items-center justify-between border-b border-slate-800 pb-3">
-                <h3 class="text-base font-bold text-white flex items-center space-x-2">
+                <h3 class="text-base font-bold text-white flex items-center gap-2">
                     <i class="fa-solid fa-plus-circle text-brand-400"></i>
-                    <span>Create Live Streaming Channel</span>
+                    <span>إنشاء قناة بث مباشر</span>
                 </h3>
-                <button id="btn-close-create-modal" class="text-slate-500 hover:text-slate-300 transition-colors">
+                <button id="btn-close-create-modal" aria-label="إغلاق" class="text-slate-500 hover:text-slate-300 transition-colors">
                     <i class="fa-solid fa-xmark text-lg"></i>
                 </button>
             </div>
 
             <form id="form-create-channel" class="space-y-4">
                 <div>
-                    <label class="block text-xs font-semibold text-slate-300 mb-1">Channel Display Name</label>
-                    <input id="input-channel-name" type="text" placeholder="e.g. Champions League Match 1" required class="w-full bg-dark-850 border border-slate-700/80 rounded-xl px-3.5 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-brand-500">
+                    <label for="input-channel-name" class="block text-xs font-semibold text-slate-300 mb-1">اسم القناة المعروض</label>
+                    <input id="input-channel-name" type="text" placeholder="مثال: مباراة دوري الأبطال 1" required class="w-full bg-dark-850 border border-slate-700/80 rounded-xl px-3.5 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-brand-500">
                 </div>
 
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
-                        <label class="block text-xs font-semibold text-slate-300 mb-1">Stream Key / Slug</label>
-                        <input id="input-channel-key" type="text" placeholder="e.g. match1" required class="w-full bg-dark-850 border border-slate-700/80 rounded-xl px-3.5 py-2 text-sm text-white font-mono placeholder-slate-500 focus:outline-none focus:border-brand-500">
-                        <p class="text-[10px] text-slate-500 mt-1">Public path: /live/{stream_key} (a secret publish key is generated for OBS)</p>
+                        <label for="input-channel-key" class="block text-xs font-semibold text-slate-300 mb-1">مفتاح البث / المعرّف</label>
+                        <input id="input-channel-key" type="text" dir="ltr" placeholder="match1" required class="w-full bg-dark-850 border border-slate-700/80 rounded-xl px-3.5 py-2 text-sm text-white font-mono placeholder-slate-500 focus:outline-none focus:border-brand-500 text-left">
+                        <p class="text-[10px] text-slate-500 mt-1">المسار العام: <span class="font-mono ltr">/live/{stream_key}</span> (يُولَّد مفتاح نشر سرّي لـ OBS)</p>
                     </div>
 
                     <div>
                         <div class="flex items-center justify-between mb-1">
-                            <label class="block text-xs font-semibold text-slate-300">R2 Obfuscated Slug</label>
-                            <button type="button" id="btn-reroll-slug" class="text-[10px] text-brand-400 hover:text-brand-300 flex items-center space-x-1">
+                            <label for="input-channel-r2-slug" class="block text-xs font-semibold text-slate-300">معرّف R2 المموّه</label>
+                            <button type="button" id="btn-reroll-slug" class="text-[10px] text-brand-400 hover:text-brand-300 flex items-center gap-1">
                                 <i class="fa-solid fa-shuffle"></i>
-                                <span>Re-roll</span>
+                                <span>توليد جديد</span>
                             </button>
                         </div>
-                        <input id="input-channel-r2-slug" type="text" required class="w-full bg-dark-850 border border-slate-700/80 rounded-xl px-3.5 py-2 text-sm text-amber-300 font-mono focus:outline-none focus:border-brand-500">
-                        <p class="text-[10px] text-slate-500 mt-1">Direct CDN path: /hd/{r2_slug}/</p>
+                        <input id="input-channel-r2-slug" type="text" dir="ltr" required class="w-full bg-dark-850 border border-slate-700/80 rounded-xl px-3.5 py-2 text-sm text-amber-300 font-mono focus:outline-none focus:border-brand-500 text-left">
+                        <p class="text-[10px] text-slate-500 mt-1">مسار شبكة CDN المباشر: <span class="font-mono ltr">/hd/{r2_slug}/</span></p>
                     </div>
                 </div>
 
                 <div>
-                    <label class="block text-xs font-semibold text-slate-300 mb-1">Optional External Pull URL (HLS / TS / MP4)</label>
-                    <input id="input-channel-source" type="url" placeholder="https://external-feed.com/live/stream.m3u8" class="w-full bg-dark-850 border border-slate-700/80 rounded-xl px-3.5 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-brand-500">
-                    <p class="text-[10px] text-slate-500 mt-1">Can be launched immediately or later from the channel card.</p>
+                    <label for="input-channel-source" class="block text-xs font-semibold text-slate-300 mb-1">رابط المصدر الخارجي (اختياري): HLS / TS / RTMP</label>
+                    <input id="input-channel-source" type="url" dir="ltr" placeholder="https://external-feed.com/live/stream.m3u8" class="w-full bg-dark-850 border border-slate-700/80 rounded-xl px-3.5 py-2 text-sm text-white font-mono placeholder-slate-500 focus:outline-none focus:border-brand-500 text-left">
+                    <p class="text-[10px] text-slate-500 mt-1">يمكن تشغيله فورًا أو لاحقًا من بطاقة القناة.</p>
                 </div>
 
-                <div class="flex items-center justify-end space-x-3 pt-3 border-t border-slate-800">
-                    <button type="button" id="btn-cancel-create" class="px-4 py-2 text-xs font-medium text-slate-400 hover:text-white transition-colors">Cancel</button>
+                <div class="flex items-center justify-end gap-3 pt-3 border-t border-slate-800">
+                    <button type="button" id="btn-cancel-create" class="px-4 py-2 text-xs font-semibold text-slate-400 hover:text-white transition-colors">إلغاء</button>
                     <button type="submit" class="px-5 py-2 bg-brand-500 hover:bg-brand-600 text-white font-semibold text-xs rounded-xl shadow-lg shadow-brand-500/20 active:scale-95 transition-all">
-                        Create Channel
+                        إنشاء القناة
                     </button>
                 </div>
             </form>
@@ -273,39 +276,37 @@
     <!-- Modal: Live FFmpeg Terminal Logs -->
     <div id="modal-logs" class="fixed inset-0 z-50 bg-dark-950/85 backdrop-blur-sm flex items-center justify-center p-4 hidden">
         <div class="bg-dark-900 border border-slate-800 rounded-2xl w-full max-w-3xl h-[580px] flex flex-col shadow-2xl">
-            <!-- Terminal Header -->
-            <div class="px-5 py-3 border-b border-slate-800 flex items-center justify-between bg-dark-950/60 rounded-t-2xl">
-                <div class="flex items-center space-x-3">
-                    <div class="flex space-x-1.5">
+            <div class="px-5 py-3 border-b border-slate-800 flex items-center justify-between gap-3 bg-dark-950/60 rounded-t-2xl">
+                <div class="flex items-center gap-3 min-w-0">
+                    <div class="flex gap-1.5 shrink-0">
                         <span class="w-3 h-3 rounded-full bg-rose-500/80 inline-block"></span>
                         <span class="w-3 h-3 rounded-full bg-amber-500/80 inline-block"></span>
                         <span class="w-3 h-3 rounded-full bg-emerald-500/80 inline-block"></span>
                     </div>
-                    <span id="log-terminal-title" class="text-xs font-mono text-slate-300 font-semibold truncate">FFmpeg Process Terminal</span>
+                    <span id="log-terminal-title" class="text-xs text-slate-300 font-semibold truncate">طرفية عملية FFmpeg</span>
                 </div>
-                <div class="flex items-center space-x-3">
-                    <button id="btn-copy-logs" class="text-xs text-slate-400 hover:text-brand-400 transition-colors flex items-center space-x-1">
+                <div class="flex items-center gap-3 shrink-0">
+                    <button id="btn-copy-logs" class="text-xs text-slate-400 hover:text-brand-400 transition-colors flex items-center gap-1">
                         <i class="fa-regular fa-copy"></i>
-                        <span>Copy</span>
+                        <span>نسخ</span>
                     </button>
-                    <button id="btn-close-logs" class="text-slate-500 hover:text-slate-300 transition-colors">
+                    <button id="btn-close-logs" aria-label="إغلاق" class="text-slate-500 hover:text-slate-300 transition-colors">
                         <i class="fa-solid fa-xmark text-lg"></i>
                     </button>
                 </div>
             </div>
 
-            <!-- Terminal Output Body -->
-            <div id="log-terminal-body" class="flex-1 p-4 bg-dark-950 font-mono text-xs text-emerald-400 overflow-y-auto space-y-1 select-text">
-                <div class="text-slate-500">Connecting to FFmpeg process log stream...</div>
+            <!-- Log lines are FFmpeg output: always LTR -->
+            <div id="log-terminal-body" dir="ltr" class="flex-1 p-4 bg-dark-950 font-mono text-xs text-emerald-400 overflow-y-auto space-y-1 select-text text-left">
+                <div class="text-slate-500" dir="rtl">جارٍ الاتصال بسجل عملية FFmpeg...</div>
             </div>
 
-            <!-- Terminal Footer Controls -->
             <div class="px-5 py-2.5 border-t border-slate-800 flex items-center justify-between text-xs text-slate-500 bg-dark-900/60 rounded-b-2xl">
-                <div class="flex items-center space-x-2">
+                <div class="flex items-center gap-2">
                     <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
-                    <span>Live streaming log stream (Auto-refresh: 1.5s)</span>
+                    <span>سجل مباشر للعملية (تحديث تلقائي كل 1.5 ثانية)</span>
                 </div>
-                <button id="btn-clear-terminal" class="hover:text-slate-300 transition-colors">Clear view</button>
+                <button id="btn-clear-terminal" class="hover:text-slate-300 transition-colors">مسح العرض</button>
             </div>
         </div>
     </div>
@@ -330,6 +331,53 @@
         const logTerminalBody = document.getElementById('log-terminal-body');
         const logTerminalTitle = document.getElementById('log-terminal-title');
 
+        // Backend error messages are English (API contract); show them in Arabic in the UI.
+        const ERROR_TRANSLATIONS = [
+            [/^Session expired$/, 'انتهت الجلسة، يرجى تسجيل الدخول مجددًا'],
+            [/^Invalid admin credentials$/, 'اسم المستخدم أو كلمة المرور غير صحيحة'],
+            [/^Too many failed login attempts/, 'محاولات دخول فاشلة كثيرة، حاول مرة أخرى لاحقًا'],
+            [/^Username and password are required$/, 'اسم المستخدم وكلمة المرور مطلوبان'],
+            [/^Unauthorized/, 'غير مصرّح، يرجى تسجيل الدخول مجددًا'],
+            [/^Forbidden: Admin privilege required$/, 'هذه العملية تتطلب صلاحيات المدير'],
+            [/^Forbidden: cross-origin admin request$/, 'تم رفض الطلب: مصدر غير مسموح له باستخدام لوحة التحكم'],
+            [/^Channel not found$/, 'القناة غير موجودة'],
+            [/^Channel name or stream key is required$/, 'اسم القناة أو مفتاح البث مطلوب'],
+            [/^Stream key '(.+)' is already in use\.?$/, 'مفتاح البث «$1» مستخدم بالفعل'],
+            [/^(External source URL is required|sourceUrl is required|Source URL is required.*)$/, 'رابط المصدر الخارجي مطلوب'],
+            [/^Source URL is not a valid absolute URL$/, 'رابط المصدر غير صالح، أدخل رابطًا كاملًا'],
+            [/^Source URL scheme '(.+)' is not allowed.*$/, 'البروتوكول «$1» غير مسموح (المسموح: http و https و rtmp و rtmps و rtsp و srt)'],
+            [/^Source URL must include a host$/, 'رابط المصدر يجب أن يحتوي على اسم خادم'],
+            [/^Source host '(.+)' could not be resolved$/, 'تعذّر الوصول إلى خادم المصدر «$1» (DNS)'],
+            [/^Source host '(.+)' resolves to a loopback.*$/, 'خادم المصدر «$1» يشير إلى شبكة داخلية أو خاصة وهذا غير مسموح'],
+            [/^Source host '(.+)' is not allowed$/, 'خادم المصدر «$1» غير مسموح'],
+            [/^No source URL available to restart restream\.?$/, 'لا يوجد رابط مصدر لإعادة تشغيل البث'],
+            [/^Request failed$/, 'فشل الطلب'],
+            [/^Failed to fetch$|NetworkError/, 'تعذّر الاتصال بالخادم']
+        ];
+
+        function trError(message) {
+            const msg = String(message || '').trim();
+            for (const [re, ar] of ERROR_TRANSLATIONS) {
+                if (re.test(msg)) return msg.replace(re, ar);
+            }
+            return msg || 'حدث خطأ غير متوقع';
+        }
+
+        // Restream state (backend `state`) -> Arabic badge
+        const STATE_BADGES = {
+            ONLINE: { label: 'بث مباشر', cls: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20', dot: 'bg-emerald-400 animate-ping' },
+            CONNECTING: { label: 'جارٍ الاتصال', cls: 'bg-amber-500/10 text-amber-300 border-amber-500/20', dot: 'bg-amber-400 animate-pulse' },
+            FAILED: { label: 'فشل الاتصال', cls: 'bg-rose-500/10 text-rose-400 border-rose-500/20', dot: 'bg-rose-400' },
+            OFFLINE: { label: 'متوقف / جاهز', cls: 'bg-slate-800 text-slate-400 border-slate-700', dot: 'bg-slate-500' }
+        };
+
+        function channelState(restream) {
+            if (!restream) return 'OFFLINE';
+            if (restream.state && STATE_BADGES[restream.state]) return restream.state;
+            if (restream.status === 'failed') return 'FAILED';
+            return ['running', 'starting', 'restarting'].includes(restream.status) ? 'CONNECTING' : 'OFFLINE';
+        }
+
         // Toast Helper
         function showToast(message, type = 'success') {
             const container = document.getElementById('toast-container');
@@ -339,11 +387,13 @@
                 error: 'fa-triangle-exclamation text-rose-400',
                 info: 'fa-info text-brand-400'
             };
-            toast.className = 'pointer-events-auto bg-dark-900 border border-slate-700/80 shadow-xl rounded-xl px-4 py-2.5 flex items-center space-x-2.5 text-xs text-slate-200 transition-all transform translate-y-2 opacity-0';
-            toast.innerHTML = `
-                <i class="fa-solid ${icons[type] || icons.info}"></i>
-                <span class="font-medium">${message}</span>
-            `;
+            toast.className = 'pointer-events-auto bg-dark-900 border border-slate-700/80 shadow-xl rounded-xl px-4 py-2.5 flex items-center gap-2.5 text-xs text-slate-200 transition-all transform translate-y-2 opacity-0';
+            const icon = document.createElement('i');
+            icon.className = `fa-solid ${icons[type] || icons.info}`;
+            const text = document.createElement('span');
+            text.className = 'font-semibold';
+            text.textContent = type === 'error' ? trError(message) : message;
+            toast.append(icon, text);
             container.appendChild(toast);
             requestAnimationFrame(() => {
                 toast.classList.remove('translate-y-2', 'opacity-0');
@@ -355,11 +405,11 @@
         }
 
         // Copy Helper
-        function copyToClipboard(text, label = 'Copied') {
+        function copyToClipboard(text, label = 'النص') {
             navigator.clipboard.writeText(text).then(() => {
-                showToast(`${label} copied to clipboard!`, 'success');
+                showToast(`تم نسخ ${label} إلى الحافظة`, 'success');
             }).catch(() => {
-                showToast('Failed to copy', 'error');
+                showToast('تعذّر النسخ إلى الحافظة', 'error');
             });
         }
 
@@ -434,16 +484,16 @@
                 });
                 const data = await res.json();
                 if (!res.ok || !data.success) {
-                    throw new Error(data.error || 'Invalid credentials');
+                    throw new Error(data.error || 'Invalid admin credentials');
                 }
                 authToken = data.token;
                 localStorage.setItem('streamops_token', authToken);
                 hideLogin();
                 initDashboard();
-                showToast('Welcome back, Admin!', 'success');
+                showToast('أهلًا بعودتك!', 'success');
             } catch (err) {
                 loginError.classList.remove('hidden');
-                document.getElementById('login-error-text').innerText = err.message;
+                document.getElementById('login-error-text').innerText = trError(err.message);
             }
         });
 
@@ -453,14 +503,14 @@
         async function loadConfig() {
             try {
                 systemConfig = await api('/api/config');
-                document.getElementById('cfg-rtmp-port').innerText = `:${systemConfig.rtmpPort}`;
+                document.getElementById('cfg-rtmp-port').innerText = `${systemConfig.rtmpPort}`;
                 document.getElementById('stat-edge-domain').innerText = systemConfig.edgeDomain;
                 const r2Badge = document.getElementById('cfg-r2-status');
                 if (systemConfig.r2Configured) {
-                    r2Badge.innerText = 'Connected';
+                    r2Badge.innerText = 'متصل';
                     r2Badge.className = 'font-semibold text-emerald-400';
                 } else {
-                    r2Badge.innerText = 'DRY-RUN Mode';
+                    r2Badge.innerText = 'وضع تجريبي (بدون رفع)';
                     r2Badge.className = 'font-semibold text-amber-400';
                 }
             } catch (err) {
@@ -495,53 +545,57 @@
                 channelsContainer.innerHTML = `
                     <div class="p-12 text-center text-slate-500 bg-dark-900 border border-slate-800 rounded-2xl">
                         <i class="fa-solid fa-tower-broadcast text-3xl mb-3 text-slate-600"></i>
-                        <h4 class="text-base font-semibold text-slate-300">No channels created yet</h4>
-                        <p class="text-xs text-slate-500 mt-1 mb-4">Create your first channel to generate OBS ingest & Cloudflare R2 endpoints.</p>
-                        <button onclick="openCreateModal()" class="px-4 py-2 bg-brand-500 hover:bg-brand-600 text-white text-xs font-semibold rounded-xl transition-all shadow-md">
-                            <i class="fa-solid fa-plus mr-1.5"></i> Create Channel
+                        <h4 class="text-base font-semibold text-slate-300">لا توجد قنوات بعد</h4>
+                        <p class="text-xs text-slate-500 mt-1 mb-4">أنشئ قناتك الأولى لتوليد روابط الاستقبال من OBS وروابط شبكة Cloudflare R2.</p>
+                        <button onclick="openCreateModal()" class="px-4 py-2 bg-brand-500 hover:bg-brand-600 text-white text-xs font-semibold rounded-xl transition-all shadow-md inline-flex items-center gap-1.5">
+                            <i class="fa-solid fa-plus"></i> <span>إنشاء قناة</span>
                         </button>
                     </div>
                 `;
                 return;
             }
 
+            const segmentAge = (systemConfig && systemConfig.maxSegmentAgeSeconds) || 120;
+
             channelsContainer.innerHTML = channels.map(channel => {
                 // 'restarting' (auto-restart backoff) still needs the Stop button
                 const isRestreamRunning = channel.restream && ['running', 'starting', 'restarting'].includes(channel.restream.status);
                 const metrics = (channel.restream && channel.restream.metrics) || {};
-                
+                const state = channelState(channel.restream);
+                const badge = STATE_BADGES[state];
+                const isOnline = state === 'ONLINE';
+
                 return `
                 <div class="bg-dark-900 border border-slate-800 hover:border-slate-700/80 rounded-2xl p-5 transition-all shadow-xl space-y-5">
-                    
+
                     <!-- Channel Top Bar -->
                     <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800/80 pb-4">
-                        <div class="flex items-center space-x-3">
-                            <div class="w-10 h-10 rounded-xl ${isRestreamRunning ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-slate-800 text-slate-400'} flex items-center justify-center text-lg">
-                                <i class="fa-solid ${isRestreamRunning ? 'fa-satellite pulse-live' : 'fa-video'}"></i>
+                        <div class="flex items-center gap-3 min-w-0">
+                            <div class="w-10 h-10 shrink-0 rounded-xl ${isRestreamRunning ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-slate-800 text-slate-400'} flex items-center justify-center text-lg">
+                                <i class="fa-solid ${isOnline ? 'fa-satellite pulse-live' : 'fa-video'}"></i>
                             </div>
-                            <div>
-                                <div class="flex items-center space-x-2">
+                            <div class="min-w-0">
+                                <div class="flex flex-wrap items-center gap-2">
                                     <h3 class="text-base font-bold text-white">${escapeHtml(channel.name)}</h3>
-                                    ${isRestreamRunning 
-                                        ? '<span class="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 text-[10px] font-bold border border-emerald-500/20 flex items-center space-x-1"><span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping mr-1"></span>LIVE RESTREAM</span>'
-                                        : '<span class="px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 text-[10px] font-semibold border border-slate-700">IDLE / READY</span>'
-                                    }
+                                    <span class="px-2 py-0.5 rounded-full ${badge.cls} text-[10px] font-bold border inline-flex items-center gap-1.5">
+                                        <span class="w-1.5 h-1.5 rounded-full ${badge.dot}"></span>${badge.label}
+                                    </span>
                                 </div>
-                                <div class="flex items-center space-x-3 text-xs text-slate-400 font-mono mt-0.5">
-                                    <span>Stream Key: <strong class="text-brand-400">${escapeHtml(channel.streamKey)}</strong></span>
-                                    <span>•</span>
-                                    <span>R2 Slug: <strong class="text-amber-300 font-mono">${escapeHtml(channel.r2_slug)}</strong></span>
+                                <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400 mt-0.5">
+                                    <span>مفتاح البث: <strong class="text-brand-400 font-mono ltr">${escapeHtml(channel.streamKey)}</strong></span>
+                                    <span class="hidden sm:inline">•</span>
+                                    <span>معرّف R2: <strong class="text-amber-300 font-mono ltr">${escapeHtml(channel.r2_slug)}</strong></span>
                                 </div>
                             </div>
                         </div>
 
                         <!-- Action Buttons -->
-                        <div class="flex items-center space-x-2">
-                            <a href="${channel.links.iframeEmbedUrl}" target="_blank" class="px-3 py-1.5 bg-dark-800 hover:bg-dark-850 border border-slate-700 text-slate-200 text-xs font-medium rounded-lg flex items-center space-x-1.5 transition-colors">
+                        <div class="flex items-center gap-2 shrink-0">
+                            <a href="${channel.links.iframeEmbedUrl}" target="_blank" rel="noopener" class="px-3 py-1.5 bg-dark-800 hover:bg-dark-850 border border-slate-700 text-slate-200 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-colors">
                                 <i class="fa-solid fa-play text-[10px] text-brand-400"></i>
-                                <span>Preview Player</span>
+                                <span>معاينة المشغّل</span>
                             </a>
-                            <button onclick="deleteChannel('${channel.id}')" class="p-2 text-slate-500 hover:text-rose-400 hover:bg-dark-800 rounded-lg transition-colors" title="Delete Channel">
+                            <button onclick="deleteChannel('${channel.id}')" class="p-2 text-slate-500 hover:text-rose-400 hover:bg-dark-800 rounded-lg transition-colors" title="حذف القناة" aria-label="حذف القناة">
                                 <i class="fa-solid fa-trash-can text-xs"></i>
                             </button>
                         </div>
@@ -549,46 +603,47 @@
 
                     <!-- Pull Restreaming Controls & Live Telemetry -->
                     <div class="bg-dark-950/70 border border-slate-800/80 rounded-xl p-4 space-y-3">
-                        <div class="flex items-center justify-between">
-                            <span class="text-xs font-semibold text-slate-300 flex items-center space-x-1.5">
+                        <div class="flex flex-wrap items-center justify-between gap-2">
+                            <span class="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
                                 <i class="fa-solid fa-bolt text-brand-400"></i>
-                                <span>Pull Restreamer (FFmpeg Background Pull & Relay)</span>
+                                <span>إعادة البث (سحب المصدر الخارجي وترحيله عبر FFmpeg)</span>
                             </span>
                             ${isRestreamRunning ? `
-                                <div class="flex items-center space-x-3 text-[11px] font-mono text-slate-300">
-                                    <span>FPS: <strong class="text-emerald-400">${metrics.fps || 0}</strong></span>
-                                    <span>Bitrate: <strong class="text-cyan-400">${metrics.bitrate || '0kbits/s'}</strong></span>
-                                    <span>Speed: <strong class="text-amber-300">${metrics.speed || '1.0x'}</strong></span>
-                                    <span>Time: <strong class="text-slate-200">${metrics.time || '00:00:00'}</strong></span>
+                                <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-300">
+                                    <span>الإطارات/ث: <strong class="text-emerald-400 font-mono ltr">${metrics.fps || 0}</strong></span>
+                                    <span>معدل البت: <strong class="text-cyan-400 font-mono ltr">${escapeHtml(metrics.bitrate || '0kbits/s')}</strong></span>
+                                    <span>السرعة: <strong class="text-amber-300 font-mono ltr">${escapeHtml(metrics.speed || '1.0x')}</strong></span>
+                                    <span>المدة: <strong class="text-slate-200 font-mono ltr">${escapeHtml(metrics.time || '00:00:00')}</strong></span>
                                 </div>
                             ` : ''}
                         </div>
 
                         <div class="flex flex-col sm:flex-row items-center gap-2">
-                            <div class="relative flex-1 w-full">
+                            <!-- URL input is LTR: icon on the physical left -->
+                            <div class="relative flex-1 w-full" dir="ltr">
                                 <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-500 text-xs"><i class="fa-solid fa-link"></i></span>
-                                <input id="source-url-${channel.id}" type="url" value="${escapeHtml(channel.sourceUrl || '')}" placeholder="Input external source URL (e.g. https://.../stream.m3u8, .ts, .mp4)" class="w-full bg-dark-900 border border-slate-700/80 rounded-lg pl-8 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-brand-500 font-mono">
+                                <input id="source-url-${channel.id}" type="url" dir="ltr" value="${escapeHtml(channel.sourceUrl || '')}" placeholder="https://.../stream.m3u8  ·  .ts  ·  rtmp://..." aria-label="رابط المصدر الخارجي" class="w-full bg-dark-900 border border-slate-700/80 rounded-lg pl-8 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-brand-500 font-mono text-left">
                             </div>
 
-                            <div class="flex items-center space-x-2 w-full sm:w-auto justify-end">
+                            <div class="flex items-center gap-2 w-full sm:w-auto justify-end">
                                 ${isRestreamRunning ? `
-                                    <button onclick="stopRestream('${channel.id}')" class="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold rounded-lg transition-colors flex items-center space-x-1.5 shadow-md">
+                                    <button onclick="stopRestream('${channel.id}')" class="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 shadow-md">
                                         <i class="fa-solid fa-stop"></i>
-                                        <span>Stop</span>
+                                        <span>إيقاف</span>
                                     </button>
-                                    <button onclick="restartRestream('${channel.id}')" class="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold rounded-lg transition-colors flex items-center space-x-1.5">
-                                        <i class="fa-solid fa-rotate-right"></i>
-                                        <span>Restart</span>
+                                    <button onclick="restartRestream('${channel.id}')" class="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5">
+                                        <i class="fa-solid fa-rotate-left"></i>
+                                        <span>إعادة التشغيل</span>
                                     </button>
                                 ` : `
-                                    <button onclick="startRestream('${channel.id}')" class="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-lg transition-colors flex items-center space-x-1.5 shadow-md shadow-emerald-600/20">
+                                    <button onclick="startRestream('${channel.id}')" class="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 shadow-md shadow-emerald-600/20">
                                         <i class="fa-solid fa-play"></i>
-                                        <span>Start Restream</span>
+                                        <span>تشغيل البث</span>
                                     </button>
                                 `}
-                                <button onclick="openTerminalLogs('${channel.id}', '${escapeHtml(channel.name)}')" class="px-3 py-1.5 bg-dark-800 hover:bg-dark-850 border border-slate-700 text-slate-300 text-xs font-medium rounded-lg transition-colors flex items-center space-x-1.5" title="View Process Logs">
+                                <button onclick="openTerminalLogs('${channel.id}', '${escapeHtml(channel.name)}')" class="px-3 py-1.5 bg-dark-800 hover:bg-dark-850 border border-slate-700 text-slate-300 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5" title="عرض سجلات العملية">
                                     <i class="fa-solid fa-terminal text-emerald-400"></i>
-                                    <span>Logs</span>
+                                    <span>السجلات</span>
                                 </button>
                             </div>
                         </div>
@@ -596,74 +651,74 @@
 
                     <!-- One-Click Output Links Generator -->
                     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 pt-1">
-                        
+
                         <!-- 1. OBS RTMP Ingest Link -->
-                        <div class="bg-dark-850 border border-slate-800 rounded-xl p-3 flex flex-col justify-between space-y-2">
+                        <div class="bg-dark-850 border border-slate-800 rounded-xl p-3 flex flex-col justify-between gap-2">
                             <div class="flex items-center justify-between">
-                                <span class="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center space-x-1.5">
+                                <span class="text-[11px] font-bold text-slate-400 flex items-center gap-1.5">
                                     <i class="fa-solid fa-tower-broadcast text-rose-400"></i>
-                                    <span>OBS RTMP Ingestion</span>
+                                    <span>استقبال البث من OBS (RTMP)</span>
                                 </span>
-                                <button onclick="copyToClipboard('${channel.links.obsRtmpUrl}', 'RTMP URL')" class="text-xs text-brand-400 hover:text-brand-300" title="Copy RTMP URL">
+                                <button onclick="copyToClipboard('${channel.links.obsRtmpUrl}', 'رابط RTMP')" class="text-xs text-brand-400 hover:text-brand-300" title="نسخ رابط RTMP" aria-label="نسخ رابط RTMP">
                                     <i class="fa-regular fa-copy"></i>
                                 </button>
                             </div>
-                            <div class="space-y-1 font-mono text-xs">
-                                <div class="truncate text-slate-300 select-all" title="${channel.links.obsRtmpUrl}">Server: <span class="text-white">${channel.links.obsRtmpUrl}</span></div>
-                                <div class="flex items-center justify-between text-slate-400">
-                                    <span class="truncate" title="Secret: contains the publish key">Key: <strong class="text-rose-400">${escapeHtml(channel.streamKey)}?user=publish&amp;pass=••••••</strong></span>
-                                    <button onclick="copyToClipboard('${escapeHtml(channel.links.obsStreamKey)}', 'OBS Stream Key')" class="text-[10px] text-slate-400 hover:text-white">Copy Key</button>
+                            <div class="space-y-1 text-xs">
+                                <div class="truncate text-slate-300" title="${channel.links.obsRtmpUrl}">الخادم: <span class="text-white font-mono ltr select-all">${channel.links.obsRtmpUrl}</span></div>
+                                <div class="flex items-center justify-between gap-2 text-slate-400">
+                                    <span class="truncate" title="سرّي: يحتوي على مفتاح النشر">المفتاح: <strong class="text-rose-400 font-mono ltr">${escapeHtml(channel.streamKey)}?user=publish&amp;pass=••••••</strong></span>
+                                    <button onclick="copyToClipboard('${escapeHtml(channel.links.obsStreamKey)}', 'مفتاح البث لـ OBS')" class="shrink-0 text-[10px] text-slate-400 hover:text-white">نسخ المفتاح</button>
                                 </div>
                             </div>
-                            <div class="text-[10px] text-slate-500">Secret publish key - keep private. Public path stays /live/${escapeHtml(channel.streamKey)}</div>
+                            <div class="text-[10px] text-slate-500">مفتاح نشر سرّي، لا تشاركه. يبقى المسار العام <span class="font-mono ltr">/live/${escapeHtml(channel.streamKey)}</span></div>
                         </div>
 
                         <!-- 2. Nginx Camouflaged Edge URL (.css) -->
-                        <div class="bg-dark-850 border border-slate-800 rounded-xl p-3 flex flex-col justify-between space-y-2">
+                        <div class="bg-dark-850 border border-slate-800 rounded-xl p-3 flex flex-col justify-between gap-2">
                             <div class="flex items-center justify-between">
-                                <span class="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center space-x-1.5">
+                                <span class="text-[11px] font-bold text-slate-400 flex items-center gap-1.5">
                                     <i class="fa-solid fa-shield-halved text-brand-400"></i>
-                                    <span>Nginx Edge Camouflage</span>
+                                    <span>رابط الحافة المموّه (Nginx)</span>
                                 </span>
-                                <button onclick="copyToClipboard('${channel.links.edgeCamouflagedUrl}', 'Edge .css URL')" class="text-xs text-brand-400 hover:text-brand-300" title="Copy Edge URL">
+                                <button onclick="copyToClipboard('${channel.links.edgeCamouflagedUrl}', 'رابط الحافة ‎.css')" class="text-xs text-brand-400 hover:text-brand-300" title="نسخ رابط الحافة" aria-label="نسخ رابط الحافة">
                                     <i class="fa-regular fa-copy"></i>
                                 </button>
                             </div>
-                            <div class="truncate font-mono text-xs text-brand-300 select-all" title="${channel.links.edgeCamouflagedUrl}">
+                            <div class="truncate font-mono text-xs text-brand-300 select-all ltr" title="${channel.links.edgeCamouflagedUrl}">
                                 ${channel.links.edgeCamouflagedUrl}
                             </div>
-                            <div class="text-[10px] text-slate-500">Masks .m3u8 -> .css & .ts -> .js via edge proxy_cache. Requires a viewer token from /api/stream</div>
+                            <div class="text-[10px] text-slate-500">يموّه <span class="font-mono ltr">.m3u8 → .css</span> و<span class="font-mono ltr">.ts → .js</span> مع تخزين مؤقت على الحافة. يتطلب رمز مشاهدة من <span class="font-mono ltr">/api/stream</span></div>
                         </div>
 
                         <!-- 3. Cloudflare R2 Direct CDN URL -->
-                        <div class="bg-dark-850 border border-slate-800 rounded-xl p-3 flex flex-col justify-between space-y-2">
+                        <div class="bg-dark-850 border border-slate-800 rounded-xl p-3 flex flex-col justify-between gap-2">
                             <div class="flex items-center justify-between">
-                                <span class="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center space-x-1.5">
+                                <span class="text-[11px] font-bold text-slate-400 flex items-center gap-1.5">
                                     <i class="fa-solid fa-cloud text-amber-400"></i>
-                                    <span>Cloudflare R2 Direct CDN</span>
+                                    <span>رابط Cloudflare R2 المباشر</span>
                                 </span>
-                                <button onclick="copyToClipboard('${channel.links.r2DirectHtmlUrl}', 'R2 Direct URL')" class="text-xs text-brand-400 hover:text-brand-300" title="Copy R2 URL">
+                                <button onclick="copyToClipboard('${channel.links.r2DirectHtmlUrl}', 'رابط R2 المباشر')" class="text-xs text-brand-400 hover:text-brand-300" title="نسخ رابط R2" aria-label="نسخ رابط R2">
                                     <i class="fa-regular fa-copy"></i>
                                 </button>
                             </div>
-                            <div class="truncate font-mono text-xs text-amber-300 select-all" title="${channel.links.r2DirectHtmlUrl}">
+                            <div class="truncate font-mono text-xs text-amber-300 select-all ltr" title="${channel.links.r2DirectHtmlUrl}">
                                 ${channel.links.r2DirectHtmlUrl}
                             </div>
-                            <div class="text-[10px] text-slate-500">Zero egress bucket distribution with auto 120s segment pruner</div>
+                            <div class="text-[10px] text-slate-500">توزيع عبر حاوية R2 بدون رسوم نقل بيانات، مع حذف تلقائي للمقاطع الأقدم من ${segmentAge} ثانية</div>
                         </div>
 
                         <!-- 4. Iframe Web Player Embed -->
-                        <div class="bg-dark-850 border border-slate-800 rounded-xl p-3 flex flex-col justify-between space-y-2 md:col-span-2 lg:col-span-3">
+                        <div class="bg-dark-850 border border-slate-800 rounded-xl p-3 flex flex-col justify-between gap-2 md:col-span-2 lg:col-span-3">
                             <div class="flex items-center justify-between">
-                                <span class="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center space-x-1.5">
+                                <span class="text-[11px] font-bold text-slate-400 flex items-center gap-1.5">
                                     <i class="fa-solid fa-code text-cyan-400"></i>
-                                    <span>Player Iframe Embed Snippet</span>
+                                    <span>كود تضمين المشغّل (iframe)</span>
                                 </span>
-                                <button onclick="copyToClipboard('&lt;iframe src=&quot;${channel.links.iframeEmbedUrl}&quot; width=&quot;100%&quot; height=&quot;100%&quot; frameborder=&quot;0&quot; allowfullscreen allow=&quot;autoplay; encrypted-media&quot;&gt;&lt;/iframe&gt;', 'Embed Code')" class="text-xs text-brand-400 hover:text-brand-300">
-                                    <i class="fa-regular fa-copy mr-1"></i> Copy &lt;iframe&gt;
+                                <button onclick="copyToClipboard('&lt;iframe src=&quot;${channel.links.iframeEmbedUrl}&quot; width=&quot;100%&quot; height=&quot;100%&quot; frameborder=&quot;0&quot; allowfullscreen allow=&quot;autoplay; encrypted-media&quot;&gt;&lt;/iframe&gt;', 'كود التضمين')" class="text-xs text-brand-400 hover:text-brand-300 inline-flex items-center gap-1">
+                                    <i class="fa-regular fa-copy"></i> <span>نسخ كود iframe</span>
                                 </button>
                             </div>
-                            <div class="font-mono text-xs bg-dark-950 p-2 rounded-lg text-slate-300 overflow-x-auto select-all">
+                            <div dir="ltr" class="font-mono text-xs bg-dark-950 p-2 rounded-lg text-slate-300 overflow-x-auto select-all text-left">
                                 &lt;iframe src="${channel.links.iframeEmbedUrl}" width="100%" height="100%" frameborder="0" allowfullscreen allow="autoplay; encrypted-media"&gt;&lt;/iframe&gt;
                             </div>
                         </div>
@@ -680,17 +735,17 @@
             const input = document.getElementById(`source-url-${channelId}`);
             const sourceUrl = input ? input.value.trim() : '';
             if (!sourceUrl) {
-                showToast('Please provide an external source URL first', 'error');
+                showToast('يرجى إدخال رابط المصدر الخارجي أولًا', 'error');
                 return;
             }
 
             try {
-                showToast('Starting background FFmpeg pull...', 'info');
+                showToast('جارٍ بدء سحب المصدر عبر FFmpeg...', 'info');
                 await api(`/api/channels/${channelId}/restream/start`, {
                     method: 'POST',
                     body: JSON.stringify({ sourceUrl })
                 });
-                showToast('Restream started successfully', 'success');
+                showToast('بدأت إعادة البث بنجاح', 'success');
                 loadChannels();
             } catch (err) {
                 showToast(err.message, 'error');
@@ -700,7 +755,7 @@
         async function stopRestream(channelId) {
             try {
                 await api(`/api/channels/${channelId}/restream/stop`, { method: 'POST' });
-                showToast('Restream stopped', 'info');
+                showToast('تم إيقاف إعادة البث', 'info');
                 loadChannels();
             } catch (err) {
                 showToast(err.message, 'error');
@@ -709,9 +764,9 @@
 
         async function restartRestream(channelId) {
             try {
-                showToast('Restarting restream...', 'info');
+                showToast('جارٍ إعادة تشغيل البث...', 'info');
                 await api(`/api/channels/${channelId}/restream/restart`, { method: 'POST' });
-                showToast('Restream restarted', 'success');
+                showToast('تمت إعادة تشغيل البث', 'success');
                 loadChannels();
             } catch (err) {
                 showToast(err.message, 'error');
@@ -719,10 +774,10 @@
         }
 
         async function deleteChannel(channelId) {
-            if (!confirm('Are you sure you want to delete this channel and stop its restream?')) return;
+            if (!confirm('هل أنت متأكد من حذف هذه القناة وإيقاف إعادة البث الخاصة بها؟')) return;
             try {
                 await api(`/api/channels/${channelId}`, { method: 'DELETE' });
-                showToast('Channel deleted', 'success');
+                showToast('تم حذف القناة', 'success');
                 loadChannels();
             } catch (err) {
                 showToast(err.message, 'error');
@@ -732,8 +787,8 @@
         // Live Log Terminal Modal
         function openTerminalLogs(channelId, channelName) {
             activeLogChannelId = channelId;
-            logTerminalTitle.innerText = `FFmpeg Terminal // ${channelName}`;
-            logTerminalBody.innerHTML = '<div class="text-slate-500">Fetching logs...</div>';
+            logTerminalTitle.innerText = `طرفية FFmpeg: ${channelName}`;
+            logTerminalBody.innerHTML = '<div class="text-slate-500" dir="rtl">جارٍ جلب السجلات...</div>';
             modalLogs.classList.remove('hidden');
 
             fetchLogs();
@@ -746,7 +801,7 @@
             try {
                 const data = await api(`/api/channels/${activeLogChannelId}/restream/logs?limit=80`);
                 if (!data.logs || data.logs.length === 0) {
-                    logTerminalBody.innerHTML = '<div class="text-slate-500">No logs generated yet. Start restream to view output.</div>';
+                    logTerminalBody.innerHTML = '<div class="text-slate-500" dir="rtl">لا توجد سجلات بعد. شغّل إعادة البث لعرض المخرجات.</div>';
                     return;
                 }
                 logTerminalBody.innerHTML = data.logs.map(line => `<div>${escapeHtml(line)}</div>`).join('');
@@ -763,11 +818,11 @@
         });
 
         document.getElementById('btn-clear-terminal').addEventListener('click', () => {
-            logTerminalBody.innerHTML = '<div class="text-slate-500">Cleared. Waiting for new output...</div>';
+            logTerminalBody.innerHTML = '<div class="text-slate-500" dir="rtl">تم مسح العرض. بانتظار مخرجات جديدة...</div>';
         });
 
         document.getElementById('btn-copy-logs').addEventListener('click', () => {
-            copyToClipboard(logTerminalBody.innerText, 'Terminal logs');
+            copyToClipboard(logTerminalBody.innerText, 'سجلات الطرفية');
         });
 
         // Create Channel Modal Handlers
@@ -799,7 +854,7 @@
                     body: JSON.stringify({ name, streamKey, r2_slug, sourceUrl })
                 });
                 modalCreateChannel.classList.add('hidden');
-                showToast(`Channel '${name}' created!`, 'success');
+                showToast(`تم إنشاء القناة «${name}»`, 'success');
                 loadChannels();
             } catch (err) {
                 showToast(err.message, 'error');
@@ -809,7 +864,7 @@
         // Search Filter
         document.getElementById('channel-search').addEventListener('input', (e) => {
             const query = e.target.value.toLowerCase();
-            const filtered = channelsList.filter(c => 
+            const filtered = channelsList.filter(c =>
                 c.name.toLowerCase().includes(query) ||
                 c.streamKey.toLowerCase().includes(query) ||
                 c.r2_slug.toLowerCase().includes(query)
@@ -820,13 +875,13 @@
         document.getElementById('btn-refresh').addEventListener('click', () => {
             loadChannels();
             loadStats();
-            showToast('Refreshed channels & metrics', 'info');
+            showToast('تم تحديث القنوات والمؤشرات', 'info');
         });
 
         // Utility: HTML Escaping
         function escapeHtml(str) {
             if (!str) return '';
-            return str
+            return String(str)
                 .replace(/&/g, '&amp;')
                 .replace(/</g, '&lt;')
                 .replace(/>/g, '&gt;')
