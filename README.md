@@ -349,12 +349,12 @@ Because live streaming playlists change every 2 seconds while media segments are
 
 The bundled player (`/player/?channel=...`) does all of this automatically. hls.js sends the Bearer header plus the cookie (`withCredentials`) on `.css` requests only. Native Safari HLS loads the plain playlist URL and authenticates every reload with the `stream_auth` cookie, which the player keeps renewing via `/api/token`, so playback continues past token expiry.
 
-### Domain lock (playback only on `live.vsbskl.site`)
+### Domain lock (playback only on `live.smarterwho.site`)
 
 | Layer | Rule | Effect |
 | :--- | :--- | :--- |
 | `/player/` page | `Content-Security-Policy: frame-ancestors 'self'` + `X-Frame-Options: SAMEORIGIN` | Browsers refuse to show the player inside an iframe on any other site |
-| Playlists (`.css`) | token **and** `valid_referers live.vsbskl.site` (`nginx/snippets/referer-lock.conf`) | Other sites, requests without a Referer, lookalike hosts -> 403 |
+| Playlists (`.css`) | token **and** `valid_referers live.smarterwho.site` (`nginx/snippets/referer-lock.conf`) | Other sites, requests without a Referer, lookalike hosts -> 403 |
 | Segments (`.js`) | same Referer lock, **no CORS headers** | Other sites' browsers cannot fetch or read segments; the response stays identical for every viewer (CDN-cacheable) |
 
 To change the allowed domain, edit `nginx/snippets/referer-lock.conf`.
@@ -362,7 +362,7 @@ To change the allowed domain, edit `nginx/snippets/referer-lock.conf`.
 Limits:
 - A Referer is set by browsers. curl, VLC or a server-side scraper can forge it; the playlist token is the real access control.
 - Behind Cloudflare, cached segments are served by Cloudflare without reaching nginx, so mirror the rule there (Security -> WAF -> Custom rule, action **Block**):
-  `(starts_with(http.request.uri.path, "/live/")) and not (http.referer contains "://live.vsbskl.site/")`
+  `(http.host eq "live.smarterwho.site" and starts_with(http.request.uri.path, "/live/") and not starts_with(http.referer, "https://live.smarterwho.site/"))`
 - The R2 mode (`/player/?r2=...`) reads from the public R2 custom domain and is not covered by this lock.
 
 ---
@@ -432,7 +432,7 @@ grep -rnE "admin12345[6]|fallback_[d]efault|super_[s]ecret" --exclude-dir=.git .
 The player only works on the edge domain itself (see "Domain lock" in section 7). Link to it, or embed it in pages **on the same site**:
 
 ```html
-<!-- On a page served from https://live.vsbskl.site/... -->
+<!-- On a page served from https://live.smarterwho.site/... -->
 <iframe src="/player/?channel=match1"
         width="100%" height="100%" frameborder="0" allowfullscreen allow="autoplay; encrypted-media"></iframe>
 ```
