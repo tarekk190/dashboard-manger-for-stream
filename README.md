@@ -343,13 +343,27 @@ Because live streaming playlists change every 2 seconds while media segments are
    `Set-Cookie: stream_auth=<token>; Max-Age=<TOKEN_EXPIRATION_SECONDS>; Path=/live/match1/; HttpOnly; Secure; Partitioned; SameSite=None`
    (one cookie per channel path, so several channels in one browser don't overwrite each other).
 2. Send the token on **playlist (`.css`) requests only**: `Authorization: Bearer <token>`, `?token=`, or the `stream_auth` cookie (checked in that order). Segment (`.js`) requests carry no token or header: every viewer requests the identical URL, so nginx and Cloudflare serve them from cache.
-   - **Trade-off:** segment names are predictable (Unix-epoch numbers), so anyone who knows a channel's `streamKey` can fetch its segments without a token. The token only gates the playlist.
+   - **Trade-off:** segment names are predictable (Unix-epoch numbers). The token only gates the playlist; the domain lock below keeps other sites' browsers away from segments, but non-browser clients can forge a Referer.
 3. Renew before expiry with `POST /api/token {"token": "<current>"}`; the response also refreshes the `stream_auth` cookie. Tokens expired by more than `TOKEN_RENEW_GRACE_SECONDS` return 401 and the client must call `/api/stream` again.
-4. Nginx `auth_request /auth` answers **401** for a missing, invalid or expired token and **403** when the token's channel differs from the channel in the URL. Results are micro-cached (200: 5s, 401/403: 1s) under a key of *channel + query token + Authorization header* from the original request.
+4. Nginx `auth_request /auth` answers **401** for a missing, invalid or expired token and **403** when the token's channel differs from the channel in the URL. Results are cached (200: 60s, 401/403: 1s), so roughly 1 in 30 playlist reloads per viewer reaches Node under a key of *channel + query token + Authorization header* from the original request.
 
 The bundled player (`/player/?channel=...`) does all of this automatically. hls.js sends the Bearer header plus the cookie (`withCredentials`) on `.css` requests only. Native Safari HLS loads the plain playlist URL and authenticates every reload with the `stream_auth` cookie, which the player keeps renewing via `/api/token`, so playback continues past token expiry.
 
-**Cookie limitation in cross-site iframes:** inside an iframe on another site the cookie is a third-party cookie. Chrome/Edge (and Firefox, partitioned) accept it; Safari and Brave block third-party cookies by default. There, hls.js still works through the Bearer header, but native-HLS playback (no MSE) works only when the player is opened on `EDGE_DOMAIN` itself.
+### Domain lock (playback only on `live.vsbskl.site`)
+
+| Layer | Rule | Effect |
+| :--- | :--- | :--- |
+| `/player/` page | `Content-Security-Policy: frame-ancestors 'self'` + `X-Frame-Options: SAMEORIGIN` | Browsers refuse to show the player inside an iframe on any other site |
+| Playlists (`.css`) | token **and** `valid_referers live.vsbskl.site` (`nginx/snippets/referer-lock.conf`) | Other sites, requests without a Referer, lookalike hosts -> 403 |
+| Segments (`.js`) | same Referer lock, **no CORS headers** | Other sites' browsers cannot fetch or read segments; the response stays identical for every viewer (CDN-cacheable) |
+
+To change the allowed domain, edit `nginx/snippets/referer-lock.conf`.
+
+Limits:
+- A Referer is set by browsers. curl, VLC or a server-side scraper can forge it; the playlist token is the real access control.
+- Behind Cloudflare, cached segments are served by Cloudflare without reaching nginx, so mirror the rule there (Security -> WAF -> Custom rule, action **Block**):
+  `(starts_with(http.request.uri.path, "/live/")) and not (http.referer contains "://live.vsbskl.site/")`
+- The R2 mode (`/player/?r2=...`) reads from the public R2 custom domain and is not covered by this lock.
 
 ---
 
@@ -372,11 +386,15 @@ curl -s -o /dev/null -w '%{http_code}\n' https://edge-domain.com/live/match1/ind
 
 # Valid token: playlist 200 with exactly one Content-Type
 TOKEN=$(curl -s 'https://edge-domain.com/api/stream?channel=match1' | jq -r .token)
-curl -s -D - -o /tmp/pl.css -H "Authorization: Bearer $TOKEN" https://edge-domain.com/live/match1/index.css | grep -ci '^content-type'   # 1
+curl -s -D - -o /tmp/pl.css -e "https://edge-domain.com/player/" -H "Authorization: Bearer $TOKEN" https://edge-domain.com/live/match1/index.css | grep -ci '^content-type'   # 1
 
-# Same segment twice WITHOUT any token: 200, MISS then HIT
+# Same segment twice WITHOUT any token (but from the player's page): 200, MISS then HIT, not gzipped
 SEG=$(grep -m1 '\.js$' /tmp/pl.css)
-for i in 1 2; do curl -s -D - -o /dev/null "https://edge-domain.com/live/match1/$SEG" | grep -iE '^HTTP|x-cache-status'; done
+for i in 1 2; do curl -s -D - -o /dev/null -e "https://edge-domain.com/player/" -H 'Accept-Encoding: gzip' "https://edge-domain.com/live/match1/$SEG" | grep -iE '^HTTP|x-cache-status|content-encoding'; done
+
+# Domain lock: no Referer / foreign site -> 403
+curl -s -o /dev/null -w '%{http_code}\n' "https://edge-domain.com/live/match1/$SEG"                              # 403
+curl -s -o /dev/null -w '%{http_code}\n' -e https://evil.example/ "https://edge-domain.com/live/match1/$SEG"      # 403
 
 # Token for match1 used on another channel -> 403
 curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOKEN" https://edge-domain.com/live/match2/index.css
@@ -409,17 +427,17 @@ grep -rnE "admin12345[6]|fallback_[d]efault|super_[s]ecret" --exclude-dir=.git .
 
 ---
 
-## 9. Embedded Web Player Integration
+## 9. Web Player
+
+The player only works on the edge domain itself (see "Domain lock" in section 7). Link to it, or embed it in pages **on the same site**:
 
 ```html
-<!-- Nginx edge mode (token fetched and renewed by the player) -->
-<iframe src="https://edge-domain.com/player/?channel=match1"
-        width="100%" height="100%" frameborder="0" allowfullscreen allow="autoplay; encrypted-media"></iframe>
-
-<!-- Cloudflare R2 mode -->
-<iframe src="https://edge-domain.com/player/?r2=ugrabzavmtzj"
+<!-- On a page served from https://live.vsbskl.site/... -->
+<iframe src="/player/?channel=match1"
         width="100%" height="100%" frameborder="0" allowfullscreen allow="autoplay; encrypted-media"></iframe>
 ```
+
+Embedding it on any other domain shows a blocked frame. To allow a partner site again, add it to `frame-ancestors` (`/player/` location) and to `nginx/snippets/referer-lock.conf`.
 
 ---
 
