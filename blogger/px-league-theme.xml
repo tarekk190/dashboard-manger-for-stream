@@ -871,7 +871,7 @@ body#layout .sidebar { width: 320px; }
           <li><a expr:class='data:view.isHomepage ? &quot;is-active&quot; : &quot;&quot;' expr:href='data:blog.homepageUrl'>الرئيسية</a></li>
           <li><a expr:href='data:blog.homepageUrl + &quot;search/label/Matches&quot;'>المباريات</a></li>
           <li><a expr:href='data:blog.homepageUrl + &quot;search/label/Predictions&quot;'>التوقعات</a></li>
-          <li><a expr:class='data:view.url contains &quot;/p/standings.html&quot; ? &quot;is-active&quot; : &quot;&quot;' expr:href='data:blog.homepageUrl + &quot;p/standings.html&quot;'>الترتيب</a></li>
+          <li><a expr:class='data:blog.url contains &quot;/p/standings.html&quot; ? &quot;is-active&quot; : &quot;&quot;' expr:href='data:blog.homepageUrl + &quot;p/standings.html&quot;'>الترتيب</a></li>
           <li><a href='#app-download'>التطبيق</a></li>
         </ul>
       </nav>
@@ -1021,7 +1021,7 @@ body#layout .sidebar { width: 320px; }
            Create the two pages in Blogger (Pages -> New page, any body text)
            so they return HTTP 200; the theme replaces their body.
            ================================================================== -->
-      <b:if cond='data:view.url contains &quot;/p/standings.html&quot;'>
+      <b:if cond='data:blog.url contains &quot;/p/standings.html&quot;'>
       <!-- ============================================================
            STANDINGS PAGE (/p/standings.html): league filter + table(s)
            League ids are ysscores season ids (verified with the
@@ -1050,7 +1050,7 @@ body#layout .sidebar { width: 320px; }
         </div>
       </section>
 
-      <b:elseif cond='data:view.url contains &quot;/p/match.html&quot;'/>
+      <b:elseif cond='data:blog.url contains &quot;/p/match.html&quot;'/>
       <!-- ============================================================
            MATCH DETAILS PAGE (/p/match.html?id=MATCH_ID)
            Filled by fetchMatchDetails() (script at the end of the body).
@@ -1313,7 +1313,7 @@ body#layout .sidebar { width: 320px; }
   //]]>
   </script>
 
-  <b:if cond='data:view.url contains &quot;/p/standings.html&quot;'>
+  <b:if cond='data:blog.url contains &quot;/p/standings.html&quot;'>
   <!-- ======================================================================
        STANDINGS PAGE - fetchStandings(championshipId) + league filter
        Runs only on /p/standings.html.
@@ -1524,7 +1524,7 @@ body#layout .sidebar { width: 320px; }
   </script>
   </b:if>
 
-  <b:if cond='data:view.url contains &quot;/p/match.html&quot;'>
+  <b:if cond='data:blog.url contains &quot;/p/match.html&quot;'>
   <!-- ======================================================================
        MATCH DETAILS PAGE - fetchMatchDetails()
        Runs only on /p/match.html?id=MATCH_ID (home match cards link here).
