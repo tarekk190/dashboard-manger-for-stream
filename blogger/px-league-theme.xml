@@ -881,7 +881,7 @@ body#layout .sidebar { width: 320px; }
     'use strict';
 
     var WORKER_BASE_URL = window.PXL_WORKER_BASE_URL || '';
-    var STANDINGS_PATH = '/api/tournaments/standings/{id}';
+    var STANDINGS_PATH = '/api/standings/{id}?include=results';   // Worker -> football-poster-generator.vercel.app
     // Premier League on ysscores: championship 6811, current season id 937599
     var DEFAULT_CHAMPIONSHIP_ID = '937599';
     var MAX_ROWS = 20;                       // rows shown in the sidebar
@@ -908,7 +908,7 @@ body#layout .sidebar { width: 320px; }
     // or grouped tables ([[...], [...]] / { data: [ { standings: [...] } ] }) -> first table
     function rowsFrom(json) {
       var d = json && json.data != null ? json.data : json;
-      if (d && !Array.isArray(d)) d = d.standings || d.table || d.rows || d.teams || [];
+      if (d && !Array.isArray(d)) d = d.groups || d.standings || d.table || d.rows || d.teams || [];   // Vercel: { groups: [ { rows } ] }
       if (!Array.isArray(d)) return [];
       if (Array.isArray(d[0])) return d[0];
       if (d[0] && Array.isArray(d[0].standings)) return d[0].standings;
@@ -919,12 +919,12 @@ body#layout .sidebar { width: 320px; }
     function parseRow(r, i) {
       var tn = r.team_name && typeof r.team_name === 'object' ? r.team_name : {};
       var team = r.team && typeof r.team === 'object' ? r.team : {};
-      var diff = pick(r.diff, r.goal_difference, r.goalDifference, r.gd,
+      var diff = pick(r.goalDiff, r.diff, r.goal_difference, r.goalDifference, r.gd,
         (r.for != null && r.against != null) ? Number(r.for) - Number(r.against) : '');
       return {
         rank: Number(pick(r.rank, r.position, r.pos, i + 1)) || i + 1,
-        name: pick(tn.short_title, tn.title, team.name, team.title, typeof r.team_name === 'string' ? r.team_name : '', r.name, r.title),
-        logo: logoUrl(pick(tn.image, team.logo, team.image, r.logo, r.image)),
+        name: pick(r.teamName, tn.short_title, tn.title, team.name, team.title, typeof r.team_name === 'string' ? r.team_name : '', r.name, r.title),
+        logo: logoUrl(pick(r.teamLogo, tn.image, team.logo, team.image, r.logo, r.image)),
         played: pick(r.play, r.played, r.matches, r.games, 0),
         diff: diff === '' ? 0 : Number(diff),
         points: pick(r.points, r.pts, 0)
