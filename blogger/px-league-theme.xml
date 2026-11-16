@@ -718,14 +718,27 @@ body#layout .ad-side { display: block; width: 160px; }
 
   <b:if cond='data:view.isHomepage'>
   <!-- ======================================================================
-       HOME VIEW: MATCHES API - runs only on the home page.
+       HOME VIEW: MATCHES API (real ysscores data through your Cloudflare Worker)
+       Runs only on the home page.
 
-       Calls  WORKER_BASE + '/matches?date=YYYY-MM-DD'  (Cairo date) and expects
-       { "matches": [ { id, league, homeTeam:{name,logo}, awayTeam:{name,logo},
-                        score:{home,away}, status | statusCategory, time | startTime,
-                        broadcast:{channel,commentator} | channel, commentator, url? } ] }
-       Every API value is HTML-escaped before it is placed in the card template,
-       and logo / link URLs must start with http(s).
+       1. Paste your Worker URL into WORKER_BASE_URL (no trailing slash).
+       2. Endpoints used (paths are forwarded by your Worker to api-ar.ysscores.com):
+            {WORKER_BASE_URL}/api/matches/matches_date_get/{YYYY-MM-DD}/{MATCH_FILTERS}/D/60
+            {WORKER_BASE_URL}/api/matches/match_info/{match_id}/D/60    (live matches only: minute + channels)
+       3. Response shape (verified against the live API on 2026-11-16):
+            { status: true, data: [ {
+                match_id, match_timestamp, match_time, status, home_scores, away_scores,
+                championship: { title, image },
+                home_team: { row_id, title, image }, away_team: { row_id, title, image },
+                channel_commm: [ { channel_name, commentator_name } ] } ] }
+          status: 0 = not started, 4 = finished (observed). Any other code is treated as
+          live while the kickoff is less than 3.5 hours ago.
+          match_time is in the API's own time zone (UTC+3), so the kick-off time shown is
+          computed from match_timestamp in Africa/Cairo instead.
+       4. Logos: https://imgs.ysscores.com/teams/128/{image}  where {image} is the file name the
+          API returns (e.g. "4151761254960.png"). The /teams/128/{row_id}.png form returns the
+          same generic placeholder for every team, so the team id is not used.
+       5. Every API value is HTML-escaped before it goes into the card template.
        ====================================================================== -->
   <script>
   //<![CDATA[
@@ -735,35 +748,32 @@ body#layout .ad-side { display: block; width: 160px; }
     // ------------------------------------------------------------
     // Configuration
     // ------------------------------------------------------------
-    var WORKER_BASE = 'https://<YOUR_WORKER_SUBDOMAIN>.workers.dev/api';   // your Worker; demo data until set
+    var WORKER_BASE_URL = 'https://<MY_WORKER_URL>';         // e.g. 'https://px-api.your-name.workers.dev'
+    var MATCH_FILTERS = '[]/[]/["8634"]';                     // middle part of matches_date_get (as in your endpoint)
+    var TEAM_LOGO_BASE = 'https://imgs.ysscores.com/teams/128/';
     var MAX_RETRIES = 2;
-    var REFRESH_MS = 60 * 1000;          // refresh today's scores every minute (visible tab only)
+    var REFRESH_MS = 60 * 1000;                               // refresh today's scores every minute (visible tab only)
+    var LIVE_WINDOW_MS = 3.5 * 60 * 60 * 1000;                // a non-final status counts as live up to 3.5 h after kickoff
 
-    // Fallback for missing / broken team logos. Replace with your own image URL if you like
-    // (e.g. 'https://your-cdn/default-team.png'); the default is an inline shield icon.
+    // Fallback for missing / broken team logos (inline shield icon; replace with your own URL if you like)
     var DEFAULT_LOGO_URL = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(
       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">' +
       '<path d="M32 4 8 12v18c0 15 10.5 25.5 24 30 13.5-4.5 24-15 24-30V12L32 4z" fill="#32CD32" fill-opacity=".18" stroke="#32CD32" stroke-width="3"/>' +
       '<circle cx="32" cy="30" r="8" fill="none" stroke="#32CD32" stroke-width="3"/></svg>');
-    window.PXL_DEFAULT_LOGO = DEFAULT_LOGO_URL;   // used by the img onerror handler
+    window.PXL_DEFAULT_LOGO = DEFAULT_LOGO_URL;               // used by the img onerror handler
 
-    // Where a click on a match card goes. '' = cards are not links (unless the API sends m.url).
+    // Where a click on a match card goes. '' = cards are not links.
     // Example for a Blogger page that reads ?id=: '/p/match.html'
     var MATCH_PAGE_URL = '';
 
-    var IS_DEMO = WORKER_BASE.indexOf('<YOUR_WORKER_SUBDOMAIN>') !== -1;
+    var NOT_CONFIGURED = WORKER_BASE_URL.indexOf('<MY_WORKER_URL>') !== -1;
 
     // ------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------
     var ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
     function esc(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) { return ESC[c]; }); }
-    function safeUrl(u) {
-      var s = String(u == null ? '' : u).trim();
-      return /^https?:\/\//i.test(s) ? s : '';
-    }
 
-    // fetch with timeout & retry (from your draft)
     async function fetchJson(url, attempts) {
       if (attempts == null) attempts = MAX_RETRIES;
       var controller = new AbortController();
@@ -771,7 +781,9 @@ body#layout .ad-side { display: block; width: 160px; }
       try {
         var resp = await fetch(url, { signal: controller.signal, headers: { Accept: 'application/json' } });
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
-        return await resp.json();
+        var json = await resp.json();
+        if (json && json.status === false) throw new Error('API error: ' + (json.message || 'status false'));
+        return json;
       } catch (e) {
         if (attempts > 1) return fetchJson(url, attempts - 1);
         throw e;
@@ -780,46 +792,76 @@ body#layout .ad-side { display: block; width: 160px; }
       }
     }
 
-    // Dates always in Africa/Cairo
+    // Dates and times in Africa/Cairo
     function cairoDateString(dateObj) {
       var parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo' }).formatToParts(dateObj);
       var get = function (t) { return parts.find(function (p) { return p.type === t; }).value; };
       return get('year') + '-' + get('month') + '-' + get('day');
     }
-    function cairoTime(iso) {
-      var d = new Date(iso);
-      if (isNaN(d)) return '';
+    function cairoTime(unixSeconds) {
+      var d = new Date(Number(unixSeconds) * 1000);
+      if (!unixSeconds || isNaN(d)) return '--:--';
       return new Intl.DateTimeFormat('en-GB', { timeZone: 'Africa/Cairo', hour: '2-digit', minute: '2-digit', hour12: false }).format(d);
     }
 
-    // Normalize one match from the Worker (models.js fields + the fields your draft used)
-    function category(m) {
-      var s = String(m.statusCategory || m.status || '').toLowerCase();
-      if (/^(live|in[_ ]?play|1h|2h|ht|et|playing|مباشر)/.test(s)) return 'live';
-      if (/^(finished|ended|ft|aet|pen|انتهت)/.test(s)) return 'finished';
-      return 'upcoming';
+    function matchesUrl(isoDate) {
+      return WORKER_BASE_URL + '/api/matches/matches_date_get/' + isoDate + '/' + encodeURI(MATCH_FILTERS) + '/D/60';
     }
-    function normalize(m) {
-      var b = m.broadcast || {};
-      var sc = m.score || {};
+    function matchInfoUrl(id) {
+      return WORKER_BASE_URL + '/api/matches/match_info/' + encodeURIComponent(id) + '/D/60';
+    }
+
+    function teamLogo(team) {
+      var file = team && team.image ? String(team.image).trim() : '';
+      // Only plain file names such as "4151761254960.png" are accepted
+      return /^[\w.-]+\.(png|jpe?g|webp|gif|svg)$/i.test(file) ? TEAM_LOGO_BASE + encodeURIComponent(file) : DEFAULT_LOGO_URL;
+    }
+
+    // ysscores status -> card category
+    function category(raw) {
+      var s = Number(raw.status);
+      if (s === 0) return 'upcoming';
+      if (s === 4) return 'finished';
+      var kickoff = Number(raw.match_timestamp) * 1000;
+      var now = Date.now();
+      if (kickoff && now >= kickoff - 10 * 60 * 1000 && now <= kickoff + LIVE_WINDOW_MS) return 'live';
+      return 'other';                                      // postponed / cancelled / unknown code
+    }
+
+    // One ysscores match -> the fields the card template uses
+    function normalize(raw) {
+      var cc = Array.isArray(raw.channel_commm) && raw.channel_commm.length ? raw.channel_commm[0] : {};
+      var champ = raw.championship || {};
+      var home = raw.home_team || {};
+      var away = raw.away_team || {};
       return {
-        id: m.id,
-        url: safeUrl(m.url),
-        league: m.league || '',
-        cat: category(m),
-        statusText: m.statusText || m.statusLabel || '',
-        time: m.time || cairoTime(m.startTime) || '--:--',
-        home: { name: (m.homeTeam && m.homeTeam.name) || '', logo: safeUrl(m.homeTeam && m.homeTeam.logo) },
-        away: { name: (m.awayTeam && m.awayTeam.name) || '', logo: safeUrl(m.awayTeam && m.awayTeam.logo) },
-        scoreHome: sc.home != null ? sc.home : 0,
-        scoreAway: sc.away != null ? sc.away : 0,
-        channel: b.channel || m.channel || 'غير متوفر',
-        commentator: b.commentator || m.commentator || 'غير متوفر'
+        id: raw.match_id,
+        timestamp: Number(raw.match_timestamp) || 0,
+        champId: raw.championship_id,
+        league: champ.title || '',
+        cat: category(raw),
+        minute: Number(raw.minutes) > 0 ? Number(raw.minutes) : 0,
+        time: cairoTime(raw.match_timestamp),
+        home: { name: home.full_title || home.title || '', logo: teamLogo(home) },
+        away: { name: away.full_title || away.title || '', logo: teamLogo(away) },
+        scoreHome: raw.home_scores != null ? raw.home_scores : 0,
+        scoreAway: raw.away_scores != null ? raw.away_scores : 0,
+        channel: cc.channel_name || 'غير متوفر',
+        commentator: cc.commentator_name || 'غير متوفر'
       };
     }
 
+    // Keep the API's league order, kick-off time inside each league
+    function sortMatches(list) {
+      var leagueOrder = {};
+      list.forEach(function (m, i) { if (!(m.champId in leagueOrder)) leagueOrder[m.champId] = i; });
+      return list.slice().sort(function (a, b) {
+        return (leagueOrder[a.champId] - leagueOrder[b.champId]) || (a.timestamp - b.timestamp);
+      });
+    }
+
     // ------------------------------------------------------------
-    // UI state & rendering
+    // UI state & rendering (same card HTML / CSS as before)
     // ------------------------------------------------------------
     var container = document.getElementById('matches-api-container');
     var tabs = document.querySelectorAll('#matchTabs .tab');
@@ -828,35 +870,35 @@ body#layout .ad-side { display: block; width: 160px; }
     if (!container) return;
 
     var state = { date: new Date(), filter: 'all', rawMatches: [], loading: true, error: null, requestId: 0 };
+    var liveInfoCache = {};                                 // match_id -> { minute, channel, commentator }
 
     var ICON_TV = '<svg aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="15" rx="2" ry="2" stroke-width="2"></rect><polyline points="17 2 12 7 7 2" stroke-width="2"></polyline></svg>';
     var ICON_MIC = '<svg aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-14 0m7 7v4m-4 0h8M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"></path></svg>';
 
     function logoImg(team) {
-      // Missing URL -> default logo; broken URL -> onerror swaps in the default (once, no loop)
-      return `<img src="${esc(team.logo || DEFAULT_LOGO_URL)}" alt="${esc(team.name)}" loading="lazy" referrerpolicy="no-referrer" onerror="this.onerror=null;this.src=window.PXL_DEFAULT_LOGO">`;
+      return `<img src="${esc(team.logo)}" alt="${esc(team.name)}" loading="lazy" referrerpolicy="no-referrer" onerror="this.onerror=null;this.src=window.PXL_DEFAULT_LOGO">`;
     }
-
-    function cardLink(m) {
-      if (m.url) return m.url;
-      if (MATCH_PAGE_URL && m.id != null) return MATCH_PAGE_URL + '?id=' + encodeURIComponent(m.id);
-      return '';
-    }
-
     function scoreHtml(m) {
       return `<span>${esc(m.scoreHome)}</span><span class="sep">-</span><span>${esc(m.scoreAway)}</span>`;
+    }
+    function cardLink(m) {
+      return MATCH_PAGE_URL && m.id != null ? MATCH_PAGE_URL + '?id=' + encodeURIComponent(m.id) : '';
     }
 
     function createCard(m) {
       var isLive = m.cat === 'live';
       var isFinished = m.cat === 'finished';
       var link = cardLink(m);
+      var statusText = isLive ? 'مباشر' + (m.minute ? " " + m.minute + "'" : '')
+        : isFinished ? 'انتهت'
+        : m.cat === 'other' ? 'غير محدد'
+        : 'لم تبدأ';
 
       var center = isLive
         ? `<div class="match-badge">${scoreHtml(m)}<span class="live-dot"></span></div>
-           <div class="match-status">${esc(m.statusText || 'مباشر')}</div>`
+           <div class="match-status">${esc(statusText)}</div>`
         : `<div class="match-badge">${isFinished ? scoreHtml(m) : `<span class="time">${esc(m.time)}</span>`}</div>
-           <div class="match-status">${esc(m.statusText || (isFinished ? 'انتهت' : 'لم تبدأ'))}</div>`;
+           <div class="match-status">${esc(statusText)}</div>`;
 
       return `
         <div class="match-card${isLive ? ' is-live' : ''}${link ? ' is-link' : ''}"${link ? ` data-href="${esc(link)}" role="link" tabindex="0"` : ''}>
@@ -922,7 +964,6 @@ body#layout .ad-side { display: block; width: 160px; }
       render();
     }
 
-    // Card clicks (delegated; only for cards that have a link)
     function openCard(e) {
       var card = e.target.closest('.match-card.is-link');
       if (card) window.location.href = card.getAttribute('data-href');
@@ -931,20 +972,61 @@ body#layout .ad-side { display: block; width: 160px; }
     container.addEventListener('keydown', function (e) { if (e.key === 'Enter') openCard(e); });
 
     // ------------------------------------------------------------
+    // Live matches: minute + channel/commentator from match_info
+    // (the daily list has no minute; channels are often only filled in match_info)
+    // ------------------------------------------------------------
+    function applyLiveInfo(m) {
+      var info = liveInfoCache[m.id];
+      if (!info) return m;
+      if (info.minute) m.minute = info.minute;
+      if (info.channel && m.channel === 'غير متوفر') m.channel = info.channel;
+      if (info.commentator && m.commentator === 'غير متوفر') m.commentator = info.commentator;
+      return m;
+    }
+
+    async function enrichLive(requestId) {
+      var live = state.rawMatches.filter(function (m) { return m.cat === 'live'; }).slice(0, 12);
+      if (!live.length) return;
+      await Promise.all(live.map(async function (m) {
+        try {
+          var json = await fetchJson(matchInfoUrl(m.id), 1);
+          var d = json && json.data ? json.data : {};
+          var cc = Array.isArray(d.channel_commm) && d.channel_commm.length ? d.channel_commm[0] : {};
+          liveInfoCache[m.id] = {
+            minute: Number(d.minutes) > 0 ? Number(d.minutes) : 0,
+            channel: cc.channel_name || '',
+            commentator: cc.commentator_name || ''
+          };
+        } catch (e) { /* keep the card without minute */ }
+      }));
+      if (state.requestId !== requestId) return;            // the date changed meanwhile
+      state.rawMatches.forEach(applyLiveInfo);
+      render();
+    }
+
+    // ------------------------------------------------------------
     // Data loading
     // ------------------------------------------------------------
     async function loadMatches(silent) {
       var currentRequest = ++state.requestId;
       if (!silent) setState({ loading: true, error: null });
+      if (NOT_CONFIGURED) {
+        console.warn('[PX League] Set WORKER_BASE_URL to your Cloudflare Worker URL.');
+        setState({ loading: false, error: 'لم يتم ضبط رابط مصدر المباريات بعد.', rawMatches: [] });
+        return;
+      }
       var iso = cairoDateString(state.date);
       try {
-        var data = IS_DEMO ? demoData() : await fetchJson(WORKER_BASE + '/matches?date=' + iso);
-        if (state.requestId !== currentRequest) return;          // a newer request is running
-        setState({ loading: false, error: null, rawMatches: (data.matches || []).map(normalize) });
+        var json = await fetchJson(matchesUrl(iso));
+        if (state.requestId !== currentRequest) return;     // a newer request is running
+        var list = Array.isArray(json && json.data) ? json.data : [];
+        var matches = sortMatches(list.map(normalize)).map(applyLiveInfo);
+        setState({ loading: false, error: null, rawMatches: matches });
+        enrichLive(currentRequest);
       } catch (e) {
         if (state.requestId !== currentRequest) return;
         console.warn('[PX League] matches:', e);
-        if (silent && state.rawMatches.length) return;            // keep the last good data on refresh errors
+        if (silent && state.rawMatches.length) return;       // keep the last good data on refresh errors
         setState({ loading: false, error: 'فشل تحميل المباريات – يرجى المحاولة مرة أخرى.', rawMatches: [] });
       }
     }
@@ -977,21 +1059,12 @@ body#layout .ad-side { display: block; width: 160px; }
     // "مباشر" menu link (#live) opens the live tab
     if (location.hash === '#live') { var liveTab = document.querySelector('#matchTabs .tab[data-tab="live"]'); if (liveTab) selectTab(liveTab); }
 
-    // Initialisation
+    // Initialisation: today's date (Cairo)
     todayLabel.textContent = cairoDateString(state.date);
     loadMatches();
     setInterval(function () {
       if (!document.hidden && cairoDateString(state.date) === cairoDateString(new Date())) loadMatches(true);
     }, REFRESH_MS);
-
-    // Demo data (only while WORKER_BASE is not configured)
-    function demoData() {
-      return { matches: [
-        { id: 1, league: 'الدوري الإسباني', status: 'live', statusText: "مباشر 67'", homeTeam: { name: 'ريال مدريد', logo: '' }, awayTeam: { name: 'برشلونة', logo: 'https://invalid.example/broken.png' }, score: { home: 2, away: 1 }, broadcast: { channel: 'beIN Sports 1', commentator: 'عصام الشوالي' } },
-        { id: 2, league: 'الدوري الإنجليزي الممتاز', status: 'upcoming', time: '22:00', homeTeam: { name: 'مانشستر سيتي' }, awayTeam: { name: 'ليفربول' }, broadcast: { channel: 'beIN Sports 2', commentator: 'حفيظ دراجي' } },
-        { id: 3, league: 'الدوري المصري الممتاز', status: 'ended', homeTeam: { name: 'الأهلي' }, awayTeam: { name: 'الزمالك' }, score: { home: 1, away: 1 }, broadcast: { channel: 'ON Sport', commentator: 'مدحت شلبي' } }
-      ] };
-    }
   })();
   //]]>
   </script>
