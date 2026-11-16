@@ -4,17 +4,30 @@
   ============================================================================
   PX-League - Blogger Theme (Arabic, RTL, Light/Dark)
   ............................................................................
+  Two views, separated with Blogger conditional tags:
+
+  1. HOME PAGE  (data:view.isHomepage)
+     "Today's matches" fixtures: <div id="matches-api-container"> + a placeholder
+     script (search for "MATCHES API") where you plug in your API / Worker.
+     No player, no ads.
+
+  2. MATCH POST (data:view.isPost)
+     Live streaming arena: 16:9 player in the center, ads around it
+     (top 728x90, bottom 728x90, side 160x600 on desktop).
+     The stream comes from the POST ITSELF, so every match post plays its own stream.
+     In the post editor (HTML view) add ONE of these:
+       a) <div data-stream-src="https://live.smarterwho.site/player/?channel=b1"></div>
+       b) a normal <iframe src="..."></iframe>  (the first iframe in the post is used)
+     The theme moves it into the 16:9 player box above the ads.
+
+  Static pages (About, Privacy...) use a plain layout. Label/search pages show post cards.
+
   - Layouts v3 / widget version 2. Paste into: Theme > (arrow) > Edit HTML.
-  - Light mode is the default; the toggle stores the choice in localStorage.
-  - LTR instead of RTL: change dir="rtl" lang="ar" on <html> below to dir="ltr" lang="en".
-  - Everything you need to edit later lives in widgets (Layout page), not in code:
-      * Live player iframe ........ section "match-player"  (HTML widget "PlayerEmbed")
-      * Ads ........................ sections "ad-top", "ad-left", "ad-right", "ad-bottom"
-      * Standings / Live scores .... section "sidebar"
-      * Footer columns ............. sections "footer-1" ... "footer-3"
+  - Ads, sidebar and footer texts are widgets: edit them on the Layout page.
+  - LTR instead of RTL: change dir='rtl' lang='ar' on <html> to dir='ltr' lang='en'.
   ============================================================================
 -->
-<html b:css='false' b:defaultwidgetversion='2' b:layoutsVersion='3' b:responsive='true' b:templateVersion='1.0.0' dir='rtl' lang='ar' xmlns='http://www.w3.org/1999/xhtml' xmlns:b='http://www.google.com/2005/gml/b' xmlns:data='http://www.google.com/2005/gml/data' xmlns:expr='http://www.google.com/2005/gml/expr'>
+<html b:css='false' b:defaultwidgetversion='2' b:layoutsVersion='3' b:responsive='true' b:templateVersion='2.0.0' dir='rtl' lang='ar' xmlns='http://www.w3.org/1999/xhtml' xmlns:b='http://www.google.com/2005/gml/b' xmlns:data='http://www.google.com/2005/gml/data' xmlns:expr='http://www.google.com/2005/gml/expr'>
 <head>
   <meta charset='UTF-8'/>
   <meta content='width=device-width, initial-scale=1' name='viewport'/>
@@ -37,13 +50,14 @@
   <link crossorigin='anonymous' href='https://fonts.gstatic.com' rel='preconnect'/>
   <link href='https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&amp;display=swap' rel='stylesheet'/>
 
-<b:skin version='1.0.0'><![CDATA[
+<b:skin version='2.0.0'><![CDATA[
 /* ==========================================================================
    1. Design tokens (light = default, dark = [data-theme="dark"])
    ========================================================================== */
 :root {
   --brand: #32cd32;
   --brand-strong: #22a822;
+  --brand-ink: #04120a;
   --brand-soft: rgba(50, 205, 50, 0.12);
   --brand-glow: 0 0 0 rgba(50, 205, 50, 0);
 
@@ -57,6 +71,7 @@
   --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 6px 18px rgba(16, 24, 40, 0.06);
   --shadow-hover: 0 4px 10px rgba(16, 24, 40, 0.08), 0 16px 32px rgba(16, 24, 40, 0.10);
   --live: #e11d48;
+  --live-soft: rgba(225, 29, 72, 0.10);
 
   --radius: 14px;
   --radius-sm: 9px;
@@ -81,6 +96,7 @@
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 10px 26px rgba(0, 0, 0, 0.35);
   --shadow-hover: 0 0 0 1px rgba(62, 230, 62, 0.35), 0 18px 40px rgba(0, 0, 0, 0.55);
   --live: #ff3b5c;
+  --live-soft: rgba(255, 59, 92, 0.14);
   color-scheme: dark;
 }
 
@@ -105,19 +121,21 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 :focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; border-radius: 6px; }
 .container { width: 100%; max-width: var(--container); margin-inline: auto; padding-inline: 16px; }
 .visually-hidden { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.section, .widget, .widget-content { margin: 0; }
 
-/* Blogger wrappers: keep them neutral */
-.section { margin: 0; }
-.widget { margin: 0; }
-.widget-content { margin: 0; }
+.section-title {
+  display: flex; align-items: center; gap: 10px;
+  margin: 0 0 16px; font-size: 1.25rem; font-weight: 800;
+}
+.section-title::before {
+  content: ''; width: 6px; height: 22px; border-radius: 4px; background: var(--brand); box-shadow: var(--brand-glow);
+}
 
 /* ==========================================================================
-   3. Header (sticky, glass)
+   3. Header (sticky, glass) - RTL: logo right, nav center, toggle left
    ========================================================================== */
 .site-header {
-  position: sticky;
-  top: 0;
-  z-index: 50;
+  position: sticky; top: 0; z-index: 50;
   background: var(--surface-glass);
   -webkit-backdrop-filter: saturate(160%) blur(14px);
   backdrop-filter: saturate(160%) blur(14px);
@@ -125,53 +143,38 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 }
 .header-inner {
   height: var(--header-h);
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
   align-items: center;
-  justify-content: space-between;
   gap: 16px;
 }
 .logo {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  font-weight: 800;
-  font-size: 1.35rem;
-  letter-spacing: .3px;
-  direction: ltr;
-  white-space: nowrap;
+  justify-self: start;
+  display: inline-flex; align-items: center; gap: 10px;
+  font-weight: 800; font-size: 1.35rem; letter-spacing: .3px;
+  direction: ltr; white-space: nowrap;
 }
 .logo__mark {
-  width: 36px; height: 36px;
-  display: grid; place-items: center;
-  border-radius: 10px;
-  background: var(--brand);
-  color: #04120a;
-  font-size: .95rem;
-  box-shadow: var(--brand-glow);
+  width: 36px; height: 36px; display: grid; place-items: center;
+  border-radius: 10px; background: var(--brand); color: var(--brand-ink);
+  font-size: .95rem; box-shadow: var(--brand-glow);
 }
 .logo__text b { color: var(--brand-strong); }
 [data-theme="dark"] .logo__text b { color: var(--brand); }
 
 .main-nav ul { list-style: none; margin: 0; padding: 0; display: flex; gap: 4px; }
 .main-nav a {
-  display: block;
-  padding: 8px 14px;
-  border-radius: 999px;
-  font-weight: 700;
-  font-size: .95rem;
-  color: var(--text-muted);
+  display: block; padding: 8px 14px; border-radius: 999px;
+  font-weight: 700; font-size: .95rem; color: var(--text-muted);
   transition: color .2s, background-color .2s;
 }
 .main-nav a:hover, .main-nav a.is-active { color: var(--text); background: var(--brand-soft); }
 
-.header-actions { display: flex; align-items: center; gap: 6px; }
+.header-actions { justify-self: end; display: flex; align-items: center; gap: 6px; }
 .icon-btn {
-  width: 42px; height: 42px;
-  display: grid; place-items: center;
-  border-radius: 12px;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text);
+  width: 42px; height: 42px; display: grid; place-items: center;
+  border-radius: 12px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text);
   transition: border-color .2s, box-shadow .2s, transform .1s;
 }
 .icon-btn:hover { border-color: var(--brand); box-shadow: var(--brand-glow); }
@@ -182,19 +185,14 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 [data-theme="dark"] .icon-moon { display: none; }
 .menu-toggle { display: none; }
 
-/* Mobile menu */
 @media (max-width: 860px) {
+  .header-inner { grid-template-columns: 1fr auto; }
   .menu-toggle { display: grid; }
   .main-nav {
-    position: fixed;
-    inset: var(--header-h) 0 auto 0;
-    background: var(--surface);
-    border-bottom: 1px solid var(--border);
-    box-shadow: var(--shadow);
+    position: fixed; inset: var(--header-h) 0 auto 0;
+    background: var(--surface); border-bottom: 1px solid var(--border); box-shadow: var(--shadow);
     padding: 10px 16px 16px;
-    transform: translateY(-8px);
-    opacity: 0;
-    visibility: hidden;
+    transform: translateY(-8px); opacity: 0; visibility: hidden;
     transition: opacity .2s, transform .2s, visibility .2s;
   }
   .main-nav.is-open { opacity: 1; transform: none; visibility: visible; }
@@ -203,142 +201,182 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 }
 
 /* ==========================================================================
-   4. Match Arena (16:9 player + ad spaces)
+   4. HOME: Today's matches
    ========================================================================== */
-.arena { padding-block: 20px 8px; }
-.arena-head {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  margin-bottom: 12px;
+.fixtures { padding-block: 24px 8px; }
+.fixtures-head {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px;
+  margin-bottom: 16px;
 }
-.arena-title { margin: 0; font-size: 1.25rem; font-weight: 800; }
-.live-pill {
+.fixtures-head .section-title { margin: 0; }
+.fixtures-date { color: var(--text-muted); font-weight: 700; font-size: .92rem; }
+
+.match-list { display: grid; grid-template-columns: 1fr; gap: 14px; }
+@media (min-width: 760px) { .match-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+.match-card {
+  display: block;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  transition: transform .25s ease, box-shadow .25s ease, border-color .25s ease;
+}
+a.match-card:hover { transform: translateY(-3px); box-shadow: var(--shadow-hover); border-color: var(--brand); color: inherit; }
+.match-card__top {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 9px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+  font-size: .8rem; color: var(--text-muted); font-weight: 700;
+}
+.match-card__league { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.match-card__body {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;   /* RTL: first column = right = Team A */
+  align-items: center;
+  gap: 10px;
+  padding: 18px 16px;
+}
+.team { display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 0; text-align: center; }
+.team__logo {
+  width: 56px; height: 56px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--surface-2); border: 1px solid var(--border);
+  overflow: hidden; font-weight: 800; color: var(--text-muted);
+}
+.team__logo img { width: 40px; height: 40px; object-fit: contain; }
+.team__name { font-weight: 800; font-size: .95rem; line-height: 1.4; max-width: 100%; overflow-wrap: anywhere; }
+.match-center { display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 92px; }
+.match-time {
+  direction: ltr; font-size: 1.35rem; font-weight: 800; letter-spacing: .5px;
+  padding: 4px 14px; border-radius: 10px; background: var(--surface-2);
+}
+.match-score {
+  /* Flex follows the page direction: first number = home team, on the home team's side */
   display: inline-flex; align-items: center; gap: 8px;
-  padding: 4px 12px; border-radius: 999px;
-  background: rgba(225, 29, 72, .1); color: var(--live);
-  font-weight: 800; font-size: .85rem;
+  font-size: 1.5rem; font-weight: 800;
+  padding: 2px 14px; border-radius: 10px; background: var(--surface-2);
 }
-.live-pill::before {
-  content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--live);
+.match-score .sep { color: var(--text-muted); font-weight: 600; }
+.match-status {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 2px 10px; border-radius: 999px; font-size: .74rem; font-weight: 800;
+  background: var(--surface-2); color: var(--text-muted);
+}
+.match-card--live { border-color: rgba(225, 29, 72, .35); }
+.match-card--live .match-status { background: var(--live-soft); color: var(--live); }
+.match-card--live .match-status::before {
+  content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--live);
   animation: pxl-pulse 1.6s infinite;
 }
+.match-card--live .match-score { color: var(--live); }
+.match-card--finished .match-score { color: var(--text-muted); }
+.match-card__bottom {
+  display: flex; justify-content: center; gap: 18px;
+  padding: 8px 16px; border-top: 1px solid var(--border);
+  font-size: .78rem; color: var(--text-muted);
+}
+.match-card__bottom span { display: inline-flex; align-items: center; gap: 6px; }
+.match-card__bottom svg { width: 14px; height: 14px; }
+
+/* Loading skeleton + messages for the API container */
+.match-skeleton { height: 150px; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--border); position: relative; overflow: hidden; }
+.match-skeleton::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent, var(--surface-2), transparent);
+  animation: pxl-shimmer 1.2s infinite;
+}
+@keyframes pxl-shimmer { from { transform: translateX(100%); } to { transform: translateX(-100%); } }
+.match-message {
+  grid-column: 1 / -1; padding: 28px 16px; text-align: center; color: var(--text-muted);
+  background: var(--surface); border: 1px dashed var(--border); border-radius: var(--radius);
+}
+
 @keyframes pxl-pulse {
   0% { box-shadow: 0 0 0 0 rgba(225, 29, 72, .6); }
   70% { box-shadow: 0 0 0 8px rgba(225, 29, 72, 0); }
   100% { box-shadow: 0 0 0 0 rgba(225, 29, 72, 0); }
 }
 
-.arena-grid {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 16px;
-  align-items: start;
+/* ==========================================================================
+   5. MATCH POST: streaming arena (16:9 player + ads)
+   ========================================================================== */
+.arena { padding-block: 20px 4px; }
+.arena-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin-bottom: 12px; }
+.arena-title { margin: 0; font-size: 1.35rem; line-height: 1.45; font-weight: 800; }
+.live-pill {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 4px 12px; border-radius: 999px;
+  background: var(--live-soft); color: var(--live); font-weight: 800; font-size: .85rem;
 }
+.live-pill::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--live); animation: pxl-pulse 1.6s infinite; }
+
+.arena-grid { display: grid; grid-template-columns: 1fr; gap: 16px; align-items: start; }
 .arena-center { min-width: 0; display: grid; gap: 14px; }
+@media (min-width: 1200px) {
+  .arena-grid { grid-template-columns: 160px minmax(0, 1fr) 160px; }
+}
 
 .player-frame {
-  position: relative;
-  width: 100%;
-  aspect-ratio: 16 / 9;
-  border-radius: var(--radius);
-  overflow: hidden;
-  background: #000;
-  box-shadow: var(--shadow);
-  border: 1px solid var(--border);
+  position: relative; width: 100%; aspect-ratio: 16 / 9;
+  border-radius: var(--radius); overflow: hidden; background: #000;
+  box-shadow: var(--shadow); border: 1px solid var(--border);
 }
 [data-theme="dark"] .player-frame { box-shadow: 0 0 0 1px rgba(62, 230, 62, .25), 0 0 40px rgba(62, 230, 62, .12); }
-@supports not (aspect-ratio: 16 / 9) {
-  .player-frame { height: 0; padding-top: 56.25%; }
-}
-.player-frame iframe,
-.player-frame .player-placeholder {
+@supports not (aspect-ratio: 16 / 9) { .player-frame { height: 0; padding-top: 56.25%; } }
+.player-frame iframe, .player-frame video, .player-placeholder {
   position: absolute; inset: 0; width: 100%; height: 100%; border: 0;
 }
 .player-placeholder {
-  display: grid; place-items: center; text-align: center;
+  display: grid; place-items: center; align-content: center; gap: 10px; text-align: center;
   color: #cfd6dd; font-weight: 700;
   background: radial-gradient(ellipse at center, #10161d 0%, #000 75%);
 }
+.player-placeholder svg { width: 54px; height: 54px; color: var(--brand); filter: drop-shadow(0 0 12px rgba(50, 205, 50, .5)); }
 
-/* Ad slots */
+/* Ad slots (post view only) */
 .ad-slot {
-  display: grid; place-items: center;
-  width: 100%;
+  display: grid; place-items: center; width: 100%;
   border-radius: var(--radius-sm);
   background: repeating-linear-gradient(45deg, var(--surface-2), var(--surface-2) 10px, var(--surface) 10px, var(--surface) 20px);
   border: 1px dashed var(--border);
-  color: var(--text-muted);
-  font-size: .8rem;
-  overflow: hidden;
+  color: var(--text-muted); font-size: .8rem; overflow: hidden;
 }
 .ad-slot .widget, .ad-slot .widget-content { width: 100%; display: grid; place-items: center; }
-.ad-slot--h { min-height: 100px; }          /* 320x100 on mobile, 728x90 on desktop */
-.ad-slot--v { min-height: 600px; }          /* 160x600 skyscrapers (desktop only) */
+.ad-slot--h { min-height: 100px; }   /* 320x100 mobile, 728x90 desktop */
+.ad-slot--v { min-height: 600px; }   /* 160x600 skyscraper */
 .ad-side { display: none; }
 .ad-label { padding: 8px; }
-
-@media (min-width: 768px) {
-  .ad-slot--h { min-height: 90px; }
-}
-@media (min-width: 1200px) {
-  .arena-grid { grid-template-columns: 160px minmax(0, 1fr) 160px; }
-  .ad-side { display: block; position: sticky; top: calc(var(--header-h) + 16px); }
-}
+@media (min-width: 768px) { .ad-slot--h { min-height: 90px; } }
+@media (min-width: 1200px) { .ad-side { display: grid; position: sticky; top: calc(var(--header-h) + 16px); } }
 
 /* ==========================================================================
-   5. Content + sidebar
+   6. Content + sidebar
    ========================================================================== */
-.content-wrap {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 24px;
-  padding-block: 24px 40px;
-}
-@media (min-width: 1024px) {
-  .content-wrap { grid-template-columns: minmax(0, 1fr) 320px; }
-}
+.content-wrap { display: grid; grid-template-columns: 1fr; gap: 24px; padding-block: 24px 40px; }
+@media (min-width: 1024px) { .content-wrap { grid-template-columns: minmax(0, 1fr) 320px; } }
 
-.section-title {
-  display: flex; align-items: center; gap: 10px;
-  margin: 0 0 16px; font-size: 1.2rem; font-weight: 800;
-}
-.section-title::before {
-  content: ''; width: 6px; height: 22px; border-radius: 4px; background: var(--brand); box-shadow: var(--brand-glow);
-}
-
-/* Post cards */
-.post-grid {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 18px;
-}
+/* Post cards (home "latest", label & search pages) */
+.post-grid { display: grid; grid-template-columns: 1fr; gap: 18px; }
 @media (min-width: 600px) { .post-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (min-width: 1280px) { .post-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-
 .card {
   display: flex; flex-direction: column;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  overflow: hidden;
-  box-shadow: var(--shadow);
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  overflow: hidden; box-shadow: var(--shadow);
   transition: transform .25s ease, box-shadow .25s ease, border-color .25s ease;
 }
 .card:hover { transform: translateY(-4px); box-shadow: var(--shadow-hover); border-color: var(--brand); }
-.card__media {
-  position: relative; display: block; aspect-ratio: 16 / 9; overflow: hidden; background: var(--surface-2);
-}
+.card__media { position: relative; display: block; aspect-ratio: 16 / 9; overflow: hidden; background: var(--surface-2); }
 .card__media img { width: 100%; height: 100%; object-fit: cover; transition: transform .45s ease; }
 .card:hover .card__media img { transform: scale(1.05); }
-.card__placeholder {
-  position: absolute; inset: 0; display: grid; place-items: center;
-  font-size: 2rem; font-weight: 800; color: var(--brand); direction: ltr;
-}
+.card__placeholder { position: absolute; inset: 0; display: grid; place-items: center; font-size: 2rem; font-weight: 800; color: var(--brand); direction: ltr; }
 .card__body { display: flex; flex-direction: column; gap: 8px; padding: 14px 16px 16px; flex: 1; }
 .card__tag {
-  align-self: flex-start;
-  padding: 2px 10px; border-radius: 999px;
-  background: var(--brand-soft); color: var(--brand-strong);
-  font-size: .78rem; font-weight: 800;
+  align-self: flex-start; padding: 2px 10px; border-radius: 999px;
+  background: var(--brand-soft); color: var(--brand-strong); font-size: .78rem; font-weight: 800;
 }
 [data-theme="dark"] .card__tag { color: var(--brand); }
 .card__title { margin: 0; font-size: 1.05rem; line-height: 1.5; font-weight: 800; }
@@ -347,57 +385,32 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
 }
 .card__date { margin-top: auto; color: var(--text-muted); font-size: .8rem; }
-
-.empty-state {
-  padding: 40px 16px; text-align: center; color: var(--text-muted);
-  background: var(--surface); border: 1px dashed var(--border); border-radius: var(--radius);
-}
-
-/* Pager */
+.empty-state { padding: 40px 16px; text-align: center; color: var(--text-muted); background: var(--surface); border: 1px dashed var(--border); border-radius: var(--radius); }
 .pager { display: flex; justify-content: space-between; gap: 12px; margin-top: 24px; }
 .pager a {
-  display: inline-flex; align-items: center; gap: 8px;
-  padding: 10px 18px; border-radius: 999px;
-  background: var(--surface); border: 1px solid var(--border);
-  font-weight: 700; box-shadow: var(--shadow);
+  display: inline-flex; align-items: center; gap: 8px; padding: 10px 18px; border-radius: 999px;
+  background: var(--surface); border: 1px solid var(--border); font-weight: 700; box-shadow: var(--shadow);
 }
 .pager a:hover { border-color: var(--brand); color: var(--text); box-shadow: var(--brand-glow); }
 
-/* Single post */
-.post-full {
-  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
-  padding: 22px; box-shadow: var(--shadow);
-}
-.post-full__title { margin: 0 0 6px; font-size: 1.6rem; line-height: 1.45; font-weight: 800; }
+/* Post / page article */
+.post-full { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 22px; box-shadow: var(--shadow); }
+.post-full__title { margin: 0 0 6px; font-size: 1.5rem; line-height: 1.45; font-weight: 800; }
 .post-meta { color: var(--text-muted); font-size: .88rem; margin-bottom: 18px; }
 .post-body { font-size: 1.02rem; overflow-wrap: anywhere; }
 .post-body img { border-radius: var(--radius-sm); margin-inline: auto; }
 .post-body a { color: var(--brand-strong); text-decoration: underline; text-underline-offset: 3px; }
 [data-theme="dark"] .post-body a { color: var(--brand); }
 .post-body iframe { max-width: 100%; }
-/* Use <div class="video-16x9"><iframe ...></iframe></div> inside a post for a responsive player */
-.post-body .video-16x9 { position: relative; aspect-ratio: 16 / 9; border-radius: var(--radius); overflow: hidden; background: #000; }
-.post-body .video-16x9 iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+.post-body [data-stream-src] { display: none; }
 .post-labels { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
 
 /* Sidebar */
 .sidebar { display: grid; gap: 18px; align-content: start; }
-.sidebar .widget {
-  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
-  padding: 16px; box-shadow: var(--shadow);
-}
-.sidebar .widget > h3, .widget-title {
-  margin: 0 0 12px; font-size: 1.02rem; font-weight: 800;
-  display: flex; align-items: center; gap: 8px;
-}
-.sidebar .widget > h3::before, .widget-title::before {
-  content: ''; width: 4px; height: 18px; border-radius: 3px; background: var(--brand);
-}
-@media (min-width: 1024px) {
-  .sidebar { position: sticky; top: calc(var(--header-h) + 16px); }
-}
-
-/* Standings table */
+.sidebar .widget { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow); }
+.widget-title { margin: 0 0 12px; font-size: 1.02rem; font-weight: 800; display: flex; align-items: center; gap: 8px; }
+.widget-title::before { content: ''; width: 4px; height: 18px; border-radius: 3px; background: var(--brand); }
+@media (min-width: 1024px) { .sidebar { position: sticky; top: calc(var(--header-h) + 16px); } }
 .standings { width: 100%; border-collapse: collapse; font-size: .88rem; }
 .standings th, .standings td { padding: 8px 6px; text-align: center; border-bottom: 1px solid var(--border); }
 .standings th { color: var(--text-muted); font-weight: 700; font-size: .78rem; }
@@ -408,31 +421,12 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 [data-theme="dark"] .standings tr.top .pos { color: var(--brand); }
 .standings .pts { font-weight: 800; }
 
-/* Live scores list */
-.scores { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
-.score-row {
-  display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px;
-  padding: 10px; border-radius: var(--radius-sm); background: var(--surface-2); font-size: .88rem;
-}
-.score-row .team-away { text-align: end; }
-.score-row .score {
-  min-width: 58px; text-align: center; font-weight: 800; direction: ltr;
-  padding: 2px 8px; border-radius: 8px; background: var(--surface);
-}
-.score-row.is-live .score { color: var(--live); box-shadow: inset 0 0 0 1px rgba(225, 29, 72, .35); }
-
 /* ==========================================================================
-   6. Footer
+   7. Footer
    ========================================================================== */
-.site-footer {
-  background: var(--surface);
-  border-top: 1px solid var(--border);
-  padding-top: 40px;
-}
+.site-footer { background: var(--surface); border-top: 1px solid var(--border); padding-top: 40px; }
 [data-theme="dark"] .site-footer { background: #05070a; }
-.footer-grid {
-  display: grid; grid-template-columns: 1fr; gap: 28px;
-}
+.footer-grid { display: grid; grid-template-columns: 1fr; gap: 28px; }
 @media (min-width: 640px) { .footer-grid { grid-template-columns: repeat(2, 1fr); } }
 @media (min-width: 1024px) { .footer-grid { grid-template-columns: 1.4fr 1fr 1fr 1fr; } }
 .footer-col h3 { margin: 0 0 12px; font-size: 1rem; font-weight: 800; }
@@ -442,20 +436,18 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .footer-links a:hover { color: var(--brand-strong); }
 .social { display: flex; flex-wrap: wrap; gap: 10px; }
 .social a {
-  width: 40px; height: 40px; display: grid; place-items: center;
-  border-radius: 12px; border: 1px solid var(--border); background: var(--surface-2);
+  width: 40px; height: 40px; display: grid; place-items: center; border-radius: 12px;
+  border: 1px solid var(--border); background: var(--surface-2);
   transition: border-color .2s, box-shadow .2s, color .2s;
 }
 .social a:hover { border-color: var(--brand); color: var(--brand-strong); box-shadow: var(--brand-glow); }
 .social svg { width: 18px; height: 18px; }
 .footer-bottom {
-  margin-top: 32px; padding-block: 18px;
-  border-top: 1px solid var(--border);
+  margin-top: 32px; padding-block: 18px; border-top: 1px solid var(--border);
   display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px;
   color: var(--text-muted); font-size: .85rem;
 }
 
-/* Reduced motion */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
@@ -464,16 +456,12 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 <!-- Layout editor (Theme > Layout) only -->
 <b:template-skin><![CDATA[
 body#layout { background: #f6f7f9; font-family: Arial, sans-serif; }
-body#layout .site-header, body#layout .arena, body#layout .content-wrap, body#layout .site-footer { padding: 10px; }
-body#layout .header-inner, body#layout .main-nav, body#layout .header-actions, body#layout .arena-head, body#layout .player-frame { display: none; }
-body#layout .arena-grid { display: flex; gap: 8px; }
-body#layout .arena-center { flex: 1; }
+body#layout .header-inner, body#layout .main-nav, body#layout .header-actions,
+body#layout .fixtures, body#layout .arena-head, body#layout .player-frame { display: none; }
+body#layout .arena-grid, body#layout .content-wrap, body#layout .footer-grid { display: flex; gap: 8px; }
+body#layout .arena-center, body#layout .content-main, body#layout .footer-grid > * { flex: 1; }
 body#layout .ad-side { display: block; width: 160px; }
-body#layout .content-wrap { display: flex; gap: 10px; }
-body#layout .content-main { flex: 1; }
 body#layout .sidebar { width: 320px; }
-body#layout .footer-grid { display: flex; gap: 8px; }
-body#layout .footer-grid > * { flex: 1; }
 ]]></b:template-skin>
 </head>
 
@@ -481,7 +469,7 @@ body#layout .footer-grid > * { flex: 1; }
   <a class='visually-hidden' href='#main-content'>تخطَّ إلى المحتوى</a>
 
   <!-- ======================================================================
-       HEADER
+       HEADER (all views)
        ====================================================================== -->
   <header class='site-header'>
     <div class='container header-inner'>
@@ -490,10 +478,8 @@ body#layout .footer-grid > * { flex: 1; }
         <span class='logo__text'>PX-<b>League</b></span>
       </a>
 
-      <!-- Menu: Home, Matches, Predictions, App.
-           "Matches" and "Predictions" open the Blogger labels of the same name:
-           tag your posts with the label Matches or Predictions.
-           Replace the App link (#) with your app's store / download page. -->
+      <!-- "المباريات" / "التوقعات" open the Blogger labels Matches / Predictions.
+           Replace the App link (#) with your app's download page. -->
       <nav aria-label='القائمة الرئيسية' class='main-nav' id='main-nav'>
         <ul>
           <li><a expr:class='data:view.isHomepage ? &quot;is-active&quot; : &quot;&quot;' expr:href='data:blog.homepageUrl'>الرئيسية</a></li>
@@ -516,19 +502,120 @@ body#layout .footer-grid > * { flex: 1; }
   </header>
 
   <!-- ======================================================================
-       MATCH ARENA (home page only; remove the b:if to show it on every page)
+       VIEW 1: HOME PAGE - Today's matches (no player, no ads)
        ====================================================================== -->
   <b:if cond='data:view.isHomepage'>
+  <section aria-labelledby='fixtures-title' class='fixtures'>
+    <div class='container'>
+      <div class='fixtures-head'>
+        <h1 class='section-title' id='fixtures-title'>مباريات اليوم</h1>
+        <span class='fixtures-date' id='fixtures-date'>&#160;</span>
+      </div>
+
+      <!-- ================================================================
+           MATCHES API CONTAINER
+           The cards below are a static demo of the Match Card component.
+           When MATCHES_API_URL (script at the bottom) is set, the script
+           replaces them with your live data.
+           Card layout (RTL): Team A right | time / score center | Team B left
+           ================================================================ -->
+      <div aria-live='polite' class='match-list' id='matches-api-container'>
+
+        <a class='match-card match-card--live' href='#'>
+          <div class='match-card__top'>
+            <span class='match-card__league'>الدوري الإسباني</span>
+            <span>الجولة 14</span>
+          </div>
+          <div class='match-card__body'>
+            <div class='team'>
+              <span class='team__logo'>RM</span>
+              <span class='team__name'>ريال مدريد</span>
+            </div>
+            <div class='match-center'>
+              <span class='match-score'><span>2</span><span class='sep'>-</span><span>1</span></span>
+              <span class='match-status'>مباشر 67'</span>
+            </div>
+            <div class='team'>
+              <span class='team__logo'>FCB</span>
+              <span class='team__name'>برشلونة</span>
+            </div>
+          </div>
+          <div class='match-card__bottom'>
+            <span><svg aria-hidden='true' fill='none' stroke='currentColor' stroke-width='2' viewBox='0 0 24 24'><rect height='13' rx='2' width='20' x='2' y='7'/><path d='m17 2-5 5-5-5'/></svg>beIN Sports 1</span>
+            <span><svg aria-hidden='true' fill='none' stroke='currentColor' stroke-linecap='round' stroke-width='2' viewBox='0 0 24 24'><path d='M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3zM19 11a7 7 0 0 1-14 0M12 18v4'/></svg>عصام الشوالي</span>
+          </div>
+        </a>
+
+        <a class='match-card' href='#'>
+          <div class='match-card__top'>
+            <span class='match-card__league'>الدوري الإنجليزي الممتاز</span>
+            <span>الجولة 14</span>
+          </div>
+          <div class='match-card__body'>
+            <div class='team'>
+              <span class='team__logo'>MCI</span>
+              <span class='team__name'>مانشستر سيتي</span>
+            </div>
+            <div class='match-center'>
+              <span class='match-time'>22:00</span>
+              <span class='match-status'>لم تبدأ</span>
+            </div>
+            <div class='team'>
+              <span class='team__logo'>LIV</span>
+              <span class='team__name'>ليفربول</span>
+            </div>
+          </div>
+          <div class='match-card__bottom'>
+            <span><svg aria-hidden='true' fill='none' stroke='currentColor' stroke-width='2' viewBox='0 0 24 24'><rect height='13' rx='2' width='20' x='2' y='7'/><path d='m17 2-5 5-5-5'/></svg>beIN Sports 2</span>
+            <span><svg aria-hidden='true' fill='none' stroke='currentColor' stroke-linecap='round' stroke-width='2' viewBox='0 0 24 24'><path d='M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3zM19 11a7 7 0 0 1-14 0M12 18v4'/></svg>حفيظ دراجي</span>
+          </div>
+        </a>
+
+        <a class='match-card match-card--finished' href='#'>
+          <div class='match-card__top'>
+            <span class='match-card__league'>الدوري المصري</span>
+            <span>الجولة 9</span>
+          </div>
+          <div class='match-card__body'>
+            <div class='team'>
+              <span class='team__logo'>AHL</span>
+              <span class='team__name'>الأهلي</span>
+            </div>
+            <div class='match-center'>
+              <span class='match-score'><span>1</span><span class='sep'>-</span><span>1</span></span>
+              <span class='match-status'>انتهت</span>
+            </div>
+            <div class='team'>
+              <span class='team__logo'>ZAM</span>
+              <span class='team__name'>الزمالك</span>
+            </div>
+          </div>
+          <div class='match-card__bottom'>
+            <span><svg aria-hidden='true' fill='none' stroke='currentColor' stroke-width='2' viewBox='0 0 24 24'><rect height='13' rx='2' width='20' x='2' y='7'/><path d='m17 2-5 5-5-5'/></svg>ON Sport</span>
+            <span><svg aria-hidden='true' fill='none' stroke='currentColor' stroke-linecap='round' stroke-width='2' viewBox='0 0 24 24'><path d='M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3zM19 11a7 7 0 0 1-14 0M12 18v4'/></svg>مدحت شلبي</span>
+          </div>
+        </a>
+
+      </div>
+    </div>
+  </section>
+  </b:if>
+
+  <!-- ======================================================================
+       VIEW 2: MATCH POST - Live streaming arena (player + ads)
+       The stream iframe comes from the post body (see the note at the top).
+       ====================================================================== -->
+  <b:if cond='data:view.isPost'>
   <section aria-label='البث المباشر' class='arena'>
     <div class='container'>
       <div class='arena-head'>
-        <h1 class='arena-title'>مباراة اليوم</h1>
         <span class='live-pill'>مباشر</span>
+        <h1 class='arena-title'><data:view.title.escaped/></h1>
       </div>
 
       <div class='arena-grid'>
-        <!-- Side ad (desktop >= 1200px): 160x600. In RTL this column is on the right. -->
-        <b:section class='ad-side ad-slot ad-slot--v' id='ad-left' maxwidgets='1' showaddelement='yes'>
+        <!-- Side skyscraper 160x600 (desktop >= 1200px). RTL: right side -->
+        <b:section class='ad-side ad-slot ad-slot--v' id='ad-side-right' maxwidgets='1' showaddelement='yes'>
           <b:widget id='HTML11' locked='false' title='' type='HTML' version='2' visible='true'>
             <b:widget-settings>
               <b:widget-setting name='content'><![CDATA[<div class="ad-label">مساحة إعلانية 160×600</div>]]></b:widget-setting>
@@ -538,7 +625,7 @@ body#layout .footer-grid > * { flex: 1; }
         </b:section>
 
         <div class='arena-center'>
-          <!-- Top ad: 728x90 (desktop) / 320x100 (mobile) -->
+          <!-- Top ad 728x90 (320x100 on mobile) -->
           <b:section class='ad-slot ad-slot--h' id='ad-top' maxwidgets='1' showaddelement='yes'>
             <b:widget id='HTML10' locked='false' title='' type='HTML' version='2' visible='true'>
               <b:widget-settings>
@@ -548,33 +635,20 @@ body#layout .footer-grid > * { flex: 1; }
             </b:widget>
           </b:section>
 
-          <!-- ==================================================================
-               LIVE PLAYER: edit it in Layout > "Match player" (HTML widget).
-               Paste your iframe inside <div class="player-frame"> ... </div>, e.g.:
+          <!-- ==============================================================
+               16:9 PLAYER BOX
+               Filled automatically from the post body: a
+               <div data-stream-src="https://..."></div> or the first <iframe>.
+               You do NOT paste the iframe here (this box is shared by all posts).
+               ============================================================== -->
+          <div class='player-frame' id='px-player-slot'>
+            <div class='player-placeholder'>
+              <svg aria-hidden='true' fill='currentColor' viewBox='0 0 24 24'><path d='M8 5.14v13.72a1 1 0 0 0 1.52.85l10.9-6.86a1 1 0 0 0 0-1.7L9.52 4.29A1 1 0 0 0 8 5.14z'/></svg>
+              <span>سيبدأ البث قريبًا</span>
+            </div>
+          </div>
 
-               <div class="player-frame">
-                 <iframe src="https://live.smarterwho.site/player/?channel=b1"
-                         allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
-                         allowfullscreen="true" loading="eager"
-                         referrerpolicy="strict-origin-when-cross-origin"
-                         title="PX-League Live"></iframe>
-               </div>
-
-               The 16:9 box, rounded corners and glow come from the .player-frame class.
-               ================================================================== -->
-          <b:section class='match-player' id='match-player' maxwidgets='1' showaddelement='yes'>
-            <b:widget id='HTML20' locked='false' title='Match player' type='HTML' version='2' visible='true'>
-              <b:widget-settings>
-                <b:widget-setting name='content'><![CDATA[<div class="player-frame">
-  <!-- INSERT YOUR STREAMING IFRAME HERE (replace the placeholder div below) -->
-  <div class="player-placeholder">ضع كود مشغّل البث هنا</div>
-</div>]]></b:widget-setting>
-              </b:widget-settings>
-              <b:includable id='main'><data:content/></b:includable>
-            </b:widget>
-          </b:section>
-
-          <!-- Bottom ad: 728x90 (desktop) / 320x100 (mobile) -->
+          <!-- Bottom ad 728x90 (320x100 on mobile) -->
           <b:section class='ad-slot ad-slot--h' id='ad-bottom' maxwidgets='1' showaddelement='yes'>
             <b:widget id='HTML12' locked='false' title='' type='HTML' version='2' visible='true'>
               <b:widget-settings>
@@ -585,8 +659,8 @@ body#layout .footer-grid > * { flex: 1; }
           </b:section>
         </div>
 
-        <!-- Side ad (desktop >= 1200px): 160x600. In RTL this column is on the left. -->
-        <b:section class='ad-side ad-slot ad-slot--v' id='ad-right' maxwidgets='1' showaddelement='yes'>
+        <!-- Side skyscraper 160x600 (desktop >= 1200px). RTL: left side -->
+        <b:section class='ad-side ad-slot ad-slot--v' id='ad-side-left' maxwidgets='1' showaddelement='yes'>
           <b:widget id='HTML13' locked='false' title='' type='HTML' version='2' visible='true'>
             <b:widget-settings>
               <b:widget-setting name='content'><![CDATA[<div class="ad-label">مساحة إعلانية 160×600</div>]]></b:widget-setting>
@@ -600,7 +674,11 @@ body#layout .footer-grid > * { flex: 1; }
   </b:if>
 
   <!-- ======================================================================
-       MAIN CONTENT + SIDEBAR
+       CONTENT (all views) + SIDEBAR
+       - Home: latest match posts as cards
+       - Post: match details (title is in the arena above)
+       - Page: plain article
+       - Label / search: cards
        ====================================================================== -->
   <div class='container content-wrap'>
     <main class='content-main' id='main-content'>
@@ -608,14 +686,15 @@ body#layout .footer-grid > * { flex: 1; }
         <b:widget id='Blog1' locked='true' title='المنشورات' type='Blog' version='2' visible='true'>
           <b:includable id='main'>
             <b:if cond='data:view.isSingleItem'>
-              <!-- Single post / page -->
               <b:loop values='data:posts' var='post'>
                 <article class='post-full'>
-                  <h1 class='post-full__title'><data:post.title/></h1>
-                  <div class='post-meta'>
-                    <time expr:datetime='data:post.date.iso8601'><data:post.date/></time>
-                  </div>
-                  <div class='post-body'><data:post.body/></div>
+                  <b:if cond='data:view.isPage'>
+                    <h1 class='post-full__title'><data:post.title/></h1>
+                  <b:else/>
+                    <h2 class='post-full__title'>تفاصيل المباراة</h2>
+                    <div class='post-meta'><time expr:datetime='data:post.date.iso8601'><data:post.date/></time></div>
+                  </b:if>
+                  <div class='post-body' id='px-post-body'><data:post.body/></div>
                   <b:if cond='data:post.labels'>
                     <div class='post-labels'>
                       <b:loop values='data:post.labels' var='label'>
@@ -626,9 +705,8 @@ body#layout .footer-grid > * { flex: 1; }
                 </article>
               </b:loop>
             <b:else/>
-              <!-- Home / label / search: card grid -->
               <h2 class='section-title'>
-                <b:if cond='data:view.isLabelSearch'><data:view.search.label/><b:else/>آخر المباريات والأخبار</b:if>
+                <b:if cond='data:view.isLabelSearch'><data:view.search.label/><b:elseif cond='data:view.isHomepage'/>أحدث صفحات المباريات<b:else/>المنشورات</b:if>
               </h2>
               <b:if cond='data:posts.empty'>
                 <div class='empty-state'>لا توجد منشورات بعد.</div>
@@ -655,11 +733,10 @@ body#layout .footer-grid > * { flex: 1; }
                   </b:loop>
                 </div>
               </b:if>
-
               <nav aria-label='التنقل بين الصفحات' class='pager'>
                 <b:if cond='data:newerPageUrl'>
                   <a expr:href='data:newerPageUrl'>&#8594; الأحدث</a>
-                <b:else/><span/>
+                <b:else/><span>&#160;</span>
                 </b:if>
                 <b:if cond='data:olderPageUrl'>
                   <a expr:href='data:olderPageUrl'>الأقدم &#8592;</a>
@@ -671,9 +748,6 @@ body#layout .footer-grid > * { flex: 1; }
       </b:section>
     </main>
 
-    <!-- ====================================================================
-         SIDEBAR: replace the sample data in Layout (Standings / Live scores).
-         ==================================================================== -->
     <aside aria-label='الشريط الجانبي' class='sidebar'>
       <b:section class='sidebar-section' id='sidebar' showaddelement='yes'>
         <b:widget id='HTML30' locked='false' title='جدول الترتيب' type='HTML' version='2' visible='true'>
@@ -694,26 +768,12 @@ body#layout .footer-grid > * { flex: 1; }
             <div class='widget-content'><data:content/></div>
           </b:includable>
         </b:widget>
-
-        <b:widget id='HTML31' locked='false' title='نتائج مباشرة' type='HTML' version='2' visible='true'>
-          <b:widget-settings>
-            <b:widget-setting name='content'><![CDATA[<ul class="scores">
-  <li class="score-row is-live"><span>الفريق أ</span><span class="score">2 - 1</span><span class="team-away">الفريق ب</span></li>
-  <li class="score-row"><span>الفريق ج</span><span class="score">20:45</span><span class="team-away">الفريق د</span></li>
-  <li class="score-row"><span>الفريق هـ</span><span class="score">0 - 0</span><span class="team-away">الفريق و</span></li>
-</ul>]]></b:widget-setting>
-          </b:widget-settings>
-          <b:includable id='main'>
-            <b:if cond='data:title'><h3 class='widget-title'><data:title/></h3></b:if>
-            <div class='widget-content'><data:content/></div>
-          </b:includable>
-        </b:widget>
       </b:section>
     </aside>
   </div>
 
   <!-- ======================================================================
-       FOOTER
+       FOOTER (all views)
        ====================================================================== -->
   <footer class='site-footer'>
     <div class='container'>
@@ -780,14 +840,12 @@ body#layout .footer-grid > * { flex: 1; }
   </footer>
 
   <!-- ======================================================================
-       Theme toggle + mobile menu (vanilla JS)
+       Global UI: theme toggle, mobile menu, footer year
        ====================================================================== -->
   <script>
   //<![CDATA[
   (function () {
     var root = document.documentElement;
-
-    // Light / dark toggle (saved in localStorage; storage may be blocked -> still toggles)
     var toggle = document.getElementById('theme-toggle');
     function applyTheme(theme) {
       root.setAttribute('data-theme', theme);
@@ -802,7 +860,6 @@ body#layout .footer-grid > * { flex: 1; }
       try { localStorage.setItem('pxl-theme', next); } catch (e) {}
     });
 
-    // Mobile menu
     var menuBtn = document.getElementById('menu-toggle');
     var nav = document.getElementById('main-nav');
     function setMenu(open) {
@@ -815,11 +872,208 @@ body#layout .footer-grid > * { flex: 1; }
     document.addEventListener('keydown', function (e) { if (e.key === 'Escape') setMenu(false); });
     window.addEventListener('resize', function () { if (window.innerWidth > 860) setMenu(false); });
 
-    // Footer year
     var y = document.getElementById('pxl-year');
     if (y) y.textContent = String(new Date().getFullYear());
   })();
   //]]>
   </script>
+
+  <b:if cond='data:view.isPost'>
+  <!-- ======================================================================
+       POST VIEW: move the post's stream into the 16:9 player box
+       Accepts in the post body:
+         <div data-stream-src="https://live.smarterwho.site/player/?channel=b1"></div>
+         or the first <iframe> of the post.
+       ====================================================================== -->
+  <script>
+  //<![CDATA[
+  (function () {
+    var slot = document.getElementById('px-player-slot');
+    var body = document.getElementById('px-post-body');
+    if (!slot || !body) return;
+
+    var frame = null;
+    var marker = body.querySelector('[data-stream-src]');
+    if (marker) {
+      var src = marker.getAttribute('data-stream-src') || '';
+      if (/^https:\/\//i.test(src)) {
+        frame = document.createElement('iframe');
+        frame.src = src;
+      }
+      marker.remove();
+    } else {
+      frame = body.querySelector('iframe');
+    }
+    if (!frame) return;   // no stream in this post: keep the "starting soon" placeholder
+
+    frame.setAttribute('allow', 'autoplay; fullscreen; encrypted-media; picture-in-picture');
+    frame.setAttribute('allowfullscreen', 'true');
+    frame.setAttribute('title', document.title);
+    frame.removeAttribute('width');
+    frame.removeAttribute('height');
+    frame.removeAttribute('style');
+    slot.textContent = '';
+    slot.appendChild(frame);
+  })();
+  //]]>
+  </script>
+  </b:if>
+
+  <b:if cond='data:view.isHomepage'>
+  <!-- ======================================================================
+       HOME VIEW: MATCHES API (placeholder - plug in your API / Worker here)
+
+       1. Set MATCHES_API_URL to your endpoint. Leave it '' to keep the static demo cards.
+       2. The endpoint should return JSON like:
+          { "matches": [ {
+              "league": "الدوري الإسباني", "round": "الجولة 14",
+              "status": "live" | "upcoming" | "finished", "statusText": "مباشر 67'",
+              "time": "22:00",                              (shown when upcoming)
+              "score": { "home": 2, "away": 1 },            (shown when live/finished)
+              "home": { "name": "ريال مدريد", "logo": "https://..." },
+              "away": { "name": "برشلونة",   "logo": "https://..." },
+              "channel": "beIN Sports 1", "commentator": "...",
+              "url": "https://your-blog/2026/11/match-post.html"   (the match post)
+          } ] }
+          Adapt mapMatch() if your API uses other field names.
+       3. All text is inserted with textContent (never innerHTML), so API data
+          cannot inject HTML or scripts into the page.
+       ====================================================================== -->
+  <script>
+  //<![CDATA[
+  (function () {
+    var MATCHES_API_URL = '';            // e.g. 'https://your-worker.workers.dev/api/matches'
+    var REFRESH_MS = 60 * 1000;          // refresh live scores every minute
+
+    var container = document.getElementById('matches-api-container');
+    var dateEl = document.getElementById('fixtures-date');
+    if (!container) return;
+
+    try {
+      dateEl.textContent = new Intl.DateTimeFormat('ar-EG', { weekday: 'long', day: 'numeric', month: 'long' }).format(new Date());
+    } catch (e) {}
+
+    if (!MATCHES_API_URL) return;        // demo mode: keep the static cards
+
+    // Map your API's fields to the card fields (adapt here if needed)
+    function mapMatch(m) {
+      return {
+        league: m.league || '',
+        round: m.round || '',
+        status: m.status || 'upcoming',
+        statusText: m.statusText || '',
+        time: m.time || '--:--',
+        scoreHome: m.score && m.score.home != null ? m.score.home : 0,
+        scoreAway: m.score && m.score.away != null ? m.score.away : 0,
+        home: { name: (m.home && m.home.name) || '', logo: (m.home && m.home.logo) || '' },
+        away: { name: (m.away && m.away.name) || '', logo: (m.away && m.away.logo) || '' },
+        channel: m.channel || '',
+        commentator: m.commentator || '',
+        url: m.url || ''
+      };
+    }
+
+    function el(tag, className, text) {
+      var node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text != null) node.textContent = String(text);
+      return node;
+    }
+
+    function teamNode(team) {
+      var wrap = el('div', 'team');
+      var logo = el('span', 'team__logo');
+      if (/^https?:\/\//i.test(team.logo)) {
+        var img = document.createElement('img');
+        img.src = team.logo;
+        img.alt = team.name;
+        img.loading = 'lazy';
+        img.referrerPolicy = 'no-referrer';
+        img.onerror = function () { logo.textContent = team.name.slice(0, 2); };
+        logo.appendChild(img);
+      } else {
+        logo.textContent = team.name.slice(0, 2);
+      }
+      wrap.appendChild(logo);
+      wrap.appendChild(el('span', 'team__name', team.name));
+      return wrap;
+    }
+
+    var STATUS_TEXT = { live: 'مباشر', upcoming: 'لم تبدأ', finished: 'انتهت' };
+
+    function matchCard(m) {
+      var safeUrl = /^https?:\/\//i.test(m.url) ? m.url : '';
+      var card = el(safeUrl ? 'a' : 'div', 'match-card' + (m.status === 'live' ? ' match-card--live' : m.status === 'finished' ? ' match-card--finished' : ''));
+      if (safeUrl) card.href = safeUrl;
+
+      var top = el('div', 'match-card__top');
+      top.appendChild(el('span', 'match-card__league', m.league));
+      top.appendChild(el('span', '', m.round));
+      card.appendChild(top);
+
+      var body = el('div', 'match-card__body');
+      body.appendChild(teamNode(m.home));                       // RTL: right
+      var center = el('div', 'match-center');
+      if (m.status === 'upcoming') center.appendChild(el('span', 'match-time', m.time));
+      else {
+        var score = el('span', 'match-score');           // home first = home team's side
+        score.appendChild(el('span', '', m.scoreHome));
+        score.appendChild(el('span', 'sep', '-'));
+        score.appendChild(el('span', '', m.scoreAway));
+        center.appendChild(score);
+      }
+      center.appendChild(el('span', 'match-status', m.statusText || STATUS_TEXT[m.status] || ''));
+      body.appendChild(center);
+      body.appendChild(teamNode(m.away));                       // RTL: left
+      card.appendChild(body);
+
+      if (m.channel || m.commentator) {
+        var bottom = el('div', 'match-card__bottom');
+        if (m.channel) bottom.appendChild(el('span', '', m.channel));
+        if (m.commentator) bottom.appendChild(el('span', '', m.commentator));
+        card.appendChild(bottom);
+      }
+      return card;
+    }
+
+    function showSkeleton() {
+      container.textContent = '';
+      for (var i = 0; i < 4; i++) container.appendChild(el('div', 'match-skeleton'));
+    }
+    function showMessage(text) {
+      container.textContent = '';
+      container.appendChild(el('div', 'match-message', text));
+    }
+    function render(list) {
+      if (!list.length) { showMessage('لا توجد مباريات اليوم.'); return; }
+      var frag = document.createDocumentFragment();
+      list.forEach(function (m) { frag.appendChild(matchCard(m)); });
+      container.textContent = '';
+      container.appendChild(frag);
+    }
+
+    var firstLoad = true;
+    function load() {
+      if (firstLoad) showSkeleton();
+      var ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+      var timer = setTimeout(function () { if (ctrl) ctrl.abort(); }, 10000);
+      fetch(MATCHES_API_URL, { headers: { Accept: 'application/json' }, signal: ctrl ? ctrl.signal : undefined })
+        .then(function (res) { if (!res.ok) throw new Error('HTTP ' + res.status); return res.json(); })
+        .then(function (data) {
+          var list = (data && Array.isArray(data.matches) ? data.matches : []).map(mapMatch);
+          render(list);
+        })
+        .catch(function () {
+          if (firstLoad) showMessage('تعذّر تحميل المباريات حاليًا. سنحاول مجددًا بعد قليل.');
+        })
+        .then(function () { clearTimeout(timer); firstLoad = false; });
+    }
+
+    load();
+    setInterval(function () { if (!document.hidden) load(); }, REFRESH_MS);
+  })();
+  //]]>
+  </script>
+  </b:if>
 </body>
 </html>
