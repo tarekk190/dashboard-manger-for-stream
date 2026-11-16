@@ -35,9 +35,12 @@
   <title><b:if cond='data:view.isHomepage'><data:blog.title.escaped/><b:else/><data:view.title.escaped/> | <data:blog.title.escaped/></b:if></title>
   <b:include data='blog' name='all-head-content'/>
 
-  <!-- Apply the saved theme before the first paint (no light/dark flash) -->
+  <!-- SETTINGS: your Cloudflare Worker URL (no trailing slash). Used by the
+       home-page matches and the sidebar standings table.
+       Apply the saved theme before the first paint (no light/dark flash). -->
   <script>
   //<![CDATA[
+  window.PXL_WORKER_BASE_URL = 'https://<MY_WORKER_URL>';   // e.g. 'https://px-api.your-name.workers.dev'
   (function () {
     var theme = 'light';
     try { theme = localStorage.getItem('pxl-theme') === 'dark' ? 'dark' : 'light'; } catch (e) {}
@@ -470,6 +473,21 @@ a.match-card:hover { transform: translateY(-3px); border-color: var(--brand); bo
 .standings tr.top .pos { color: var(--brand-strong); }
 [data-theme="dark"] .standings tr.top .pos { color: var(--brand); }
 .standings .pts { font-weight: 800; }
+.standings .team-cell { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.standings .team-cell img { width: 20px; height: 20px; object-fit: contain; flex-shrink: 0; }
+.standings .team-cell span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.standings .diff { direction: ltr; }
+.standings tr.standings-state td { padding: 22px 6px; color: var(--text-muted); font-size: .82rem; }
+.px-mini-spinner {
+  display: inline-block; width: 26px; height: 26px; border-radius: 50%;
+  border: 3px solid rgba(50, 205, 50, 0.2); border-top-color: #32CD32;
+  animation: px-mini-spin .8s linear infinite;
+}
+@keyframes px-mini-spin { to { transform: rotate(360deg); } }
+.standings-retry {
+  margin-top: 8px; padding: 4px 14px; border: 0; border-radius: 999px;
+  background: #32CD32; color: #04120a; font: inherit; font-weight: 800; cursor: pointer;
+}
 
 /* ==========================================================================
    7. Footer
@@ -727,12 +745,8 @@ body#layout .sidebar { width: 320px; }
           <b:widget-settings>
             <b:widget-setting name='content'><![CDATA[<table class="standings">
   <thead><tr><th>#</th><th>الفريق</th><th>لعب</th><th>+/-</th><th>نقاط</th></tr></thead>
-  <tbody>
-    <tr class="top"><td class="pos">1</td><td>الفريق أ</td><td>12</td><td>+18</td><td class="pts">30</td></tr>
-    <tr class="top"><td class="pos">2</td><td>الفريق ب</td><td>12</td><td>+12</td><td class="pts">27</td></tr>
-    <tr class="top"><td class="pos">3</td><td>الفريق ج</td><td>12</td><td>+9</td><td class="pts">24</td></tr>
-    <tr><td class="pos">4</td><td>الفريق د</td><td>12</td><td>+4</td><td class="pts">21</td></tr>
-    <tr><td class="pos">5</td><td>الفريق هـ</td><td>12</td><td>+1</td><td class="pts">18</td></tr>
+  <tbody id="standings-table-body">
+    <tr class="standings-state"><td colspan="5"><span class="px-mini-spinner"></span></td></tr>
   </tbody>
 </table>]]></b:widget-setting>
           </b:widget-settings>
@@ -851,6 +865,127 @@ body#layout .sidebar { width: 320px; }
   //]]>
   </script>
 
+  <!-- ======================================================================
+       SIDEBAR STANDINGS - fetchStandings(championshipId)
+       Runs on every page that shows the sidebar "جدول الترتيب" widget.
+
+       STANDINGS_PATH must match a route your Worker forwards to the ysscores
+       standings endpoint ({id} is replaced by the championship id).
+       Rows are read in the ysscores format (team_name.short_title / .image,
+       play, diff, points; rank = position in the list) and also accept
+       generic fields (rank, team / name, logo, played, goal_difference, points).
+       ====================================================================== -->
+  <script>
+  //<![CDATA[
+  (function () {
+    'use strict';
+
+    var WORKER_BASE_URL = window.PXL_WORKER_BASE_URL || '';
+    var STANDINGS_PATH = '/api/tournaments/standings/{id}';
+    // Premier League on ysscores: championship 6811, current season id 937599
+    var DEFAULT_CHAMPIONSHIP_ID = '937599';
+    var MAX_ROWS = 20;                       // rows shown in the sidebar
+    var TOP_ROWS = 4;                        // highlighted positions
+    var TEAM_LOGO_BASE = 'https://imgs.ysscores.com/teams/128/';
+
+    var tbody = document.getElementById('standings-table-body');
+    if (!tbody) return;
+
+    var ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+    function esc(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) { return ESC[c]; }); }
+    function pick() {
+      for (var i = 0; i < arguments.length; i++) if (arguments[i] != null && arguments[i] !== '') return arguments[i];
+      return '';
+    }
+    function logoUrl(value) {
+      var v = String(value || '').trim();
+      if (/^https:\/\//i.test(v)) return v;
+      return /^[\w.-]+\.(png|jpe?g|webp|gif|svg)$/i.test(v) ? TEAM_LOGO_BASE + encodeURIComponent(v) : '';
+    }
+
+    // Finds the rows array in the common response shapes:
+    // { data: [...] }, { data: { standings: [...] } }, { standings: [...] }, [...],
+    // or grouped tables ([[...], [...]] / { data: [ { standings: [...] } ] }) -> first table
+    function rowsFrom(json) {
+      var d = json && json.data != null ? json.data : json;
+      if (d && !Array.isArray(d)) d = d.standings || d.table || d.rows || d.teams || [];
+      if (!Array.isArray(d)) return [];
+      if (Array.isArray(d[0])) return d[0];
+      if (d[0] && Array.isArray(d[0].standings)) return d[0].standings;
+      if (d[0] && Array.isArray(d[0].rows)) return d[0].rows;
+      return d;
+    }
+
+    function parseRow(r, i) {
+      var tn = r.team_name && typeof r.team_name === 'object' ? r.team_name : {};
+      var team = r.team && typeof r.team === 'object' ? r.team : {};
+      var diff = pick(r.diff, r.goal_difference, r.goalDifference, r.gd,
+        (r.for != null && r.against != null) ? Number(r.for) - Number(r.against) : '');
+      return {
+        rank: Number(pick(r.rank, r.position, r.pos, i + 1)) || i + 1,
+        name: pick(tn.short_title, tn.title, team.name, team.title, typeof r.team_name === 'string' ? r.team_name : '', r.name, r.title),
+        logo: logoUrl(pick(tn.image, team.logo, team.image, r.logo, r.image)),
+        played: pick(r.play, r.played, r.matches, r.games, 0),
+        diff: diff === '' ? 0 : Number(diff),
+        points: pick(r.points, r.pts, 0)
+      };
+    }
+
+    function stateRow(html) {
+      tbody.innerHTML = '<tr class="standings-state"><td colspan="5">' + html + '</td></tr>';
+    }
+
+    function render(rows) {
+      if (!rows.length) { stateRow('لا يتوفر جدول الترتيب حاليًا.'); return; }
+      tbody.innerHTML = rows.slice(0, MAX_ROWS).map(function (t) {
+        var diffText = t.diff > 0 ? '+' + t.diff : String(t.diff);
+        return `<tr${t.rank <= TOP_ROWS ? ' class="top"' : ''}>
+          <td class="pos">${esc(t.rank)}</td>
+          <td><span class="team-cell">${t.logo ? `<img src="${esc(t.logo)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}<span>${esc(t.name)}</span></span></td>
+          <td>${esc(t.played)}</td>
+          <td class="diff">${esc(diffText)}</td>
+          <td class="pts">${esc(t.points)}</td>
+        </tr>`;
+      }).join('');
+    }
+
+    async function fetchStandings(championshipId) {
+      stateRow('<span class="px-mini-spinner"></span>');
+      if (!WORKER_BASE_URL || WORKER_BASE_URL.indexOf('<MY_WORKER_URL>') !== -1) {
+        console.error('[PX League] Set PXL_WORKER_BASE_URL (top of the theme) to load the standings.');
+        return;                                                  // keep the spinner
+      }
+      var url = WORKER_BASE_URL + STANDINGS_PATH.replace('{id}', encodeURIComponent(championshipId));
+      for (var attempt = 1; attempt <= 3; attempt++) {
+        var ctrl = new AbortController();
+        var timer = setTimeout(function () { ctrl.abort(); }, 9000);
+        try {
+          var res = await fetch(url, { headers: { Accept: 'application/json' }, signal: ctrl.signal });
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          var json = await res.json();
+          if (json && json.status === false) throw new Error(json.message || 'API status false');
+          render(rowsFrom(json).map(parseRow).sort(function (a, b) { return a.rank - b.rank; }));
+          return;
+        } catch (err) {
+          if (attempt === 3) {
+            console.warn('[PX League] standings:', err);
+            stateRow('تعذّر تحميل الترتيب.<br/><button class="standings-retry" type="button">إعادة المحاولة</button>');
+            tbody.querySelector('.standings-retry').addEventListener('click', function () { fetchStandings(championshipId); });
+          } else {
+            await new Promise(function (r) { setTimeout(r, 1000 * attempt); });
+          }
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+    }
+
+    window.fetchStandings = fetchStandings;                      // e.g. fetchStandings('938652') for La Liga
+    fetchStandings(DEFAULT_CHAMPIONSHIP_ID);
+  })();
+  //]]>
+  </script>
+
   <b:if cond='data:view.isPost'>
   <!-- ======================================================================
        POST VIEW: move the post's stream into the 16:9 player box
@@ -896,7 +1031,7 @@ body#layout .sidebar { width: 320px; }
   <!-- ======================================================================
        HOME VIEW: MATCHES API - real data from your Cloudflare Worker (no mock data)
 
-       1. Paste your Worker URL into WORKER_BASE_URL (no trailing slash).
+       1. Set your Worker URL once in PXL_WORKER_BASE_URL at the top of this file (SETTINGS).
        2. Endpoints (your Worker forwards them to api-ar.ysscores.com):
             {WORKER_BASE_URL}/api/matches/matches_date_get/{YYYY-MM-DD}/[]/[]/["8634"]/D/60
             {WORKER_BASE_URL}/api/matches/match_info/{match_id}/D/60      (live matches only)
@@ -916,7 +1051,7 @@ body#layout .sidebar { width: 320px; }
     'use strict';
 
     // ------------------------------------------------------------------ configuration
-    var WORKER_BASE_URL = 'https://<MY_WORKER_URL>';           // e.g. 'https://px-api.your-name.workers.dev'
+    var WORKER_BASE_URL = window.PXL_WORKER_BASE_URL || '';    // set once at the top of the file (SETTINGS)
     var MATCH_FILTERS = '[]/[]/["8634"]';
     var TEAM_LOGO_BASE = 'https://imgs.ysscores.com/teams/128/';
     var LEAGUE_LOGO_BASE = 'https://imgs.ysscores.com/championship/64/';
@@ -1154,9 +1289,9 @@ body#layout .sidebar { width: 320px; }
       loading = true;
       if (!silent || !hasData) showLoading();
       try {
-        if (WORKER_BASE_URL.indexOf('<MY_WORKER_URL>') !== -1) {
+        if (!WORKER_BASE_URL || WORKER_BASE_URL.indexOf('<MY_WORKER_URL>') !== -1) {
           // Not configured yet: keep the spinner, tell the site owner in the console
-          console.error('[PX League] Set WORKER_BASE_URL to your Cloudflare Worker URL.');
+          console.error('[PX League] Set PXL_WORKER_BASE_URL (top of the theme) to your Cloudflare Worker URL.');
           return;
         }
         var json = await fetchJson(matchesUrl(cairoDate(new Date())), MAX_ATTEMPTS);
