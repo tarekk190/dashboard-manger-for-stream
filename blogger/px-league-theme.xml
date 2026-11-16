@@ -456,6 +456,174 @@ a.match-card:hover { transform: translateY(-3px); border-color: var(--brand); bo
 [data-theme="dark"] .post-body a { color: var(--brand); }
 .post-body iframe { max-width: 100%; }
 .post-body [data-stream-src] { display: none; }
+/* Standard article typography */
+.post-full__title[hidden] { display: none; }
+.post-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.post-meta__sep { opacity: .6; }
+.post-body { line-height: 1.95; }
+.post-body > :first-child { margin-top: 0; }
+.post-body p { margin: 0 0 1.1em; }
+.post-body h2, .post-body h3, .post-body h4 { margin: 1.6em 0 .6em; line-height: 1.5; font-weight: 800; }
+.post-body h2 { font-size: 1.3rem; padding-inline-start: 12px; border-inline-start: 4px solid var(--brand); }
+.post-body h3 { font-size: 1.12rem; }
+.post-body h4 { font-size: 1rem; }
+.post-body ul, .post-body ol { margin: 0 0 1.1em; padding-inline-start: 1.4em; }
+.post-body li { margin-bottom: .35em; }
+.post-body li::marker { color: var(--brand-strong); }
+.post-body blockquote {
+  margin: 1.4em 0; padding: 14px 18px; border-radius: var(--radius-sm);
+  background: var(--surface-2); border-inline-start: 4px solid var(--brand); color: var(--text);
+}
+.post-body table { width: 100%; border-collapse: collapse; margin: 1.2em 0; font-size: .95rem; display: block; overflow-x: auto; }
+.post-body th, .post-body td { padding: 10px 12px; border: 1px solid var(--border); text-align: start; }
+.post-body th { background: var(--surface-2); font-weight: 800; }
+.post-body .tr-caption-container { display: table; margin: 1.2em auto; }
+.post-body .tr-caption { font-size: .85rem; color: var(--text-muted); padding-top: 6px; }
+.post-body hr { border: 0; height: 1px; background: var(--border); margin: 2em 0; }
+.post-body code { padding: 2px 6px; border-radius: 6px; background: var(--surface-2); font-size: .9em; direction: ltr; unicode-bidi: isolate; }
+.post-body iframe, .post-body video { display: block; width: 100%; aspect-ratio: 16 / 9; height: auto; border: 0; border-radius: var(--radius-sm); margin: 1.2em 0; }
+.empty-state--404 { display: grid; justify-items: center; gap: 10px; padding: 56px 16px; }
+.empty-state--404 strong { font-size: 3rem; line-height: 1; color: var(--brand-strong); }
+.empty-state--404 p { margin: 0; }
+.empty-state--404 .px-retry { text-decoration: none; }
+
+/* ============================ Match details page ============================ */
+.match-page { display: grid; gap: 16px; }
+.match-hero {
+  position: relative; overflow: hidden;
+  border-radius: var(--radius); border: 1px solid #1f2937;
+  background:
+    radial-gradient(120% 90% at 50% -10%, rgba(50, 205, 50, .18), transparent 60%),
+    linear-gradient(165deg, #0b1220 0%, #0f172a 55%, #0b1a10 100%);
+  color: #f1f5f9; box-shadow: 0 18px 40px rgba(2, 6, 23, .35);
+  min-height: 240px;
+}
+.match-hero .px-loader, .match-hero .match-message { color: #cbd5e1; min-height: 240px; }
+.mh__league {
+  display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 8px 10px;
+  padding: 14px 16px 0; font-size: .85rem; font-weight: 700; color: #94a3b8; text-align: center;
+}
+.mh__league img { width: 22px; height: 22px; object-fit: contain; }
+.mh__league b { color: #e2e8f0; }
+.mh__teams { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 12px; padding: 22px 16px 14px; }
+.mh__team { display: grid; justify-items: center; gap: 10px; text-align: center; min-width: 0; }
+.mh__logo {
+  width: 84px; height: 84px; border-radius: 50%; display: grid; place-items: center;
+  background: rgba(255, 255, 255, .06); border: 1px solid rgba(255, 255, 255, .12);
+  box-shadow: 0 0 0 6px rgba(255, 255, 255, .02);
+}
+.mh__logo img { width: 58px; height: 58px; object-fit: contain; }
+.mh__logo span { font-weight: 800; color: #94a3b8; }
+.mh__name { font-size: 1.05rem; font-weight: 800; line-height: 1.4; overflow-wrap: anywhere; }
+.mh__center { display: grid; justify-items: center; gap: 10px; min-width: 120px; }
+.mh__score { display: inline-flex; align-items: center; gap: 12px; font-size: 2.6rem; font-weight: 900; line-height: 1; letter-spacing: 1px; }
+.mh__score .sep { color: #475569; font-size: 1.8rem; }
+.match-hero--live .mh__score { color: #32CD32; text-shadow: 0 0 22px rgba(50, 205, 50, .35); }
+.mh__time { direction: ltr; font-size: 2rem; font-weight: 900; padding: 4px 16px; border-radius: 12px; background: rgba(255, 255, 255, .06); }
+.mh__badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 12px; border-radius: 999px; font-size: .78rem; font-weight: 800; background: rgba(255, 255, 255, .08); color: #cbd5e1; }
+.mh__badge--live { background: rgba(255, 59, 92, .16); color: #ff5c78; }
+.mh__badge--live::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: #ff3b5c; animation: pxl-pulse 1.6s infinite; }
+.mh__ht { font-size: .8rem; color: #94a3b8; }
+.mh__meta {
+  list-style: none; margin: 0; padding: 12px 16px 16px;
+  display: flex; flex-wrap: wrap; justify-content: center; gap: 8px;
+  border-top: 1px solid rgba(255, 255, 255, .06);
+}
+.mh__meta li {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 12px; border-radius: 999px; font-size: .8rem; font-weight: 700;
+  background: rgba(255, 255, 255, .05); border: 1px solid rgba(255, 255, 255, .07); color: #cbd5e1;
+}
+.mh__meta svg { width: 15px; height: 15px; color: #32CD32; flex: 0 0 auto; }
+@media (max-width: 520px) {
+  .mh__logo { width: 64px; height: 64px; } .mh__logo img { width: 44px; height: 44px; }
+  .mh__name { font-size: .92rem; } .mh__score { font-size: 2rem; } .mh__time { font-size: 1.5rem; }
+  .mh__center { min-width: 92px; }
+}
+
+.match-tabs {
+  display: flex; gap: 6px; padding: 6px; border-radius: 999px;
+  background: #0f172a; border: 1px solid #334155; position: sticky; top: 70px; z-index: 5;
+}
+.match-tab {
+  flex: 1 1 0; padding: 10px 14px; border: 0; border-radius: 999px; cursor: pointer;
+  background: transparent; color: #cbd5e1; font: inherit; font-weight: 800; font-size: .92rem;
+  transition: background-color .2s, color .2s, box-shadow .2s;
+}
+.match-tab:hover { color: #fff; }
+.match-tab.is-active { background: #32CD32; color: #04120a; box-shadow: 0 0 16px rgba(50, 205, 50, .4); }
+.match-tab:focus-visible { outline: 2px solid #32CD32; outline-offset: 2px; }
+.match-panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 16px; min-height: 180px; animation: px-fade-in .3s ease both; }
+.match-panel[hidden] { display: none; }
+.match-panel .match-message { padding: 40px 12px; }
+
+/* Events timeline: home side | minute | away side (RTL: home on the right) */
+.ev-list { list-style: none; margin: 0; padding: 0; position: relative; }
+.ev-list::before { content: ''; position: absolute; inset-block: 0; inset-inline-start: 50%; width: 2px; transform: translateX(50%); background: var(--border); }
+.ev { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 54px minmax(0, 1fr); align-items: center; gap: 10px; padding: 7px 0; }
+.ev__min {
+  grid-column: 2; justify-self: center; z-index: 1;
+  min-width: 46px; padding: 3px 6px; border-radius: 999px; text-align: center;
+  background: var(--surface-2); border: 1px solid var(--border); font-size: .78rem; font-weight: 800;
+}
+.ev__body { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 8px 12px; border-radius: 12px; background: var(--surface-2); }
+.ev--home .ev__body { grid-column: 1; grid-row: 1; justify-self: end; flex-direction: row-reverse; text-align: end; }
+.ev--away .ev__body { grid-column: 3; grid-row: 1; justify-self: start; }
+.ev__icon { flex: 0 0 auto; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: var(--surface); }
+.ev__icon svg { width: 16px; height: 16px; }
+.ev__txt { display: grid; gap: 2px; min-width: 0; }
+.ev__txt b { font-size: .9rem; overflow-wrap: anywhere; }
+.ev__txt small { color: var(--text-muted); font-size: .76rem; }
+.ev--goal .ev__body { background: rgba(50, 205, 50, .12); box-shadow: inset 0 0 0 1px rgba(50, 205, 50, .35); }
+.ev--goal .ev__icon { color: var(--brand-strong); }
+.ev__in { color: #16a34a; } .ev__out { color: #e11d48; }
+.card-ico { display: inline-block; width: 11px; height: 15px; border-radius: 2px; }
+.card-ico--y { background: #facc15; } .card-ico--r { background: #e11d48; }
+.card-ico--yr { background: linear-gradient(135deg, #facc15 50%, #e11d48 50%); }
+.ev.ev--period { grid-template-columns: 1fr; }
+.ev--period .ev__period {
+  justify-self: center; z-index: 1; padding: 5px 14px; white-space: nowrap; border-radius: 999px;
+  background: #0f172a; color: #e2e8f0; border: 1px solid #334155; font-size: .78rem; font-weight: 800;
+}
+.ev--period .ev__period b { color: #32CD32; margin-inline-start: 8px; display: inline-block; }
+@media (max-width: 520px) { .ev { grid-template-columns: minmax(0, 1fr) 46px minmax(0, 1fr); gap: 6px; } .ev__body { padding: 6px 8px; gap: 6px; } .ev__icon { width: 24px; height: 24px; } }
+
+/* Lineups */
+.lu-grid { display: grid; gap: 16px; }
+@media (min-width: 900px) { .lu-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.lu-team { display: grid; gap: 12px; align-content: start; }
+.lu-head { display: flex; align-items: center; gap: 10px; font-weight: 800; }
+.lu-head img { width: 30px; height: 30px; object-fit: contain; }
+.lu-formation { margin-inline-start: auto; padding: 3px 10px; border-radius: 999px; background: #0f172a; color: #32CD32; border: 1px solid #334155; font-size: .8rem; direction: ltr; }
+.pitch {
+  position: relative; display: flex; flex-direction: column-reverse; justify-content: space-between; gap: 10px;
+  min-height: 420px; padding: 18px 8px; border-radius: 14px; overflow: hidden;
+  background:
+    linear-gradient(rgba(255, 255, 255, .14), rgba(255, 255, 255, .14)) center / 100% 2px no-repeat,
+    repeating-linear-gradient(0deg, #14532d 0 42px, #166534 42px 84px);
+  border: 2px solid rgba(255, 255, 255, .18);
+}
+.pitch::before { content: ''; position: absolute; left: 50%; top: 50%; width: 90px; height: 90px; border: 2px solid rgba(255, 255, 255, .14); border-radius: 50%; transform: translate(-50%, -50%); }
+.pitch__line { position: relative; display: flex; justify-content: space-around; gap: 4px; }
+.pl { display: grid; justify-items: center; gap: 4px; width: 72px; text-align: center; color: #fff; }
+.pl__num {
+  position: relative; width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center;
+  background: #0f172a; border: 2px solid #32CD32; font-weight: 900; font-size: .85rem;
+}
+.pl--gk .pl__num { border-color: #facc15; }
+.pl__name { font-size: .72rem; font-weight: 800; line-height: 1.3; text-shadow: 0 1px 2px rgba(0, 0, 0, .6); overflow-wrap: anywhere; }
+.pl__tags { display: flex; gap: 3px; justify-content: center; min-height: 14px; }
+.pl__rating { position: absolute; top: -8px; inset-inline-end: -14px; padding: 0 4px; border-radius: 6px; font-size: .62rem; font-weight: 800; background: #32CD32; color: #04120a; }
+.pl__cap { position: absolute; bottom: -6px; inset-inline-start: -8px; width: 16px; height: 16px; border-radius: 50%; font-size: .6rem; display: grid; place-items: center; background: #facc15; color: #0f172a; font-weight: 900; }
+.tag-goal { font-size: .7rem; } .tag-sub { color: #fda4af; font-size: .7rem; }
+.lu-sub-title { margin: 4px 0 0; font-size: .92rem; font-weight: 800; }
+.lu-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.lu-list li { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; background: var(--surface-2); font-size: .88rem; }
+.lu-list .n { flex: 0 0 auto; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: var(--surface); border: 1px solid var(--border); font-weight: 800; font-size: .78rem; }
+.lu-list .meta { margin-inline-start: auto; display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: .76rem; }
+.lu-list .r { padding: 1px 6px; border-radius: 6px; background: var(--brand-soft); color: var(--brand-strong); font-weight: 800; }
+.lu-coach { margin: 0; color: var(--text-muted); font-size: .85rem; }
+.lu-coach b { color: var(--text); }
 .post-labels { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
 
 /* Sidebar */
@@ -703,7 +871,7 @@ body#layout .sidebar { width: 320px; }
           <li><a expr:class='data:view.isHomepage ? &quot;is-active&quot; : &quot;&quot;' expr:href='data:blog.homepageUrl'>الرئيسية</a></li>
           <li><a expr:href='data:blog.homepageUrl + &quot;search/label/Matches&quot;'>المباريات</a></li>
           <li><a expr:href='data:blog.homepageUrl + &quot;search/label/Predictions&quot;'>التوقعات</a></li>
-          <li><a expr:class='data:blog.canonicalUrl == data:blog.homepageUrl + &quot;p/standings.html&quot; ? &quot;is-active&quot; : &quot;&quot;' expr:href='data:blog.homepageUrl + &quot;p/standings.html&quot;'>الترتيب</a></li>
+          <li><a expr:class='data:view.url contains &quot;/p/standings.html&quot; ? &quot;is-active&quot; : &quot;&quot;' expr:href='data:blog.homepageUrl + &quot;p/standings.html&quot;'>الترتيب</a></li>
           <li><a href='#app-download'>التطبيق</a></li>
         </ul>
       </nav>
@@ -768,7 +936,7 @@ body#layout .sidebar { width: 320px; }
        The stream iframe comes from the post body (see the note at the top).
        ====================================================================== -->
   <b:if cond='data:view.isPost'>
-  <section aria-label='البث المباشر' class='arena'>
+  <section aria-label='البث المباشر' class='arena' hidden='hidden' id='px-arena'>
     <div class='container'>
       <div class='arena-head'>
         <span class='live-pill'>مباشر</span>
@@ -844,46 +1012,79 @@ body#layout .sidebar { width: 320px; }
        ====================================================================== -->
   <div class='container content-wrap'>
     <main class='content-main' id='main-content'>
+      <!-- ==================================================================
+           MAIN COLUMN
+           1. /p/standings.html -> standings layout (league filter + tables)
+           2. /p/match.html?id= -> match details layout (hero + tabs)
+           3. everything else   -> the standard Blog widget: home news, posts,
+              pages, labels, search and the 404 view.
+           Create the two pages in Blogger (Pages -> New page, any body text)
+           so they return HTTP 200; the theme replaces their body.
+           ================================================================== -->
+      <b:if cond='data:view.url contains &quot;/p/standings.html&quot;'>
+      <!-- ============================================================
+           STANDINGS PAGE (/p/standings.html): league filter + table(s)
+           League ids are ysscores season ids (verified with the
+           standings endpoint). Add / change leagues here: data-id = id.
+           ============================================================ -->
+      <section aria-labelledby='standings-title' class='standings-page'>
+        <div class='standings-page__head'>
+          <h1 class='section-title' id='standings-title'>ترتيب الدوريات</h1>
+          <p class='standings-page__sub'>اختر الدوري لعرض جدول الترتيب المحدّث.</p>
+        </div>
+        <div aria-label='اختر الدوري' class='league-filter' id='league-filter' role='tablist'>
+          <button aria-selected='true' class='league-chip is-active' data-id='937599' role='tab' type='button'>الدوري الإنجليزي</button>
+          <button aria-selected='false' class='league-chip' data-id='938652' role='tab' type='button'>الدوري الإسباني</button>
+          <button aria-selected='false' class='league-chip' data-id='936357' role='tab' type='button'>الدوري الإيطالي</button>
+          <button aria-selected='false' class='league-chip' data-id='938769' role='tab' type='button'>الدوري الألماني</button>
+          <button aria-selected='false' class='league-chip' data-id='937873' role='tab' type='button'>الدوري الفرنسي</button>
+          <button aria-selected='false' class='league-chip' data-id='941825' role='tab' type='button'>دوري روشن السعودي</button>
+          <button aria-selected='false' class='league-chip' data-id='938823' role='tab' type='button'>الدوري البرتغالي</button>
+          <button aria-selected='false' class='league-chip' data-id='939779' role='tab' type='button'>الدوري التركي</button>
+          <button aria-selected='false' class='league-chip' data-id='939531' role='tab' type='button'>الدوري الإماراتي</button>
+          <button aria-selected='false' class='league-chip' data-id='941155' role='tab' type='button'>الدوري القطري</button>
+          <button aria-selected='false' class='league-chip' data-id='20580897' role='tab' type='button'>دوري أبطال أفريقيا</button>
+        </div>
+        <div aria-live='polite' class='standings-board' id='standings-board'>
+          <div class='standings-loading' role='status'><span class='px-mini-spinner'>&#160;</span><span>جاري تحميل الترتيب...</span></div>
+        </div>
+      </section>
+
+      <b:elseif cond='data:view.url contains &quot;/p/match.html&quot;'/>
+      <!-- ============================================================
+           MATCH DETAILS PAGE (/p/match.html?id=MATCH_ID)
+           Filled by fetchMatchDetails() (script at the end of the body).
+           ============================================================ -->
+      <section aria-label='تفاصيل المباراة' class='match-page' id='match-page'>
+        <div class='match-hero' id='match-hero'>
+          <div class='px-loader' role='status'><span class='px-spinner'>&#160;</span><span>جاري تحميل المباراة...</span></div>
+        </div>
+        <div aria-label='أقسام المباراة' class='match-tabs' role='tablist'>
+          <button aria-controls='match-tab-events' aria-selected='true' class='match-tab is-active' data-tab='events' id='match-tabbtn-events' role='tab' type='button'>أحداث اللقاء</button>
+          <button aria-controls='match-tab-lineups' aria-selected='false' class='match-tab' data-tab='lineups' id='match-tabbtn-lineups' role='tab' tabindex='-1' type='button'>التشكيلات</button>
+        </div>
+        <div aria-labelledby='match-tabbtn-events' class='match-panel' id='match-tab-events' role='tabpanel'>
+          <div class='px-loader'><span class='px-spinner'>&#160;</span></div>
+        </div>
+        <div aria-labelledby='match-tabbtn-lineups' class='match-panel' hidden='hidden' id='match-tab-lineups' role='tabpanel'>
+          <div class='px-loader'><span class='px-spinner'>&#160;</span></div>
+        </div>
+      </section>
+
+      <b:else/>
       <b:section class='main' id='main' maxwidgets='1' showaddelement='no'>
         <b:widget id='Blog1' locked='true' title='المنشورات' type='Blog' version='2' visible='true'>
           <b:includable id='main'>
             <b:if cond='data:view.isSingleItem'>
-              <b:if cond='data:view.isPage and data:blog.canonicalUrl == data:blog.homepageUrl + &quot;p/standings.html&quot;'>
-              <!-- ============================================================
-                   STANDINGS PAGE (/p/standings.html): league filter + table(s)
-                   League ids are ysscores season ids (verified with the
-                   standings endpoint). Add / change leagues here: data-id = id.
-                   ============================================================ -->
-              <section aria-labelledby='standings-title' class='standings-page'>
-                <div class='standings-page__head'>
-                  <h1 class='section-title' id='standings-title'>ترتيب الدوريات</h1>
-                  <p class='standings-page__sub'>اختر الدوري لعرض جدول الترتيب المحدّث.</p>
-                </div>
-                <div aria-label='اختر الدوري' class='league-filter' id='league-filter' role='tablist'>
-                  <button aria-selected='true' class='league-chip is-active' data-id='937599' role='tab' type='button'>الدوري الإنجليزي</button>
-                  <button aria-selected='false' class='league-chip' data-id='938652' role='tab' type='button'>الدوري الإسباني</button>
-                  <button aria-selected='false' class='league-chip' data-id='936357' role='tab' type='button'>الدوري الإيطالي</button>
-                  <button aria-selected='false' class='league-chip' data-id='938769' role='tab' type='button'>الدوري الألماني</button>
-                  <button aria-selected='false' class='league-chip' data-id='937873' role='tab' type='button'>الدوري الفرنسي</button>
-                  <button aria-selected='false' class='league-chip' data-id='941825' role='tab' type='button'>دوري روشن السعودي</button>
-                  <button aria-selected='false' class='league-chip' data-id='938823' role='tab' type='button'>الدوري البرتغالي</button>
-                  <button aria-selected='false' class='league-chip' data-id='939779' role='tab' type='button'>الدوري التركي</button>
-                  <button aria-selected='false' class='league-chip' data-id='939531' role='tab' type='button'>الدوري الإماراتي</button>
-                  <button aria-selected='false' class='league-chip' data-id='941155' role='tab' type='button'>الدوري القطري</button>
-                  <button aria-selected='false' class='league-chip' data-id='20580897' role='tab' type='button'>دوري أبطال أفريقيا</button>
-                </div>
-                <div aria-live='polite' class='standings-board' id='standings-board'>
-                  <div class='standings-loading' role='status'><span class='px-mini-spinner'>&#160;</span><span>جاري تحميل الترتيب...</span></div>
-                </div>
-              </section>
-              <b:else/>
+              <!-- Standard post / page -->
               <b:loop values='data:posts' var='post'>
                 <article class='post-full'>
-                  <b:if cond='data:view.isPage'>
-                    <h1 class='post-full__title'><data:post.title/></h1>
-                  <b:else/>
-                    <h2 class='post-full__title'>تفاصيل المباراة</h2>
-                    <div class='post-meta'><time expr:datetime='data:post.date.iso8601'><data:post.date/></time></div>
+                  <h1 class='post-full__title' id='px-post-title'><data:post.title/></h1>
+                  <b:if cond='data:view.isPost'>
+                    <div class='post-meta'>
+                      <time expr:datetime='data:post.date.iso8601'><data:post.date/></time>
+                      <b:if cond='data:post.author.name'><span class='post-meta__sep'>&#183;</span><span><data:post.author.name/></span></b:if>
+                    </div>
                   </b:if>
                   <div class='post-body' id='px-post-body'><data:post.body/></div>
                   <b:if cond='data:post.labels'>
@@ -895,7 +1096,13 @@ body#layout .sidebar { width: 320px; }
                   </b:if>
                 </article>
               </b:loop>
-              </b:if>
+            <b:elseif cond='data:view.isError'/>
+              <!-- 404 -->
+              <div class='empty-state empty-state--404'>
+                <strong>404</strong>
+                <p>الصفحة التي تبحث عنها غير موجودة أو تم نقلها.</p>
+                <a class='px-retry' expr:href='data:blog.homepageUrl'>العودة للرئيسية</a>
+              </div>
             <b:else/>
               <h2 class='section-title'>
                 <b:if cond='data:view.isLabelSearch'><data:view.search.label/><b:elseif cond='data:view.isHomepage'/>أحدث الأخبار<b:else/>المنشورات</b:if>
@@ -974,6 +1181,7 @@ body#layout .sidebar { width: 320px; }
           </b:includable>
         </b:widget>
       </b:section>
+      </b:if>
     </main>
 
     <aside aria-label='الشريط الجانبي' class='sidebar'>
@@ -1105,7 +1313,7 @@ body#layout .sidebar { width: 320px; }
   //]]>
   </script>
 
-  <b:if cond='data:view.isPage and data:blog.canonicalUrl == data:blog.homepageUrl + &quot;p/standings.html&quot;'>
+  <b:if cond='data:view.url contains &quot;/p/standings.html&quot;'>
   <!-- ======================================================================
        STANDINGS PAGE - fetchStandings(championshipId) + league filter
        Runs only on /p/standings.html.
@@ -1316,6 +1524,389 @@ body#layout .sidebar { width: 320px; }
   </script>
   </b:if>
 
+  <b:if cond='data:view.url contains &quot;/p/match.html&quot;'>
+  <!-- ======================================================================
+       MATCH DETAILS PAGE - fetchMatchDetails()
+       Runs only on /p/match.html?id=MATCH_ID (home match cards link here).
+       Worker routes (forwarded to api-ar.ysscores.com/api/matches/...):
+         /api/matches/match_info/{id}/D/60     hero: teams, score, stadium, referee, channel
+         /api/matches/matches_event/{id}/D/60  events (verified type codes:
+             1 goal, 4 own goal, 5 penalty goal, 2 yellow, 3 red (status 7 = 2nd yellow),
+             8 substitution (player = off, assist_player = on; status 9 = injury),
+             100 period marker (status 1 kick-off, 2 half-time, 3 2nd half, 4 full-time).
+             Unverified codes (21, 22, ...) are not shown.)
+         /api/matches/matches_lineup/{id}/D/60 lineups, formation, coach, injuries
+       Live matches refresh every 30 s while the tab is visible.
+       ====================================================================== -->
+  <script>
+  //<![CDATA[
+  (function () {
+    'use strict';
+
+    var WORKER_BASE_URL = window.PXL_WORKER_BASE_URL || '';
+    var TEAM_LOGO_BASE = 'https://imgs.ysscores.com/teams/128/';
+    var LEAGUE_LOGO_BASE = 'https://imgs.ysscores.com/championship/64/';
+    var LIVE_WINDOW_MS = 3.5 * 60 * 60 * 1000;
+    var REFRESH_MS = 30 * 1000;
+
+    var page = document.getElementById('match-page');
+    if (!page) return;
+    var hero = document.getElementById('match-hero');
+    var panels = { events: document.getElementById('match-tab-events'), lineups: document.getElementById('match-tab-lineups') };
+    var tabs = Array.prototype.slice.call(page.querySelectorAll('.match-tab'));
+
+    // ------------------------------------------------------------------ helpers
+    var ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+    function esc(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) { return ESC[c]; }); }
+    function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+    function imageUrl(base, file) {
+      var f = file ? String(file).trim() : '';
+      return /^[\w.-]+\.(png|jpe?g|webp|gif|svg)$/i.test(f) ? base + encodeURIComponent(f) : '';
+    }
+    function nameOf(x) {                                         // player / referee objects or plain strings
+      if (!x) return '';
+      if (typeof x === 'string') return x;
+      return x.short_title || x.title || x.full_title || '';
+    }
+    function cairo(unix, opts) {
+      try { return new Intl.DateTimeFormat('ar-EG', Object.assign({ timeZone: 'Africa/Cairo' }, opts)).format(new Date(unix * 1000)); }
+      catch (e) { return ''; }
+    }
+    function cairoTime(unix) {
+      if (!unix) return '--:--';
+      return new Intl.DateTimeFormat('en-GB', { timeZone: 'Africa/Cairo', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(unix * 1000));
+    }
+    function api(kind, id) { return WORKER_BASE_URL + '/api/matches/' + kind + '/' + encodeURIComponent(id) + '/D/60'; }
+
+    async function fetchJson(url, attempts) {
+      for (var i = 1; ; i++) {
+        var ctrl = new AbortController();
+        var timer = setTimeout(function () { ctrl.abort(); }, 10000);
+        try {
+          var res = await fetch(url, { headers: { Accept: 'application/json' }, cache: 'no-store', signal: ctrl.signal });
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          var json = await res.json();
+          if (json && json.status === false) throw new Error(json.message || 'API status false');
+          return json && json.data != null ? json.data : json;
+        } catch (err) {
+          if (i >= attempts) throw err;
+          await wait(1000 * i);
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+    }
+
+    // Same rules as the home cards: 0 upcoming, 4 finished, other codes live near kick-off
+    function statusOf(d) {
+      var s = Number(d.status);
+      if (s === 0) return 'upcoming';
+      if (s === 4) return 'finished';
+      var k = Number(d.match_timestamp) * 1000, now = Date.now();
+      return k && now >= k - 10 * 60 * 1000 && now <= k + LIVE_WINDOW_MS ? 'live' : 'other';
+    }
+    // 'minutes' = seconds since the current half started; status 1 = 1st half, 3 = 2nd half
+    function liveMinute(status, seconds) {
+      var secs = Number(seconds);
+      if (!(secs > 0)) return '';
+      var m = Math.floor(secs / 60) + 1, st = Number(status);
+      if (st === 1) return m > 45 ? '45+' + (m - 45) : String(m);
+      if (st === 3) { var t = 45 + m; return t > 90 ? '90+' + (t - 90) : String(t); }
+      return '';
+    }
+
+    // ------------------------------------------------------------------ icons
+    var I = {
+      ball: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m12 7 4 3-1.5 5h-5L8 10z" fill="currentColor"/></svg>',
+      sub: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path class="ev__in" d="M7 20V8m0 0-4 4m4-4 4 4"/><path class="ev__out" d="M17 4v12m0 0 4-4m-4 4-4-4"/></svg>',
+      cal: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/></svg>',
+      pin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 22s7-6.1 7-12a7 7 0 0 0-14 0c0 5.9 7 12 7 12z"/><circle cx="12" cy="10" r="2.5"/></svg>',
+      whistle: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="9" cy="14" r="6"/><path d="M13 9.5 21 6v4l-6.5 2"/></svg>',
+      tv: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="m17 2-5 5-5-5"/></svg>',
+      mic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 11a7 7 0 0 1-14 0M12 18v4"/></svg>'
+    };
+    function cardIcon(kind) { return '<span class="card-ico card-ico--' + kind + '"></span>'; }
+
+    // ------------------------------------------------------------------ hero
+    function teamBlock(t) {
+      var logo = imageUrl(TEAM_LOGO_BASE, t.image);
+      var name = t.full_title || t.title || '';
+      return `<div class="mh__team">
+          <span class="mh__logo">${logo ? `<img src="${esc(logo)}" alt="${esc(name)}" referrerpolicy="no-referrer" onerror="this.replaceWith(document.createTextNode(''))">` : `<span>${esc(name.slice(0, 2))}</span>`}</span>
+          <span class="mh__name">${esc(name)}</span>
+        </div>`;
+    }
+    function halfTimeScore(ev) {                                 // fh_scores: [{home_scores}, {away_scores}]
+      var fh = ev && Array.isArray(ev.fh_scores) ? ev.fh_scores : null;
+      if (!fh) return '';
+      var h = fh.find(function (x) { return x && x.home_scores != null; });
+      var a = fh.find(function (x) { return x && x.away_scores != null; });
+      return h && a ? h.home_scores + ' - ' + a.away_scores : '';
+    }
+    function renderHero(d, ev) {
+      var st = statusOf(d);
+      var minute = st === 'live' ? liveMinute(d.status, d.minutes) : '';
+      var champ = d.championship || {};
+      var champLogo = imageUrl(LEAGUE_LOGO_BASE, champ.image);
+      var center = st === 'upcoming' || st === 'other'
+        ? `<span class="mh__time">${esc(cairoTime(Number(d.match_timestamp)))}</span>`
+        : `<span class="mh__score"><span>${esc(d.home_scores != null ? d.home_scores : 0)}</span><span class="sep">-</span><span>${esc(d.away_scores != null ? d.away_scores : 0)}</span></span>`;
+      var badge = st === 'live'
+        ? `<span class="mh__badge mh__badge--live">مباشر${minute ? ` <span dir="ltr">${esc(minute)}'</span>` : ''}</span>`
+        : `<span class="mh__badge">${st === 'finished' ? 'انتهت' : st === 'upcoming' ? 'لم تبدأ' : 'غير محدد'}</span>`;
+      var ht = st !== 'upcoming' ? halfTimeScore(ev) : '';
+      var cc = Array.isArray(d.channel_commm) && d.channel_commm.length ? d.channel_commm[0] : {};
+      var ts = Number(d.match_timestamp);
+      var meta = [
+        ts ? [I.cal, cairo(ts, { weekday: 'long', day: 'numeric', month: 'long' }) + ' · ' + cairoTime(ts)] : null,
+        d.Stadium ? [I.pin, d.Stadium] : null,
+        nameOf(d.referees) ? [I.whistle, 'الحكم: ' + nameOf(d.referees)] : null,
+        cc.channel_name ? [I.tv, cc.channel_name] : null,
+        cc.commentator_name ? [I.mic, cc.commentator_name] : null
+      ].filter(Boolean);
+
+      hero.className = 'match-hero' + (st === 'live' ? ' match-hero--live' : '');
+      hero.innerHTML = `
+        <div class="mh__league">
+          ${champLogo ? `<img src="${esc(champLogo)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}
+          <b>${esc(champ.title || '')}</b>${d.round ? `<span>· ${esc(d.round)}</span>` : ''}
+        </div>
+        <div class="mh__teams">
+          ${teamBlock(d.home_team || {})}
+          <div class="mh__center">${center}${badge}${ht ? `<span class="mh__ht">الشوط الأول: ${esc(ht)}</span>` : ''}</div>
+          ${teamBlock(d.away_team || {})}
+        </div>
+        ${meta.length ? `<ul class="mh__meta">${meta.map(function (x) { return `<li>${x[0]}<span>${esc(x[1])}</span></li>`; }).join('')}</ul>` : ''}`;
+
+      var home = (d.home_team && (d.home_team.full_title || d.home_team.title)) || '';
+      var away = (d.away_team && (d.away_team.full_title || d.away_team.title)) || '';
+      if (home && away) document.title = home + ' ضد ' + away + ' | ' + (document.title.split(' | ').pop() || 'PX League');
+      return st;
+    }
+
+    // ------------------------------------------------------------------ events tab
+    var PERIODS = { 1: 'انطلاق المباراة', 2: 'نهاية الشوط الأول', 3: 'بداية الشوط الثاني', 4: 'نهاية المباراة' };
+    function minuteText(e) {
+      var m = Number(e.time_minute), p = Number(e.time_plus);
+      if (!(m >= 0)) return '';
+      return m + (p > 0 ? '+' + p : '') + "'";
+    }
+    function eventHtml(e, homeId, awayId, ev) {
+      var type = Number(e.type);
+      if (type === 100) {
+        var label = PERIODS[e.status];
+        if (!label) return '';
+        var score = '';
+        if (Number(e.status) === 2) score = halfTimeScore(ev);
+        if (Number(e.status) === 4) score = (ev.home_scores != null ? ev.home_scores : 0) + ' - ' + (ev.away_scores != null ? ev.away_scores : 0);
+        return `<li class="ev ev--period"><span class="ev__period">${esc(label)}${score ? `<b>${esc(score)}</b>` : ''}</span></li>`;
+      }
+      var side = String(e.team_id) === String(homeId) ? 'home' : String(e.team_id) === String(awayId) ? 'away' : '';
+      if (!side) return '';
+      var player = nameOf(e.player_name), assist = nameOf(e.assist_player_name);
+      var icon = '', title = player, sub = '', cls = '';
+      if (type === 1 || type === 4 || type === 5) {
+        cls = ' ev--goal'; icon = I.ball;
+        sub = type === 4 ? 'هدف عكسي' : type === 5 ? 'ركلة جزاء' : assist ? 'صناعة: ' + assist : 'هدف';
+      } else if (type === 2) {
+        icon = cardIcon('y'); sub = 'بطاقة صفراء';
+      } else if (type === 3) {
+        var second = Number(e.status) === 7;
+        icon = cardIcon(second ? 'yr' : 'r'); sub = second ? 'إنذار ثانٍ' : 'بطاقة حمراء';
+      } else if (type === 8) {
+        icon = I.sub;
+        title = assist || player;                                // player coming on
+        sub = (assist ? 'خروج: ' + player : 'تبديل') + (Number(e.status) === 9 ? ' (إصابة)' : '');
+      } else {
+        return '';                                               // unverified event code: not shown
+      }
+      if (!title) return '';
+      return `<li class="ev ev--${side}${cls}">
+          <div class="ev__body"><span class="ev__icon">${icon}</span><span class="ev__txt"><b>${esc(title)}</b>${sub ? `<small>${esc(sub)}</small>` : ''}</span></div>
+          <span class="ev__min" dir="ltr">${esc(minuteText(e))}</span>
+        </li>`;
+    }
+    function renderEvents(ev, info) {
+      var list = ev && Array.isArray(ev.events) ? ev.events : [];
+      var homeId = (info.home_team || {}).row_id, awayId = (info.away_team || {}).row_id;
+      var html = list.map(function (e) { return eventHtml(e, homeId, awayId, ev); }).join('');   // API order: newest first
+      panels.events.innerHTML = html
+        ? `<ol class="ev-list">${html}</ol>`
+        : `<div class="match-message"><span>${statusOf(info) === 'upcoming' ? 'لم تبدأ المباراة بعد، ستظهر الأحداث هنا فور انطلاقها.' : 'لا توجد أحداث مسجلة لهذه المباراة.'}</span></div>`;
+    }
+
+    // ------------------------------------------------------------------ lineups tab
+    var LINE_ORDER = { G: 0, D: 1, M: 2, F: 3 };
+    function tagsHtml(p) {
+      var t = '';
+      var goals = Number(p.goal) || 0;
+      for (var i = 0; i < Math.min(goals, 3); i++) t += '<span class="tag-goal">⚽</span>';
+      if (Number(p.red)) t += cardIcon('r');
+      else if (Number(p.yellow)) t += cardIcon('y');
+      if (Number(p.substitute)) t += '<span class="tag-sub" title="تم استبداله">▼</span>';
+      return t;
+    }
+    function playerChip(p, isGk) {
+      var pl = p.player || {};
+      return `<div class="pl${isGk ? ' pl--gk' : ''}">
+          <span class="pl__num">${esc(pl.player_number || '')}${p.rating ? `<span class="pl__rating">${esc(p.rating)}</span>` : ''}${Number(p.captain) ? '<span class="pl__cap">C</span>' : ''}</span>
+          <span class="pl__name">${esc(nameOf(pl))}</span>
+          <span class="pl__tags">${tagsHtml(p)}</span>
+        </div>`;
+    }
+    // Formation "4-4-1-1" -> rows: [GK], [4], [4], [1], [1]; players ordered G, D, M, F then formation_position
+    function pitchHtml(starters, formation) {
+      var sorted = starters.slice().sort(function (a, b) {
+        var la = LINE_ORDER[a.position] != null ? LINE_ORDER[a.position] : 9, lb = LINE_ORDER[b.position] != null ? LINE_ORDER[b.position] : 9;
+        return la - lb || (Number(a.formation_position) || 0) - (Number(b.formation_position) || 0);
+      });
+      var gk = sorted.filter(function (p) { return p.position === 'G'; });
+      var field = sorted.filter(function (p) { return p.position !== 'G'; });
+      var lines = String(formation || '').split('-').map(Number).filter(function (n) { return n > 0; });
+      var total = lines.reduce(function (a, b) { return a + b; }, 0);
+      if (gk.length !== 1 || !lines.length || total !== field.length) return '';   // unknown shape: list only
+      var rows = [gk], i = 0;
+      lines.forEach(function (n) { rows.push(field.slice(i, i + n)); i += n; });
+      return `<div class="pitch">${rows.map(function (r, idx) {
+        return `<div class="pitch__line">${r.map(function (p) { return playerChip(p, idx === 0); }).join('')}</div>`;
+      }).join('')}</div>`;
+    }
+    function listHtml(players) {
+      return `<ul class="lu-list">${players.map(function (p) {
+        var pl = p.player || {};
+        return `<li><span class="n">${esc(pl.player_number || '-')}</span><span>${esc(nameOf(pl))}</span>
+          <span class="meta">${tagsHtml(p)}${p.rating ? `<span class="r">${esc(p.rating)}</span>` : ''}</span></li>`;
+      }).join('')}</ul>`;
+    }
+    function teamLineupHtml(team, data, side) {
+      var tid = String(team.row_id || '');
+      var lu = (data.lineup || {})[tid] || {};
+      var starters = Array.isArray(lu.lineup) ? lu.lineup : [];
+      var subs = Array.isArray(lu.substitutions) ? lu.substitutions : [];
+      var injured = ((data.lineup_injureds || {})[tid]) || [];
+      var meta = data['0'] || {};
+      var formation = meta[side + '_formation'] || '';
+      var coach = nameOf(meta[side + '_coach']);
+      var logo = imageUrl(TEAM_LOGO_BASE, team.image);
+      if (!starters.length) return '';
+      var pitch = pitchHtml(starters, formation);
+      return `<section class="lu-team">
+          <div class="lu-head">${logo ? `<img src="${esc(logo)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}<span>${esc(team.full_title || team.title || '')}</span>${formation ? `<span class="lu-formation">${esc(formation)}</span>` : ''}</div>
+          ${pitch || listHtml(starters)}
+          ${coach ? `<p class="lu-coach">المدرب: <b>${esc(coach)}</b></p>` : ''}
+          ${subs.length ? `<h3 class="lu-sub-title">البدلاء</h3>${listHtml(subs)}` : ''}
+          ${injured.length ? `<h3 class="lu-sub-title">الغيابات</h3><ul class="lu-list">${injured.map(function (x) {
+            return `<li><span class="n">✚</span><span>${esc(nameOf(x.player))}</span><span class="meta">${esc([x.type_name, x.injury].filter(Boolean).join(' - '))}</span></li>`;
+          }).join('')}</ul>` : ''}
+        </section>`;
+    }
+    function renderLineups(data, info) {
+      var html = data ? teamLineupHtml(info.home_team || {}, data, 'home') + teamLineupHtml(info.away_team || {}, data, 'away') : '';
+      panels.lineups.innerHTML = html
+        ? `<div class="lu-grid">${html}</div>`
+        : '<div class="match-message"><span>لم يتم الإعلان عن التشكيلات بعد.</span></div>';
+    }
+
+    // ------------------------------------------------------------------ states
+    function loader(el, text) {
+      el.innerHTML = `<div class="px-loader" role="status"><span class="px-spinner"></span>${text ? `<span>${esc(text)}</span>` : ''}</div>`;
+    }
+    function message(el, text, retry) {
+      el.innerHTML = `<div class="match-message"><span>${esc(text)}</span>${retry ? '<button class="px-retry" type="button">إعادة المحاولة</button>' : ''}</div>`;
+      var b = el.querySelector('.px-retry');
+      if (b) b.addEventListener('click', function () { fetchMatchDetails(false); });
+    }
+
+    // ------------------------------------------------------------------ main
+    var matchId = new URLSearchParams(location.search).get('id') || '';
+    var refreshTimer = null;
+    var busy = false;
+
+    async function fetchMatchDetails(silent) {
+      if (busy) return;
+      clearTimeout(refreshTimer);
+      if (!/^\d{1,12}$/.test(matchId)) {
+        message(hero, 'لم يتم تحديد المباراة. اختر مباراة من الصفحة الرئيسية.', false);
+        panels.events.innerHTML = ''; panels.lineups.innerHTML = '';
+        return;
+      }
+      if (!silent) { loader(hero, 'جاري تحميل المباراة...'); loader(panels.events); loader(panels.lineups); }
+      if (!WORKER_BASE_URL || WORKER_BASE_URL.indexOf('<MY_WORKER_URL>') !== -1) {
+        console.error('[PX League] Set PXL_WORKER_BASE_URL (top of the theme) to load match details.');
+        return;                                                  // keep the spinners
+      }
+      busy = true;
+      try {
+        var info;
+        try {
+          info = await fetchJson(api('match_info', matchId), silent ? 1 : 3);
+        } catch (err) {
+          console.warn('[PX League] match_info:', err);
+          if (!silent) {
+            message(hero, String(err && err.message).indexOf('404') !== -1 ? 'المباراة غير موجودة.' : 'تعذّر تحميل بيانات المباراة.', true);
+            panels.events.innerHTML = ''; panels.lineups.innerHTML = '';
+          }
+          return;
+        }
+        var results = await Promise.allSettled([
+          Number(info.events) ? fetchJson(api('matches_event', matchId), silent ? 1 : 2) : Promise.resolve(null),
+          Number(info.lineup) ? fetchJson(api('matches_lineup', matchId), silent ? 1 : 2) : Promise.resolve(null)
+        ]);
+        var ev = results[0].status === 'fulfilled' ? results[0].value : null;
+        var lu = results[1].status === 'fulfilled' ? results[1].value : null;
+
+        var st = renderHero(info, ev);
+        if (results[0].status === 'rejected') { if (!silent) message(panels.events, 'تعذّر تحميل الأحداث.', true); }
+        else renderEvents(ev || {}, info);
+        if (results[1].status === 'rejected') { if (!silent) message(panels.lineups, 'تعذّر تحميل التشكيلات.', true); }
+        else renderLineups(lu, info);
+
+        if (st === 'live' || (st === 'upcoming' && Number(info.match_timestamp) * 1000 - Date.now() < 30 * 60 * 1000)) {
+          refreshTimer = setTimeout(function () { if (!document.hidden) fetchMatchDetails(true); else scheduleOnVisible(); }, REFRESH_MS);
+        }
+      } finally {
+        busy = false;
+      }
+    }
+    function scheduleOnVisible() {
+      document.addEventListener('visibilitychange', function once() {
+        if (!document.hidden) { document.removeEventListener('visibilitychange', once); fetchMatchDetails(true); }
+      });
+    }
+
+    // ------------------------------------------------------------------ tabs
+    function selectTab(btn, focus) {
+      tabs.forEach(function (t) {
+        var on = t === btn;
+        t.classList.toggle('is-active', on);
+        t.setAttribute('aria-selected', on ? 'true' : 'false');
+        t.tabIndex = on ? 0 : -1;
+        panels[t.getAttribute('data-tab')].hidden = !on;
+      });
+      if (focus) btn.focus();
+      try { history.replaceState(null, '', location.pathname + location.search + '#' + btn.getAttribute('data-tab')); } catch (e) {}
+    }
+    page.querySelector('.match-tabs').addEventListener('click', function (e) {
+      var b = e.target.closest('.match-tab');
+      if (b) selectTab(b, false);
+    });
+    page.querySelector('.match-tabs').addEventListener('keydown', function (e) {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      var i = tabs.indexOf(document.activeElement);
+      if (i === -1) return;
+      e.preventDefault();
+      selectTab(tabs[(i + (e.key === 'ArrowLeft' ? 1 : -1) + tabs.length) % tabs.length], true);   // RTL
+    });
+    var initialTab = tabs.filter(function (t) { return '#' + t.getAttribute('data-tab') === location.hash; })[0];
+    if (initialTab) selectTab(initialTab, false);
+
+    window.fetchMatchDetails = fetchMatchDetails;
+    fetchMatchDetails(false);
+  })();
+  //]]>
+  </script>
+  </b:if>
+
   <b:if cond='data:view.isPost'>
   <!-- ======================================================================
        POST VIEW: move the post's stream into the 16:9 player box
@@ -1342,7 +1933,7 @@ body#layout .sidebar { width: 320px; }
     } else {
       frame = body.querySelector('iframe');
     }
-    if (!frame) return;   // no stream in this post: keep the "starting soon" placeholder
+    if (!frame) return;   // regular article: the arena stays hidden, the post shows normally
 
     frame.setAttribute('allow', 'autoplay; fullscreen; encrypted-media; picture-in-picture');
     frame.setAttribute('allowfullscreen', 'true');
@@ -1352,6 +1943,12 @@ body#layout .sidebar { width: 320px; }
     frame.removeAttribute('style');
     slot.textContent = '';
     slot.appendChild(frame);
+
+    // Stream found: show the arena (its title replaces the article title)
+    var arena = document.getElementById('px-arena');
+    var postTitle = document.getElementById('px-post-title');
+    if (arena) arena.hidden = false;
+    if (postTitle) postTitle.hidden = true;
   })();
   //]]>
   </script>
@@ -1438,6 +2035,9 @@ body#layout .sidebar { width: 320px; }
 
     function matchesUrl(isoDate) {
       return WORKER_BASE_URL + '/api/matches/matches_date_get/' + isoDate + '/' + encodeURI(MATCH_FILTERS) + '/D/60';
+    }
+    function matchPageUrl(id) {                                 // dedicated match details page
+      return '/p/match.html?id=' + encodeURIComponent(id);
     }
     function matchInfoUrl(id) {
       return WORKER_BASE_URL + '/api/matches/match_info/' + encodeURIComponent(id) + '/D/60';
@@ -1539,7 +2139,7 @@ body#layout .sidebar { width: 320px; }
       var cardStatus = m.status === 'other' ? 'upcoming' : m.status;
 
       return `
-        <div class="match-card match-card--${cardStatus}">
+        <a class="match-card match-card--${cardStatus}" href="${esc(matchPageUrl(m.id))}">
           <div class="match-card__top">
             <span class="match-card__league">${esc(m.league)}</span>
             <span class="match-card__round">${esc(m.round)}</span>
@@ -1556,7 +2156,7 @@ body#layout .sidebar { width: 320px; }
             <span class="match-card__meta">${ICON_MIC}<span>${esc(m.commentator || 'غير متوفر')}</span></span>
             <span class="match-card__meta">${ICON_TV}<span>${esc(m.channel || 'غير متوفر')}</span></span>
           </div>
-        </div>`;
+        </a>`;
     }
 
     function countLabel(n) {
