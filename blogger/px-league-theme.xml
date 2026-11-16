@@ -484,6 +484,61 @@ a.match-card:hover { transform: translateY(-3px); border-color: var(--brand); bo
   animation: px-mini-spin .8s linear infinite;
 }
 @keyframes px-mini-spin { to { transform: rotate(360deg); } }
+/* Standings page */
+.standings-page { display: grid; gap: 18px; }
+.standings-page__head .section-title { margin-bottom: 4px; }
+.standings-page__sub { margin: 0; color: var(--text-muted); font-size: .92rem; }
+.league-filter {
+  display: flex; gap: 8px; overflow-x: auto; scroll-snap-type: x proximity;
+  padding: 10px; border-radius: var(--radius);
+  background: #0f172a; border: 1px solid #334155;
+  scrollbar-width: thin; scrollbar-color: #334155 transparent;
+}
+.league-filter::-webkit-scrollbar { height: 6px; }
+.league-filter::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+.league-chip {
+  flex: 0 0 auto; scroll-snap-align: start;
+  padding: 8px 16px; border-radius: 999px;
+  border: 1px solid #334155; background: #1e293b; color: #cbd5e1;
+  font: inherit; font-size: .88rem; font-weight: 700; white-space: nowrap; cursor: pointer;
+  transition: background-color .2s, color .2s, border-color .2s, box-shadow .2s;
+}
+.league-chip:hover { border-color: #32CD32; color: #fff; }
+.league-chip.is-active { background: #32CD32; border-color: #32CD32; color: #04120a; box-shadow: 0 0 16px rgba(50, 205, 50, .45); }
+.league-chip:focus-visible { outline: 2px solid #32CD32; outline-offset: 2px; }
+
+.standings-board { min-height: 260px; }
+.standings-loading, .standings-message {
+  display: grid; justify-items: center; gap: 12px;
+  padding: 60px 16px; color: var(--text-muted); font-weight: 700; text-align: center;
+}
+.standings-board.is-ready .standings-card { animation: px-fade-in .35s ease both; }
+@keyframes px-fade-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.standings-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow); overflow: hidden; margin-bottom: 16px;
+}
+.standings-card__head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 16px; background: var(--surface-2); border-bottom: 1px solid var(--border);
+  font-weight: 800;
+}
+.standings-card__head img { width: 26px; height: 26px; object-fit: contain; }
+.standings-card__head small { white-space: nowrap; margin-inline-start: auto; color: var(--text-muted); font-weight: 700; font-size: .78rem; }
+.standings-scroll { overflow-x: auto; }
+.standings--full { min-width: 100%; font-size: .9rem; }
+.standings--full th, .standings--full td { padding: 10px 8px; white-space: nowrap; }
+.standings--full td:nth-child(2) { min-width: 150px; }
+.standings--full tbody tr { transition: background-color .15s; }
+.standings--full tbody tr:hover { background: var(--brand-soft); }
+.standings--full td.pos { position: relative; }
+.standings--full tr[data-zone] td.pos { box-shadow: inset -4px 0 0 var(--zone); }   /* RTL: start edge */
+.standings--full .team-cell img { width: 24px; height: 24px; }
+@media (max-width: 640px) { .standings--full .col-optional { display: none; } }
+.standings-legend { display: flex; flex-wrap: wrap; gap: 8px 18px; padding: 12px 16px; border-top: 1px solid var(--border); font-size: .8rem; color: var(--text-muted); }
+.standings-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.standings-legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+
 .standings-retry {
   margin-top: 8px; padding: 4px 14px; border: 0; border-radius: 999px;
   background: #32CD32; color: #04120a; font: inherit; font-weight: 800; cursor: pointer;
@@ -648,6 +703,7 @@ body#layout .sidebar { width: 320px; }
           <li><a expr:class='data:view.isHomepage ? &quot;is-active&quot; : &quot;&quot;' expr:href='data:blog.homepageUrl'>الرئيسية</a></li>
           <li><a expr:href='data:blog.homepageUrl + &quot;search/label/Matches&quot;'>المباريات</a></li>
           <li><a expr:href='data:blog.homepageUrl + &quot;search/label/Predictions&quot;'>التوقعات</a></li>
+          <li><a expr:class='data:blog.canonicalUrl == data:blog.homepageUrl + &quot;p/standings.html&quot; ? &quot;is-active&quot; : &quot;&quot;' expr:href='data:blog.homepageUrl + &quot;p/standings.html&quot;'>الترتيب</a></li>
           <li><a href='#app-download'>التطبيق</a></li>
         </ul>
       </nav>
@@ -792,6 +848,35 @@ body#layout .sidebar { width: 320px; }
         <b:widget id='Blog1' locked='true' title='المنشورات' type='Blog' version='2' visible='true'>
           <b:includable id='main'>
             <b:if cond='data:view.isSingleItem'>
+              <b:if cond='data:view.isPage and data:blog.canonicalUrl == data:blog.homepageUrl + &quot;p/standings.html&quot;'>
+              <!-- ============================================================
+                   STANDINGS PAGE (/p/standings.html): league filter + table(s)
+                   League ids are ysscores season ids (verified with the
+                   standings endpoint). Add / change leagues here: data-id = id.
+                   ============================================================ -->
+              <section aria-labelledby='standings-title' class='standings-page'>
+                <div class='standings-page__head'>
+                  <h1 class='section-title' id='standings-title'>ترتيب الدوريات</h1>
+                  <p class='standings-page__sub'>اختر الدوري لعرض جدول الترتيب المحدّث.</p>
+                </div>
+                <div aria-label='اختر الدوري' class='league-filter' id='league-filter' role='tablist'>
+                  <button aria-selected='true' class='league-chip is-active' data-id='937599' role='tab' type='button'>الدوري الإنجليزي</button>
+                  <button aria-selected='false' class='league-chip' data-id='938652' role='tab' type='button'>الدوري الإسباني</button>
+                  <button aria-selected='false' class='league-chip' data-id='936357' role='tab' type='button'>الدوري الإيطالي</button>
+                  <button aria-selected='false' class='league-chip' data-id='938769' role='tab' type='button'>الدوري الألماني</button>
+                  <button aria-selected='false' class='league-chip' data-id='937873' role='tab' type='button'>الدوري الفرنسي</button>
+                  <button aria-selected='false' class='league-chip' data-id='941825' role='tab' type='button'>دوري روشن السعودي</button>
+                  <button aria-selected='false' class='league-chip' data-id='938823' role='tab' type='button'>الدوري البرتغالي</button>
+                  <button aria-selected='false' class='league-chip' data-id='939779' role='tab' type='button'>الدوري التركي</button>
+                  <button aria-selected='false' class='league-chip' data-id='939531' role='tab' type='button'>الدوري الإماراتي</button>
+                  <button aria-selected='false' class='league-chip' data-id='941155' role='tab' type='button'>الدوري القطري</button>
+                  <button aria-selected='false' class='league-chip' data-id='20580897' role='tab' type='button'>دوري أبطال أفريقيا</button>
+                </div>
+                <div aria-live='polite' class='standings-board' id='standings-board'>
+                  <div class='standings-loading' role='status'><span class='px-mini-spinner'>&#160;</span><span>جاري تحميل الترتيب...</span></div>
+                </div>
+              </section>
+              <b:else/>
               <b:loop values='data:posts' var='post'>
                 <article class='post-full'>
                   <b:if cond='data:view.isPage'>
@@ -810,6 +895,7 @@ body#layout .sidebar { width: 320px; }
                   </b:if>
                 </article>
               </b:loop>
+              </b:if>
             <b:else/>
               <h2 class='section-title'>
                 <b:if cond='data:view.isLabelSearch'><data:view.search.label/><b:elseif cond='data:view.isHomepage'/>أحدث الأخبار<b:else/>المنشورات</b:if>
@@ -908,20 +994,6 @@ body#layout .sidebar { width: 320px; }
       </section>
 
       <b:section class='sidebar-section' id='sidebar' showaddelement='yes'>
-        <b:widget id='HTML30' locked='false' title='جدول الترتيب' type='HTML' version='2' visible='true'>
-          <b:widget-settings>
-            <b:widget-setting name='content'><![CDATA[<table class="standings">
-  <thead><tr><th>#</th><th>الفريق</th><th>لعب</th><th>+/-</th><th>نقاط</th></tr></thead>
-  <tbody id="standings-table-body">
-    <tr class="standings-state"><td colspan="5"><span class="px-mini-spinner"></span></td></tr>
-  </tbody>
-</table>]]></b:widget-setting>
-          </b:widget-settings>
-          <b:includable id='main'>
-            <b:if cond='data:title'><h3 class='widget-title'><data:title/></h3></b:if>
-            <div class='widget-content'><data:content/></div>
-          </b:includable>
-        </b:widget>
       </b:section>
     </aside>
   </div>
@@ -953,6 +1025,7 @@ body#layout .sidebar { width: 320px; }
             <li><a expr:href='data:blog.homepageUrl'>الرئيسية</a></li>
             <li><a expr:href='data:blog.homepageUrl + &quot;search/label/Matches&quot;'>المباريات</a></li>
             <li><a expr:href='data:blog.homepageUrl + &quot;search/label/Predictions&quot;'>التوقعات</a></li>
+            <li><a expr:href='data:blog.homepageUrl + &quot;p/standings.html&quot;'>الترتيب</a></li>
             <li><a href='#app-download'>التطبيق</a></li>
           </ul>
         </div>
@@ -1032,15 +1105,14 @@ body#layout .sidebar { width: 320px; }
   //]]>
   </script>
 
+  <b:if cond='data:view.isPage and data:blog.canonicalUrl == data:blog.homepageUrl + &quot;p/standings.html&quot;'>
   <!-- ======================================================================
-       SIDEBAR STANDINGS - fetchStandings(championshipId)
-       Runs on every page that shows the sidebar "جدول الترتيب" widget.
-
-       STANDINGS_PATH must match a route your Worker forwards to the ysscores
-       standings endpoint ({id} is replaced by the championship id).
-       Rows are read in the ysscores format (team_name.short_title / .image,
-       play, diff, points; rank = position in the list) and also accept
-       generic fields (rank, team / name, logo, played, goal_difference, points).
+       STANDINGS PAGE - fetchStandings(championshipId) + league filter
+       Runs only on /p/standings.html.
+       Worker route: /api/standings/{id}?include=results (-> Vercel backend)
+       Response: { league, leagueLogo, groups: [ { name?, rows: [ { rank, teamName,
+       teamLogo, played, won, drawn, lost, goalsFor, goalsAgainst, goalDiff, points,
+       zone: { color, label } } ] } ] }
        ====================================================================== -->
   <script>
   //<![CDATA[
@@ -1048,15 +1120,13 @@ body#layout .sidebar { width: 320px; }
     'use strict';
 
     var WORKER_BASE_URL = window.PXL_WORKER_BASE_URL || '';
-    var STANDINGS_PATH = '/api/standings/{id}?include=results';   // Worker -> football-poster-generator.vercel.app
-    // Premier League on ysscores: championship 6811, current season id 937599
-    var DEFAULT_CHAMPIONSHIP_ID = '937599';
-    var MAX_ROWS = 20;                       // rows shown in the sidebar
-    var TOP_ROWS = 4;                        // highlighted positions
+    var STANDINGS_PATH = '/api/standings/{id}?include=results';
     var TEAM_LOGO_BASE = 'https://imgs.ysscores.com/teams/128/';
 
-    var tbody = document.getElementById('standings-table-body');
-    if (!tbody) return;
+    var board = document.getElementById('standings-board');
+    var filter = document.getElementById('league-filter');
+    if (!board || !filter) return;
+    var chips = Array.prototype.slice.call(filter.querySelectorAll('.league-chip'));
 
     var ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
     function esc(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) { return ESC[c]; }); }
@@ -1064,80 +1134,141 @@ body#layout .sidebar { width: 320px; }
       for (var i = 0; i < arguments.length; i++) if (arguments[i] != null && arguments[i] !== '') return arguments[i];
       return '';
     }
-    function logoUrl(value) {
+    function imgUrl(value) {
       var v = String(value || '').trim();
       if (/^https:\/\//i.test(v)) return v;
       return /^[\w.-]+\.(png|jpe?g|webp|gif|svg)$/i.test(v) ? TEAM_LOGO_BASE + encodeURIComponent(v) : '';
     }
+    function safeColor(c) { return /^#[0-9a-f]{3,8}$/i.test(String(c || '')) ? c : ''; }
 
-    // Finds the rows array in the common response shapes:
-    // { data: [...] }, { data: { standings: [...] } }, { standings: [...] }, [...],
-    // or grouped tables ([[...], [...]] / { data: [ { standings: [...] } ] }) -> first table
-    function rowsFrom(json) {
-      var d = json && json.data != null ? json.data : json;
-      if (d && !Array.isArray(d)) d = d.groups || d.standings || d.table || d.rows || d.teams || [];   // Vercel: { groups: [ { rows } ] }
-      if (!Array.isArray(d)) return [];
-      if (Array.isArray(d[0])) return d[0];
-      if (d[0] && Array.isArray(d[0].standings)) return d[0].standings;
-      if (d[0] && Array.isArray(d[0].rows)) return d[0].rows;
-      return d;
-    }
-
+    // ------------------------------------------------------------------ parsing
     function parseRow(r, i) {
-      var tn = r.team_name && typeof r.team_name === 'object' ? r.team_name : {};
-      var team = r.team && typeof r.team === 'object' ? r.team : {};
-      var diff = pick(r.goalDiff, r.diff, r.goal_difference, r.goalDifference, r.gd,
-        (r.for != null && r.against != null) ? Number(r.for) - Number(r.against) : '');
+      var zone = r.zone && typeof r.zone === 'object' ? r.zone : {};
+      var diff = pick(r.goalDiff, r.diff, r.goal_difference,
+        (r.goalsFor != null && r.goalsAgainst != null) ? Number(r.goalsFor) - Number(r.goalsAgainst) : 0);
       return {
-        rank: Number(pick(r.rank, r.position, r.pos, i + 1)) || i + 1,
-        name: pick(r.teamName, tn.short_title, tn.title, team.name, team.title, typeof r.team_name === 'string' ? r.team_name : '', r.name, r.title),
-        logo: logoUrl(pick(r.teamLogo, tn.image, team.logo, team.image, r.logo, r.image)),
-        played: pick(r.play, r.played, r.matches, r.games, 0),
-        diff: diff === '' ? 0 : Number(diff),
-        points: pick(r.points, r.pts, 0)
+        rank: Number(pick(r.rank, r.position, i + 1)) || i + 1,
+        name: pick(r.teamName, r.team_name && r.team_name.short_title, r.name),
+        logo: imgUrl(pick(r.teamLogo, r.team_name && r.team_name.image, r.logo)),
+        played: pick(r.played, r.play, 0),
+        won: pick(r.won, r.win, 0),
+        drawn: pick(r.drawn, r.draw, 0),
+        lost: pick(r.lost, r.lose, 0),
+        gf: pick(r.goalsFor, r.for, 0),
+        ga: pick(r.goalsAgainst, r.against, 0),
+        diff: Number(diff) || 0,
+        points: pick(r.points, r.pts, 0),
+        zoneColor: safeColor(zone.color),
+        zoneLabel: zone.label || ''
+      };
+    }
+    function parseResponse(json) {
+      var groups = Array.isArray(json && json.groups) ? json.groups : [];
+      return {
+        league: (json && json.league) || '',
+        logo: imgUrl(json && json.leagueLogo),
+        groups: groups.map(function (g) {
+          return {
+            name: g.name || g.title || '',
+            rows: (Array.isArray(g.rows) ? g.rows : []).map(parseRow).sort(function (a, b) { return a.rank - b.rank; })
+          };
+        }).filter(function (g) { return g.rows.length; })
       };
     }
 
-    function stateRow(html) {
-      tbody.innerHTML = '<tr class="standings-state"><td colspan="5">' + html + '</td></tr>';
+    // ------------------------------------------------------------------ rendering
+    function rowHtml(t) {
+      var diffText = t.diff > 0 ? '+' + t.diff : String(t.diff);
+      return `<tr${t.zoneColor ? ` data-zone style="--zone:${esc(t.zoneColor)}" title="${esc(t.zoneLabel)}"` : ''}>
+        <td class="pos">${esc(t.rank)}</td>
+        <td><span class="team-cell">${t.logo ? `<img src="${esc(t.logo)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}<span>${esc(t.name)}</span></span></td>
+        <td>${esc(t.played)}</td>
+        <td class="col-optional">${esc(t.won)}</td>
+        <td class="col-optional">${esc(t.drawn)}</td>
+        <td class="col-optional">${esc(t.lost)}</td>
+        <td class="col-optional">${esc(t.gf)}</td>
+        <td class="col-optional">${esc(t.ga)}</td>
+        <td class="diff" dir="ltr">${esc(diffText)}</td>
+        <td class="pts">${esc(t.points)}</td>
+      </tr>`;
+    }
+    function legendHtml(rows) {
+      var seen = {};
+      var items = [];
+      rows.forEach(function (t) {
+        if (t.zoneColor && t.zoneLabel && !seen[t.zoneLabel]) {
+          seen[t.zoneLabel] = true;
+          items.push(`<span><i style="background:${esc(t.zoneColor)}"></i>${esc(t.zoneLabel)}</span>`);
+        }
+      });
+      return items.length ? `<div class="standings-legend">${items.join('')}</div>` : '';
+    }
+    function render(data) {
+      if (!data.groups.length) { message('لا يتوفر جدول الترتيب لهذا الدوري حاليًا.', false); return; }
+      var multi = data.groups.length > 1;
+      board.innerHTML = data.groups.map(function (g) {
+        return `
+          <article class="standings-card">
+            <div class="standings-card__head">
+              ${data.logo ? `<img src="${esc(data.logo)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}
+              <span>${esc(multi && g.name ? data.league + ' – ' + g.name : data.league)}</span>
+              <small>${g.rows.length} فريقًا</small>
+            </div>
+            <div class="standings-scroll">
+              <table class="standings standings--full">
+                <thead><tr>
+                  <th>#</th><th>الفريق</th><th>لعب</th>
+                  <th class="col-optional">فوز</th><th class="col-optional">تعادل</th><th class="col-optional">خسارة</th>
+                  <th class="col-optional">له</th><th class="col-optional">عليه</th>
+                  <th>+/-</th><th>نقاط</th>
+                </tr></thead>
+                <tbody>${g.rows.map(rowHtml).join('')}</tbody>
+              </table>
+            </div>
+            ${legendHtml(g.rows)}
+          </article>`;
+      }).join('');
+      board.classList.add('is-ready');
+    }
+    function loading() {
+      board.classList.remove('is-ready');
+      board.innerHTML = '<div class="standings-loading" role="status"><span class="px-mini-spinner"></span><span>جاري تحميل الترتيب...</span></div>';
+    }
+    function message(text, retryId) {
+      board.classList.remove('is-ready');
+      board.innerHTML = `<div class="standings-message"><span>${esc(text)}</span>${retryId ? '<button class="standings-retry" type="button">إعادة المحاولة</button>' : ''}</div>`;
+      var btn = board.querySelector('.standings-retry');
+      if (btn) btn.addEventListener('click', function () { fetchStandings(retryId); });
     }
 
-    function render(rows) {
-      if (!rows.length) { stateRow('لا يتوفر جدول الترتيب حاليًا.'); return; }
-      tbody.innerHTML = rows.slice(0, MAX_ROWS).map(function (t) {
-        var diffText = t.diff > 0 ? '+' + t.diff : String(t.diff);
-        return `<tr${t.rank <= TOP_ROWS ? ' class="top"' : ''}>
-          <td class="pos">${esc(t.rank)}</td>
-          <td><span class="team-cell">${t.logo ? `<img src="${esc(t.logo)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}<span>${esc(t.name)}</span></span></td>
-          <td>${esc(t.played)}</td>
-          <td class="diff">${esc(diffText)}</td>
-          <td class="pts">${esc(t.points)}</td>
-        </tr>`;
-      }).join('');
-    }
+    // ------------------------------------------------------------------ fetching
+    var cache = {};                     // id -> parsed data (instant switching back)
+    var requestSeq = 0;
 
     async function fetchStandings(championshipId) {
-      stateRow('<span class="px-mini-spinner"></span>');
+      var id = String(championshipId);
+      var mySeq = ++requestSeq;           // ignore responses for a league the user already left
+      if (cache[id]) { render(cache[id]); return; }
+      loading();
       if (!WORKER_BASE_URL || WORKER_BASE_URL.indexOf('<MY_WORKER_URL>') !== -1) {
         console.error('[PX League] Set PXL_WORKER_BASE_URL (top of the theme) to load the standings.');
-        return;                                                  // keep the spinner
+        return;                            // keep the spinner
       }
-      var url = WORKER_BASE_URL + STANDINGS_PATH.replace('{id}', encodeURIComponent(championshipId));
+      var url = WORKER_BASE_URL + STANDINGS_PATH.replace('{id}', encodeURIComponent(id));
       for (var attempt = 1; attempt <= 3; attempt++) {
         var ctrl = new AbortController();
-        var timer = setTimeout(function () { ctrl.abort(); }, 9000);
+        var timer = setTimeout(function () { ctrl.abort(); }, 10000);
         try {
           var res = await fetch(url, { headers: { Accept: 'application/json' }, signal: ctrl.signal });
           if (!res.ok) throw new Error('HTTP ' + res.status);
-          var json = await res.json();
-          if (json && json.status === false) throw new Error(json.message || 'API status false');
-          render(rowsFrom(json).map(parseRow).sort(function (a, b) { return a.rank - b.rank; }));
+          var data = parseResponse(await res.json());
+          cache[id] = data;
+          if (mySeq === requestSeq) render(data);
           return;
         } catch (err) {
           if (attempt === 3) {
             console.warn('[PX League] standings:', err);
-            stateRow('تعذّر تحميل الترتيب.<br/><button class="standings-retry" type="button">إعادة المحاولة</button>');
-            tbody.querySelector('.standings-retry').addEventListener('click', function () { fetchStandings(championshipId); });
+            if (mySeq === requestSeq) message('تعذّر تحميل الترتيب حاليًا.', id);
           } else {
             await new Promise(function (r) { setTimeout(r, 1000 * attempt); });
           }
@@ -1147,11 +1278,43 @@ body#layout .sidebar { width: 320px; }
       }
     }
 
-    window.fetchStandings = fetchStandings;                      // e.g. fetchStandings('938652') for La Liga
-    fetchStandings(DEFAULT_CHAMPIONSHIP_ID);
+    // ------------------------------------------------------------------ league filter
+    function selectLeague(chip, updateUrl) {
+      chips.forEach(function (c) {
+        var on = c === chip;
+        c.classList.toggle('is-active', on);
+        c.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+      chip.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
+      if (updateUrl) {
+        try { history.replaceState(null, '', '#league=' + chip.getAttribute('data-id')); } catch (e) {}
+      }
+      fetchStandings(chip.getAttribute('data-id'));
+    }
+    filter.addEventListener('click', function (e) {
+      var chip = e.target.closest('.league-chip');
+      if (chip && !chip.classList.contains('is-active')) selectLeague(chip, true);
+    });
+    filter.addEventListener('keydown', function (e) {   // arrow keys move between leagues
+      var i = chips.indexOf(document.activeElement);
+      if (i === -1 || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return;
+      e.preventDefault();
+      var step = e.key === 'ArrowLeft' ? 1 : -1;           // RTL: left = next
+      var next = chips[(i + step + chips.length) % chips.length];
+      next.focus();
+      selectLeague(next, true);
+    });
+
+    window.fetchStandings = fetchStandings;
+
+    // Initial league: #league=ID in the URL, otherwise the first chip
+    var m = /league=(\d+)/.exec(location.hash);
+    var initial = (m && chips.filter(function (c) { return c.getAttribute('data-id') === m[1]; })[0]) || chips[0];
+    selectLeague(initial, false);
   })();
   //]]>
   </script>
+  </b:if>
 
   <b:if cond='data:view.isPost'>
   <!-- ======================================================================
@@ -1303,6 +1466,15 @@ body#layout .sidebar { width: 320px; }
       return '';
     }
 
+    // Status badge HTML. Live: "مباشر" + ONLY the minute (never the status code), with the
+    // minute isolated as LTR so "61'" / "45+2'" render correctly inside the RTL page.
+    function liveBadgeHtml(m) {
+      if (m.status === 'live') {
+        return 'مباشر' + (m.minute ? ` <span dir="ltr">${esc(m.minute)}'</span>` : '');
+      }
+      return esc(m.status === 'finished' ? 'انتهت' : m.status === 'other' ? 'غير محدد' : 'لم تبدأ');
+    }
+
     function parseMatch(raw) {
       var cc = Array.isArray(raw.channel_commm) && raw.channel_commm.length ? raw.channel_commm[0] : {};
       var champ = raw.championship || {};
@@ -1360,10 +1532,7 @@ body#layout .sidebar { width: 320px; }
     }
 
     function cardHtml(m) {
-      var badgeText = m.status === 'live' ? 'مباشر' + (m.minute ? ' ' + m.minute + "'" : '')
-        : m.status === 'finished' ? 'انتهت'
-        : m.status === 'other' ? 'غير محدد'
-        : 'لم تبدأ';
+      var badgeHtml = liveBadgeHtml(m);
       var center = m.status === 'live' || m.status === 'finished'
         ? `<span class="match-score"><span>${esc(m.scoreHome)}</span><span class="sep">-</span><span>${esc(m.scoreAway)}</span></span>`
         : `<span class="match-time">${esc(m.time)}</span>`;
@@ -1379,7 +1548,7 @@ body#layout .sidebar { width: 320px; }
             ${teamHtml(m.home)}
             <div class="match-center">
               ${center}
-              <span class="badge${m.status === 'live' ? ' badge--live' : ''}">${esc(badgeText)}</span>
+              <span class="badge${m.status === 'live' ? ' badge--live' : ''}">${badgeHtml}</span>
             </div>
             ${teamHtml(m.away)}
           </div>
