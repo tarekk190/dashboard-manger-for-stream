@@ -1,0 +1,440 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns:b="http://www.google.com/2005/gml/b"
+      xmlns:data="http://www.google.com/2005/gml/data"
+      dir="rtl" lang="ar">
+  <head>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>PX League – Home</title>
+    <b:skin><![CDATA[
+      /* Global variables */
+      :root {
+        --bg-primary: #111;
+        --bg-secondary: #222;
+        --color-primary: #0f0; /* bright green */
+        --color-text: #fff;
+        --color-muted: #aaa;
+        --font-family: 'Cairo', sans-serif; /* Arabic friendly */
+        --spacing: 0.75rem;
+        --radius: 0.5rem;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg-primary);
+        color: var(--color-text);
+        font-family: var(--font-family);
+        line-height: 1.5;
+        overflow-x: hidden;
+      }
+
+      a { color: var(--color-primary); text-decoration: none; }
+      a:hover { text-decoration: underline; }
+
+      header, footer { background: var(--bg-secondary); padding: var(--spacing); text-align: center; }
+      header { position: sticky; top: 0; z-index: 1000; }
+
+      nav { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--spacing); }
+      nav a { padding: var(--spacing); }
+
+      .hero { background: var(--bg-secondary); padding: calc(2 * var(--spacing)); text-align: center; }
+      .hero h1 { font-size: 2rem; margin-bottom: var(--spacing); }
+      .hero p { margin-bottom: var(--spacing); }
+      .live-indicator { display: inline-block; background: var(--color-primary); color: var(--bg-primary); padding: 0.25rem 0.5rem; border-radius: var(--radius); font-weight: bold; }
+
+      .tabs { display: flex; justify-content: center; gap: var(--spacing); margin: var(--spacing) 0; }
+      .tab { cursor: pointer; padding: var(--spacing); background: var(--bg-secondary); border-radius: var(--radius); }
+      .tab.active { background: var(--color-primary); color: var(--bg-primary); }
+
+      .matches { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: var(--spacing); }
+      .card { background: var(--bg-secondary); border-radius: var(--radius); padding: var(--spacing); display: flex; flex-direction: column; gap: var(--spacing); }
+      .card-header { display: flex; justify-content: space-between; align-items: center; }
+      .team { display: flex; align-items: center; gap: 0.5rem; }
+      .team img { width: 32px; height: 32px; object-fit: contain; }
+      .score { font-size: 1.25rem; font-weight: bold; }
+      .status { font-size: 0.875rem; color: var(--color-muted); }
+
+      .featured { border: 2px solid var(--color-primary); }
+
+      .leagues { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--spacing); margin: var(--spacing) 0; }
+      .league { background: var(--bg-secondary); padding: var(--spacing); border-radius: var(--radius); }
+
+      .sidebar { background: var(--bg-secondary); padding: var(--spacing); }
+
+      footer { font-size: 0.875rem; }
+
+      /* Skeleton / empty / error styles */
+      .skeleton { background:#333; animation: pulse 1.5s infinite; }
+      .skeleton .avatar { width:32px; height:32px; background:#555; border-radius:50%; }
+      @keyframes pulse { 0% { opacity:.6; } 50% { opacity:1; } 100% { opacity:.6; } }
+      .empty, .error { text-align:center; padding:var(--spacing); color:var(--color-muted); }
+      .error button { margin-top:var(--spacing); padding:0.5rem 1rem; background:var(--color-primary); color:#111; border:none; border-radius:var(--radius); cursor:pointer; }
+
+      /* Responsive */
+      @media (max-width: 768px) {
+        .matches { grid-template-columns: 1fr; }
+        nav { flex-direction: column; }
+        .sidebar { display: none; }
+      }
+    ]]></b:skin>
+  </head>
+  <body>
+    <b:section id="main-section">
+      <!-- Header widget -->
+      <b:widget id="HTML1" type="HTML" title="Header" version="2" visible="true">
+        <b:widget-settings>
+          <b:widget-setting name="content"><![CDATA[
+            <header>
+              <div class="logo"><h1>PX League</h1></div>
+              <nav>
+                <a href="#">الرئيسية</a>
+                <a href="#">مباشر</a>
+                <a href="#">الدوريات</a>
+                <a href="#">أخبار</a>
+                <a href="#" aria-label="بحث"><span>&#128269;</span></a>
+                <a href="#" class="mobile-menu" aria-label="قائمة الهاتف">&#9776;</a>
+              </nav>
+            </header>
+          </b:widget-setting>
+        </b:widget-settings>
+        <b:includable id="main"><data:content/></b:includable>
+      </b:widget>
+
+      <!-- Content widget -->
+      <b:widget id="HTML2" type="HTML" title="Content" version="2" visible="true">
+        <b:widget-settings>
+          <b:widget-setting name="content"><![CDATA[
+            <main>
+              <!-- Hero Section -->
+              <section class="hero">
+                <h1>مرحبًا بكم في PX League</h1>
+                <p>منصة كرة القدم العربية المتكاملة.</p>
+                <div class="live-indicator">مباشر الآن</div>
+                <div class="date-nav" style="margin-top: var(--spacing); display:flex; justify-content:center; gap:var(--spacing);">
+                  <button id="prevDay" aria-label="اليوم السابق">&#9664;</button>
+                  <span id="todayLabel"></span>
+                  <button id="nextDay" aria-label="اليوم التالي">&#9654;</button>
+                </div>
+              </section>
+
+              <!-- Match Center -->
+              <section class="match-center">
+                <div class="tabs" id="matchTabs">
+                  <div class="tab active" data-tab="all">الكل</div>
+                  <div class="tab" data-tab="live">مباشر</div>
+                  <div class="tab" data-tab="upcoming">القادمة</div>
+                  <div class="tab" data-tab="finished">انتهت</div>
+                </div>
+                <input type="text" id="matchSearch" placeholder="بحث بالمنافس" style="width:100%;padding:var(--spacing);margin-bottom:var(--spacing);"/>
+                <div class="matches" id="matchContainer"></div>
+              </section>
+
+              <!-- Leagues Section (static placeholder – can be replaced by API later) -->
+              <section class="leagues">
+                <div class="league">الدوري الإنجليزي الممتاز</div>
+                <div class="league">الدوري الإسباني</div>
+                <div class="league">دوري أبطال أوروبا</div>
+                <div class="league">الدوري الإيطالي</div>
+                <div class="league">الدوري المصري الممتاز</div>
+              </section>
+            </main>
+
+            <!-- Sidebar (desktop) -->
+            <aside class="sidebar">
+              <h2>قائمة سريعة</h2>
+              <ul>
+                <li><a href="#">دوري 1</a></li>
+                <li><a href="#">دوري 2</a></li>
+                <li><a href="#">دوري 3</a></li>
+              </ul>
+            </aside>
+
+            <!-- JavaScript – API integration, safe DOM construction -->
+                         <script type="text/javascript">
+              // ------------------------------------------------------------
+              // Configuration – replace <YOUR_WORKER_SUBDOMAIN> with your actual workers.dev sub‑domain.
+              // ------------------------------------------------------------
+              const WORKER_BASE = 'https://<YOUR_WORKER_SUBDOMAIN>.workers.dev/api';
+              const MAX_RETRIES = 2;
+
+              // ------------------------------------------------------------
+              // Helper: fetch with timeout & retry.
+              // ------------------------------------------------------------
+              async function fetchJson(url, attempts = MAX_RETRIES) {
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 8000);
+                try {
+                  const resp = await fetch(url, {signal: controller.signal, headers: {Accept: 'application/json'}});
+                  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                  return await resp.json();
+                } catch (e) {
+                  if (attempts > 1) return fetchJson(url, attempts - 1);
+                  throw e;
+                } finally {
+                  clearTimeout(timeout);
+                }
+              }
+
+              // ------------------------------------------------------------
+              // Date handling – always use Africa/Cairo timezone.
+              // ------------------------------------------------------------
+              function cairoDateString(dateObj) {
+                // Return YYYY‑MM‑DD in Cairo timezone.
+                const parts = new Intl.DateTimeFormat('en-CA', {timeZone: 'Africa/Cairo'}).formatToParts(dateObj);
+                const y = parts.find(p=>p.type==='year').value;
+                const m = parts.find(p=>p.type==='month').value;
+                const d = parts.find(p=>p.type==='day').value;
+                return `${y}-${m}-${d}`;
+              }
+
+              // ------------------------------------------------------------
+              // UI state & rendering helpers.
+              // ------------------------------------------------------------
+              const container   = document.getElementById('matchContainer');
+              const tabs        = document.querySelectorAll('.tab');
+              const searchInput = document.getElementById('matchSearch');
+              const todayLabel  = document.getElementById('todayLabel');
+
+              let state = {
+                date: new Date(),
+                filter: 'all',            // all | live | upcoming | finished
+                rawMatches: [],           // original data from API (normalized)
+                displayed: [],
+                loading: true,
+                error: null,
+                requestId: 0              // to discard stale responses
+              };
+
+              function setState(updates) {
+                state = {...state, ...updates};
+                render();
+              }
+
+              // ------------------------------------------------------------
+              // Rendering functions – safe DOM creation.
+              // ------------------------------------------------------------
+              function clearContainer(){ container.innerHTML=''; }
+
+              function renderSkeleton(){
+                clearContainer();
+                for(let i=0;i<6;i++){
+                  const card = document.createElement('div');
+                  card.className='card skeleton';
+                  card.innerHTML = `
+                    <div class="card-header">
+                      <div class="team"><div class="avatar"></div></div>
+                      <div class="score"></div>
+                      <div class="team"><div class="avatar"></div></div>
+                    </div>
+                    <div class="status"></div>`;
+                  container.appendChild(card);
+                }
+              }
+
+              function renderEmpty(){
+                clearContainer();
+                const p = document.createElement('p');
+                p.className='empty';
+                p.textContent = 'لا توجد مباريات في هذا التاريخ.';
+                container.appendChild(p);
+              }
+
+              function renderError(msg){
+                clearContainer();
+                const div = document.createElement('div');
+                div.className='error';
+                const p = document.createElement('p');
+                p.textContent = msg;
+                const btn = document.createElement('button');
+                btn.textContent = 'إعادة المحاولة';
+                btn.addEventListener('click', loadMatches);
+                div.appendChild(p);
+                div.appendChild(btn);
+                container.appendChild(div);
+              }
+
+              function createCard(match){
+                const isLive = match.statusCategory === 'live';
+                const isFinished = match.statusCategory === 'finished';
+                const channel = match.broadcast?.channel || match.channel || 'غير متوفر';
+                const commentator = match.broadcast?.commentator || match.commentator || 'غير متوفر';
+
+                const card = document.createElement('div');
+                card.className = 'bg-px-card rounded-xl overflow-hidden border border-white/5 hover:border-px-green/50 transition duration-300 cursor-pointer';
+                card.onclick = () => {
+                  if (match.id) window.location.href = `/match.html?id=${encodeURIComponent(match.id)}`;
+                };
+
+                card.innerHTML = `
+                  <!-- Header -->
+                  <div class="px-4 py-2 border-b border-white/5 text-xs text-px-textMuted flex justify-end">
+                    <span>${match.league || ''}</span>
+                  </div>
+
+                  <!-- Middle (Teams & Time) -->
+                  <div class="flex p-4">
+                    <!-- Right: Home Team (w-12 h-12) & Name (text-sm font-bold text-center) -->
+                    <div class="w-1/3 text-center">
+                      <img src="${match.homeTeam?.logo || ''}" alt="${match.homeTeam?.name || ''}" class="w-12 h-12 mx-auto object-contain" referrerpolicy="no-referrer" />
+                      <div class="text-sm font-bold text-center mt-2 truncate">${match.homeTeam?.name || ''}</div>
+                    </div>
+
+                    <!-- Center: Match Time / Status / Score Badge -->
+                    <div class="w-1/3 flex flex-col items-center justify-center">
+                      ${isLive ? `
+                        <div class="bg-px-dark px-3 py-1 rounded-lg text-lg font-bold flex items-center justify-center gap-1.5">
+                          <span>${match.score?.home ?? 0} - ${match.score?.away ?? 0}</span>
+                          <span class="inline-block w-2 h-2 rounded-full bg-px-green animate-pulse"></span>
+                        </div>
+                        <div class="text-xs text-px-textMuted mt-1">مباشر</div>
+                      ` : `
+                        <div class="bg-px-dark px-3 py-1 rounded-lg text-lg font-bold">
+                          ${isFinished ? `${match.score?.home ?? 0} - ${match.score?.away ?? 0}` : (match.time || '--:--')}
+                        </div>
+                        <div class="text-xs text-px-textMuted mt-1">${match.status || ''}</div>
+                      `}
+                    </div>
+
+                    <!-- Left: Away Team Logo & Name -->
+                    <div class="w-1/3 text-center">
+                      <img src="${match.awayTeam?.logo || ''}" alt="${match.awayTeam?.name || ''}" class="w-12 h-12 mx-auto object-contain" referrerpolicy="no-referrer" />
+                      <div class="text-sm font-bold text-center mt-2 truncate">${match.awayTeam?.name || ''}</div>
+                    </div>
+                  </div>
+
+                  <!-- Bottom Footer (Channel & Commentator) -->
+                  <div class="bg-px-dark/30 border-t border-white/5 flex px-4 py-2 text-xs text-px-textMuted">
+                    <!-- Right Half (Channel) -->
+                    <div class="flex items-center gap-1 w-1/2 border-l border-white/10">
+                      <svg class="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <rect x="2" y="7" width="20" height="15" rx="2" ry="2" stroke-width="2"></rect>
+                        <polyline points="17 2 12 7 7 2" stroke-width="2"></polyline>
+                      </svg>
+                      <span class="truncate">${channel}</span>
+                    </div>
+
+                    <!-- Left Half (Commentator) -->
+                    <div class="flex items-center gap-1 w-1/2 justify-center">
+                      <svg class="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-14 0m7 7v4m-4 0h8M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"></path>
+                      </svg>
+                      <span class="truncate">${commentator}</span>
+                    </div>
+                  </div>
+                `;
+                return card;
+              }
+
+              function renderMatches(list){
+                clearContainer();
+                if(!list.length){ renderEmpty(); return; }
+                const fragment = document.createDocumentFragment();
+                list.forEach(m=> fragment.appendChild(createCard(m)));
+                container.appendChild(fragment);
+              }
+
+              function render(){
+                if(state.loading){ renderSkeleton(); return; }
+                if(state.error){ renderError(state.error); return; }
+                renderMatches(state.displayed);
+              }
+
+              // ------------------------------------------------------------
+              // Data loading – fetch matches for the current date.
+              // ------------------------------------------------------------
+              async function loadMatches(){
+                const currentRequest = ++state.requestId;
+                setState({loading:true, error:null});
+                const iso = cairoDateString(state.date);
+                const url = `${WORKER_BASE}/matches?date=${iso}`;
+                try {
+                  const data = await fetchJson(url);
+                  // Expect {matches:[...]}
+                  const normalized = data.matches || [];
+                  // Keep raw list for searching/filtering.
+                  setState({loading:false, rawMatches:normalized, displayed:applyFilters(normalized)});
+                } catch (e){
+                  // Only show error if this is the latest request.
+                  if(state.requestId===currentRequest){
+                    setState({loading:false, error:'فشل تحميل المباريات – يرجى المحاولة مرة أخرى.', displayed:[]});
+                  }
+                }
+              }
+
+              // ------------------------------------------------------------
+              // Filtering helpers.
+              // ------------------------------------------------------------
+              function applyFilters(list){
+                let filtered = list;
+                if(state.filter !== 'all'){
+                  filtered = filtered.filter(m=> m.statusCategory === state.filter);
+                }
+                const query = searchInput.value.trim().toLowerCase();
+                if(query){
+                  filtered = filtered.filter(m=>{
+                    const h = m.homeTeam?.name?.toLowerCase()||'';
+                    const a = m.awayTeam?.name?.toLowerCase()||'';
+                    return h.includes(query) || a.includes(query);
+                  });
+                }
+                return filtered;
+              }
+
+              // ------------------------------------------------------------
+              // UI wiring.
+              // ------------------------------------------------------------
+              // Tabs
+              tabs.forEach(t=>{
+                t.addEventListener('click',()=>{
+                  tabs.forEach(tc=>tc.classList.remove('active'));
+                  t.classList.add('active');
+                  const map = {all:'all', live:'live', upcoming:'upcoming', finished:'finished'};
+                  state.filter = map[t.dataset.tab] || 'all';
+                  setState({displayed:applyFilters(state.rawMatches)});
+                });
+              });
+
+              // Date navigation
+              function changeDay(delta){
+                const newDate = new Date(state.date.getTime() + delta*24*60*60*1000);
+                state.date = newDate;
+                todayLabel.textContent = cairoDateString(state.date);
+                loadMatches();
+              }
+              document.getElementById('prevDay').addEventListener('click',()=>changeDay(-1));
+              document.getElementById('nextDay').addEventListener('click',()=>changeDay(+1));
+
+              // Search input
+              searchInput.addEventListener('input',()=>{
+                setState({displayed:applyFilters(state.rawMatches)});
+              });
+
+              // Initialisation
+              document.addEventListener('DOMContentLoaded',()=>{
+                todayLabel.textContent = cairoDateString(state.date);
+                loadMatches();
+              });
+            </script>
+          ]]></b:widget-setting>
+        </b:widget-settings>
+        <b:includable id="main"><data:content/></b:includable>
+      </b:widget>
+
+      <!-- Footer widget -->
+      <b:widget id="HTML3" type="HTML" title="Footer" version="2" visible="true">
+        <b:widget-settings>
+          <b:widget-setting name="content"><![CDATA[
+            <footer>
+              <p>© 2026 PX League. جميع الحقوق محفوظة.</p>
+              <nav>
+                <a href="#">عن الموقع</a>
+                <a href="#">سياسة الخصوصية</a>
+                <a href="#">اتصل بنا</a>
+              </nav>
+            </footer>
+          ]]></b:widget-setting>
+        </b:widget-settings>
+        <b:includable id="main"><data:content/></b:includable>
+      </b:widget>
+    </b:section>
+  </body>
+</html>
