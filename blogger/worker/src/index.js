@@ -19,6 +19,11 @@ const ALLOWED_ORIGINS = [
 //   /api/health                 -> {"status":"ok"}
 //
 // Responses are cached at Cloudflare's edge, so many visitors share one upstream request.
+// Upstream errors are cached briefly too (cacheTtlByStatus), and the last good response of
+// each URL is kept for STALE_TTL seconds: when upstream fails (timeout, 403/429, 5xx) the
+// Worker serves that copy with "X-PXL-Stale: 1" instead of an error, so an upstream outage
+// or rate limit is not amplified by every visitor's poll. (The Cache API needs the Worker on
+// a custom domain/route; on *.workers.dev it is a no-op and errors are returned as before.)
 //
 // CORS: only the origins above get Access-Control-Allow-Origin. Any other Origin (and
 // requests without an Origin header) get 403. An Origin header can be forged by non-browser
@@ -33,6 +38,7 @@ const UPSTREAM_HEADERS = {
 };
 
 const UPSTREAM_TIMEOUT_MS = 10000;
+const STALE_TTL = 900;   // seconds a last-good copy may be served while upstream is failing
 
 const ROUTES = [
   {
@@ -100,6 +106,26 @@ export default {
     const qs = query.toString();
     const ttl = route.ttl(rest);
     const upstreamUrl = route.upstream + rest + (qs ? "?" + qs : "");
+    // Cache key for the last-good copy (on this Worker's own host, never requested by clients)
+    const staleKey = new Request(url.origin + "/__pxl_stale" + url.pathname + (qs ? "?" + qs : ""));
+    const staleOr = async (fallback) => {
+      try {
+        const hit = await caches.default.match(staleKey);
+        if (hit) {
+          return new Response(request.method === "HEAD" ? null : hit.body, {
+            status: 200,
+            headers: {
+              ...cors,
+              "Content-Type": hit.headers.get("Content-Type") || "application/json; charset=utf-8",
+              "Cache-Control": "no-store",
+              "X-PXL-Stale": "1",
+              "X-Content-Type-Options": "nosniff",
+            },
+          });
+        }
+      } catch { /* cache unavailable: fall through */ }
+      return fallback();
+    };
 
     let upstream;
     try {
@@ -107,26 +133,44 @@ export default {
         method: "GET",
         headers: UPSTREAM_HEADERS,
         signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
-        cf: { cacheTtl: ttl, cacheEverything: true },
+        // Errors are cached briefly as well, so a 403/429/5xx burst reaches upstream once per
+        // data centre per few seconds instead of once per visitor poll.
+        cf: {
+          cacheEverything: true,
+          cacheTtlByStatus: { "200-299": ttl, "404": 60, "403": 15, "429": 15, "500-599": 5 },
+        },
       });
     } catch (err) {
       const timedOut = err && err.name === "TimeoutError";
-      return json({ error: timedOut ? "UPSTREAM_TIMEOUT" : "UPSTREAM_UNREACHABLE", message: "Upstream request failed" }, 504, cors);
+      return staleOr(() => json({ error: timedOut ? "UPSTREAM_TIMEOUT" : "UPSTREAM_UNREACHABLE", message: "Upstream request failed" }, 504, cors));
     }
 
     if (!upstream.ok) {
       // 404 from upstream (e.g. unknown standings id) stays 404; other failures become 502
-      const status = upstream.status === 404 ? 404 : 502;
-      return json({ error: status === 404 ? "NOT_FOUND" : "UPSTREAM_ERROR", message: `Upstream returned ${upstream.status}` }, status, cors);
+      if (upstream.status === 404) {
+        return json({ error: "NOT_FOUND", message: "Upstream returned 404" }, 404, cors);
+      }
+      return staleOr(() => json({ error: "UPSTREAM_ERROR", message: `Upstream returned ${upstream.status}` }, 502, cors));
+    }
+
+    const contentType = upstream.headers.get("Content-Type") || "application/json; charset=utf-8";
+    const body = await upstream.arrayBuffer();
+    // Refresh the last-good copy only when the edge actually went upstream (not on every hit)
+    if (upstream.headers.get("CF-Cache-Status") !== "HIT") {
+      ctx.waitUntil(
+        caches.default.put(staleKey, new Response(body.slice(0), {
+          headers: { "Content-Type": contentType, "Cache-Control": `public, max-age=${STALE_TTL}` },
+        })).catch(() => {})
+      );
     }
 
     // Pass the JSON body through; only our own headers go back to the browser
     // (no upstream cookies or server headers).
-    return new Response(request.method === "HEAD" ? null : upstream.body, {
+    return new Response(request.method === "HEAD" ? null : body, {
       status: 200,
       headers: {
         ...cors,
-        "Content-Type": upstream.headers.get("Content-Type") || "application/json; charset=utf-8",
+        "Content-Type": contentType,
         "Cache-Control": `public, max-age=${Math.min(ttl, 60)}`,
         "X-Content-Type-Options": "nosniff",
       },
