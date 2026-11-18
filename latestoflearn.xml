@@ -1,0 +1,1799 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html>
+<html b:css='false' b:defaultwidgetversion='2' b:layoutsVersion='3' expr:dir='data:blog.languageDirection' lang='ar' xmlns='http://www.w3.org/1999/xhtml' xmlns:b='http://www.google.com/2005/gml/b' xmlns:data='http://www.google.com/2005/gml/data' xmlns:expr='http://www.google.com/2005/gml/expr'>
+<head>
+  <meta charset='UTF-8'/>
+  <meta content='width=device-width, initial-scale=1' name='viewport'/>
+  <meta content='#0f172a' name='theme-color'/>
+  <meta content='PX League - مباريات اليوم والنتائج المباشرة' name='description'/>
+  <title>PX League | مباريات اليوم</title>
+
+  <link href='https://fonts.googleapis.com' rel='preconnect'/>
+  <link crossorigin='anonymous' href='https://fonts.gstatic.com' rel='preconnect'/>
+  <link href='https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&amp;display=swap' rel='stylesheet'/>
+
+  <b:skin><![CDATA[ body {margin:0;} ]]></b:skin>
+
+  <script src='https://cdn.jsdelivr.net/npm/hls.js@latest'/>
+  <script src='https://cdn.tailwindcss.com'/>
+  <script>
+  //<![CDATA[
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          'px-dark': '#0f172a',
+          'px-card': '#1e293b',
+          'px-green': '#10b981',
+          'px-neon': '#34d399',
+          'px-textMain': '#f8fafc',
+          'px-textMuted': '#94a3b8'
+        },
+        fontFamily: {
+          cairo: ['Cairo', 'sans-serif']
+        }
+      }
+    }
+  };
+  //]]>
+  </script>
+
+  <style>
+  /*<![CDATA[*/
+  html, body { background: #0f172a; }
+  body { font-family: 'Cairo', sans-serif; -webkit-font-smoothing: antialiased; }
+  [hidden] { display: none !important; }
+
+  /* Live indicator (pulsing neon dot) */
+  .px-live-dot { position: relative; display: inline-flex; width: 10px; height: 10px; flex: none; }
+  .px-live-dot::before { content: ''; position: absolute; inset: 0; border-radius: 9999px; background: #34d399; opacity: .75; animation: pxPing 1.2s cubic-bezier(0,0,.2,1) infinite; }
+  .px-live-dot::after { content: ''; position: relative; width: 10px; height: 10px; border-radius: 9999px; background: #34d399; }
+  @keyframes pxPing { 75%, 100% { transform: scale(2.2); opacity: 0; } }
+
+  /* Loading states */
+  .px-skeleton { background: linear-gradient(90deg, #1e293b 25%, #26354d 50%, #1e293b 75%); background-size: 200% 100%; animation: pxShimmer 1.4s infinite; }
+  @keyframes pxShimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+  .px-spinner { width: 40px; height: 40px; border-radius: 9999px; border: 3px solid rgba(148,163,184,.25); border-top-color: #10b981; animation: pxSpin .8s linear infinite; }
+  @keyframes pxSpin { to { transform: rotate(360deg); } }
+
+  /* Horizontal scroller without a visible scrollbar */
+  .px-scroll, .hide-scrollbar { overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; scroll-snap-type: x proximity; }
+  .px-scroll::-webkit-scrollbar, .hide-scrollbar::-webkit-scrollbar { display: none; }
+  .px-chip { scroll-snap-align: start; }
+
+  /* Team / competition crests */
+  .px-crest { width: 40px; height: 40px; object-fit: contain; display: block; }
+  .px-crest-fallback { width: 40px; height: 40px; display: block; border-radius: 9999px; background: #0f172a; border: 1px solid rgba(255,255,255,.08); }
+  .px-crest-md.px-crest, .px-crest-md.px-crest-fallback { width: 48px; height: 48px; }
+  .px-crest-lg.px-crest, .px-crest-lg.px-crest-fallback { width: 64px; height: 64px; }
+  .px-crest-sm.px-crest, .px-crest-sm.px-crest-fallback { width: 22px; height: 22px; }
+  @media (max-width: 480px) { .px-crest-lg.px-crest, .px-crest-lg.px-crest-fallback { width: 52px; height: 52px; } }
+
+  /* Small inline icons and cards */
+  .px-ico { width: 14px; height: 14px; flex: none; display: inline-block; vertical-align: middle; }
+  .px-card-yellow, .px-card-red { display: inline-block; width: 10px; height: 14px; border-radius: 2px; flex: none; }
+  .px-card-yellow { background: #facc15; }
+  .px-card-red { background: #ef4444; }
+
+  /* Neutralise anything Blogger injects */
+  .section, .widget, #main { margin: 0; padding: 0; }
+  /*]]>*/
+  </style>
+</head>
+
+<body class='bg-px-dark text-px-textMain font-cairo min-h-screen' dir='rtl'>
+
+  <b:section id='main' showaddelement='no'>
+    <b:widget id='Blog1' locked='true' title='رسائل المدونة الإلكترونية' type='Blog' version='2' visible='false'>
+      <b:widget-settings>
+        <b:widget-setting name='showDateHeader'>false</b:widget-setting>
+        <b:widget-setting name='showShareButtons'>false</b:widget-setting>
+        <b:widget-setting name='showCommentLink'>true</b:widget-setting>
+        <b:widget-setting name='showAuthor'>true</b:widget-setting>
+        <b:widget-setting name='style.unittype'>TextAndImage</b:widget-setting>
+        <b:widget-setting name='reactionsLabel'/>
+        <b:widget-setting name='showAuthorProfile'>false</b:widget-setting>
+        <b:widget-setting name='style.layout'>1x1</b:widget-setting>
+        <b:widget-setting name='showLabels'>true</b:widget-setting>
+        <b:widget-setting name='showLocation'>true</b:widget-setting>
+        <b:widget-setting name='showTimestamp'>true</b:widget-setting>
+        <b:widget-setting name='postsPerAd'>1</b:widget-setting>
+        <b:widget-setting name='showBacklinks'>false</b:widget-setting>
+        <b:widget-setting name='showInlineAds'>false</b:widget-setting>
+        <b:widget-setting name='showReactions'>false</b:widget-setting>
+      </b:widget-settings>
+      <b:includable id='main'/>
+      <b:includable id='aboutPostAuthor'>
+  <div class='author-name'>
+    <a class='g-profile' expr:href='data:post.author.profileUrl' rel='author' title='author profile'>
+      <span>
+        <data:post.author.name/>
+      </span>
+    </a>
+  </div>
+  <div>
+    <span class='author-desc'>
+      <data:post.author.aboutMe/>
+    </span>
+  </div>
+</b:includable>
+      <b:includable id='addComments'>
+  <a expr:href='data:post.commentsUrl' expr:onclick='data:post.commentsUrlOnclick'>
+    <b:message name='messages.postAComment'/>
+  </a>
+</b:includable>
+      <b:includable id='commentAuthorAvatar'>
+  <div class='avatar-image-container'>
+    <img class='author-avatar' expr:src='data:comment.authorAvatarSrc' height='35' width='35'/>
+  </div>
+</b:includable>
+      <b:includable id='commentDeleteIcon' var='comment'>
+  <span expr:class='&quot;item-control &quot; + data:comment.adminClass'>
+    <b:if cond='data:showCmtPopup'>
+      <div class='goog-toggle-button'>
+        <div class='goog-inline-block comment-action-icon'/>
+      </div>
+    <b:else/>
+      <a class='comment-delete' expr:href='data:comment.deleteUrl' expr:title='data:messages.deleteComment'>
+        <img src='https://resources.blogblog.com/img/icon_delete13.gif'/>
+      </a>
+    </b:if>
+  </span>
+</b:includable>
+      <b:includable id='commentForm' var='post'>
+  <div class='comment-form'>
+    <a name='comment-form'/>
+    <h4 id='comment-post-message'><data:messages.postAComment/></h4>
+    <b:if cond='data:this.messages.blogComment != &quot;&quot;'>
+      <p><data:this.messages.blogComment/></p>
+    </b:if>
+    <b:include data='post' name='commentFormIframeSrc'/>
+    <iframe allowtransparency='allowtransparency' class='blogger-iframe-colorize blogger-comment-from-post' expr:height='data:cmtIframeInitialHeight ?: &quot;90px&quot;' frameborder='0' id='comment-editor' name='comment-editor' src='' width='100%'/>
+    <data:post.cmtfpIframe/>
+    <script type='text/javascript'>
+      BLOG_CMT_createIframe(&#39;<data:post.appRpcRelayPath/>&#39;);
+    </script>
+  </div>
+</b:includable>
+      <b:includable id='commentFormIframeSrc' var='post'>
+  <a expr:href='data:post.commentFormIframeSrc' id='comment-editor-src'/>
+</b:includable>
+      <b:includable id='commentItem' var='comment'>
+  <div class='comment' expr:id='&quot;c&quot; + data:comment.id'>
+    <b:include cond='data:blog.enabledCommentProfileImages' name='commentAuthorAvatar'/>
+
+    <div class='comment-block'>
+      <div class='comment-author'>
+        <b:if cond='data:comment.authorUrl'>
+          <b:message name='messages.authorSaidWithLink'>
+            <b:param expr:value='data:comment.author' name='authorName'/>
+            <b:param expr:value='data:comment.authorUrl' name='authorUrl'/>
+          </b:message>
+        <b:else/>
+          <b:message name='messages.authorSaid'>
+            <b:param expr:value='data:comment.author' name='authorName'/>
+          </b:message>
+        </b:if>
+      </div>
+      <div expr:class='&quot;comment-body&quot; + (data:comment.isDeleted ? &quot; deleted&quot; : &quot;&quot;)'>
+        <data:comment.body/>
+      </div>
+      <div class='comment-footer'>
+        <span class='comment-timestamp'>
+          <a expr:href='data:comment.url' title='comment permalink'>
+            <data:comment.timestamp/>
+          </a>
+          <b:include data='comment' name='commentDeleteIcon'/>
+        </span>
+      </div>
+    </div>
+  </div>
+</b:includable>
+      <b:includable id='commentList' var='comments'>
+  <div id='comments-block'>
+    <b:loop values='data:comments' var='comment'>
+      <b:include data='comment' name='commentItem'/>
+    </b:loop>
+  </div>
+</b:includable>
+      <b:includable id='commentPicker' var='post'>
+  <b:if cond='data:post.showThreadedComments'>
+    <b:include data='post' name='threadedComments'/>
+  <b:else/>
+    <b:include data='post' name='comments'/>
+  </b:if>
+</b:includable>
+      <b:includable id='comments' var='post'>
+  <section expr:class='&quot;comments&quot; + (data:post.embedCommentForm ? &quot; embed&quot; : &quot;&quot;)' expr:data-num-comments='data:post.numberOfComments' id='comments'>
+    <a name='comments'/>
+    <b:if cond='data:post.allowComments'>
+
+      <b:include name='commentsTitle'/>
+
+      <div expr:id='data:widget.instanceId + &quot;_comments-block-wrapper&quot;'>
+        <b:include cond='data:post.comments' data='post.comments' name='commentList'/>
+      </div>
+
+      <b:if cond='data:post.commentPagingRequired'>
+        <div class='paging-control-container'>
+          <b:if cond='data:post.hasOlderLinks'>
+            <a expr:class='data:post.oldLinkClass' expr:href='data:post.oldestLinkUrl'>
+              <data:messages.oldest/>
+            </a>
+            <a expr:class='data:post.oldLinkClass' expr:href='data:post.olderLinkUrl'>
+              <data:messages.older/>
+            </a>
+          </b:if>
+
+          <span class='comment-range-text'>
+            <data:post.commentRangeText/>
+          </span>
+
+          <b:if cond='data:post.hasNewerLinks'>
+            <a expr:class='data:post.newLinkClass' expr:href='data:post.newerLinkUrl'>
+              <data:messages.newer/>
+            </a>
+            <a expr:class='data:post.newLinkClass' expr:href='data:post.newestLinkUrl'>
+              <data:messages.newest/>
+            </a>
+          </b:if>
+        </div>
+      </b:if>
+
+      <div class='footer'>
+        <b:if cond='data:post.embedCommentForm'>
+          <b:if cond='data:post.allowNewComments'>
+            <b:include data='post' name='commentForm'/>
+          <b:else/>
+            <data:post.noNewCommentsText/>
+          </b:if>
+        <b:else/>
+          <b:if cond='data:post.allowComments'>
+            <b:include data='post' name='addComments'/>
+          </b:if>
+        </b:if>
+      </div>
+    </b:if>
+    <b:if cond='data:showCmtPopup'>
+      <div id='comment-popup'>
+        <iframe allowtransparency='allowtransparency' frameborder='0' id='comment-actions' name='comment-actions' scrolling='no'>
+        </iframe>
+      </div>
+    </b:if>
+  </section>
+</b:includable>
+      <b:includable id='commentsTitle'>
+  <h3 class='title'><data:messages.comments/></h3>
+</b:includable>
+      <b:includable id='feedLinks'>
+  <b:if cond='!data:view.isPost'> <!-- Blog feed links -->
+    <b:if cond='data:feedLinks'>
+      <div class='blog-feeds'>
+        <b:include data='feedLinks' name='feedLinksBody'/>
+      </div>
+    </b:if>
+  <b:else/> <!--Post feed links -->
+    <div class='post-feeds'>
+      <b:loop values='data:posts' var='post'>
+        <b:if cond='data:post.allowComments and data:post.feedLinks'>
+          <b:include data='post.feedLinks' name='feedLinksBody'/>
+        </b:if>
+      </b:loop>
+    </div>
+  </b:if>
+</b:includable>
+      <b:includable id='feedLinksBody' var='links'>
+  <div class='feed-links'>
+  <data:messages.subscribeTo/>
+  <b:loop values='data:links' var='f'>
+     <a class='feed-link' expr:href='data:f.url' expr:type='data:f.mimeType' target='_blank'><data:f.name/> (<data:f.feedType/>)</a>
+  </b:loop>
+  </div>
+</b:includable>
+      <b:includable id='homePageLink'>
+  <a class='home-link' expr:href='data:blog.homepageUrl'>
+    <data:messages.home/>
+  </a>
+</b:includable>
+      <b:includable id='iframeComments' var='post'>
+  <!-- G+ comments, no longer available. The includable is retained for backwards-compatibility. -->
+</b:includable>
+      <b:includable id='inlineAd' var='post'>
+  <b:if cond='!data:view.isPreview'>
+    <b:if cond='data:this.adCode or data:this.adClientId or data:blog.adsenseClientId'>
+      <!-- Ad -->
+      <div class='inline-ad'>
+        <b:if cond='data:this.adCode != &quot;&quot;'>
+          <data:this.adCode/>
+        <b:else/>
+          <b:include cond='data:this.adClientId or data:blog.adsenseClientId' name='defaultAdUnit'/>
+        </b:if>
+      </div>
+    </b:if>
+  <b:else/>
+    <div class='inline-ad'>
+      <div class='inline-ad-placeholder'>
+        <span><b:message name='messages.adsGoHere'/></span>
+      </div>
+    </div>
+  </b:if>
+</b:includable>
+      <b:includable id='nextPageLink'>
+  <a class='blog-pager-older-link' expr:href='data:olderPageUrl' expr:id='data:widget.instanceId + &quot;_blog-pager-older-link&quot;' expr:title='data:messages.olderPosts'>
+    <data:messages.olderPosts/>
+  </a>
+</b:includable>
+      <b:includable id='post' var='post'>
+  <div class='post'>
+    <b:include data='post' name='postMeta'/>
+    <b:include data='post' name='postTitle'/>
+    <b:include name='headerByline'/>
+    <b:if cond='data:view.isSingleItem'>
+      <b:include data='post' name='postBody'/>
+    <b:else/>
+      <b:include data='post' name='postBodySnippet'/>
+      <b:include data='post' name='postJumpLink'/>
+    </b:if>
+    <b:include data='post' name='postFooter'/>
+  </div>
+</b:includable>
+      <b:includable id='postBody' var='post'>
+  <!-- If metaDescription is empty, use the post body as the schema.org description too, for G+/FB snippeting. -->
+  <div class='post-body entry-content float-container' expr:id='&quot;post-body-&quot; + data:post.id'>
+    <data:post.body/>
+  </div>
+</b:includable>
+      <b:includable id='postBodySnippet' var='post'>
+  <b:include data='post' name='postBody'/>
+</b:includable>
+      <b:includable id='postCommentsAndAd' var='post'>
+  <article class='post-outer-container'>
+    <!-- Post title and body -->
+    <div class='post-outer'>
+      <b:include data='post' name='post'/>
+    </div>
+
+    <!-- Comments -->
+    <b:include cond='data:view.isSingleItem' data='post' name='commentPicker'/>
+
+    <!-- Show ad inside post container, after comments, if single item. -->
+    <b:include cond='data:view.isSingleItem and data:post.includeAd' data='post' name='inlineAd'/>
+  </article>
+
+  <!-- Show ad outside post container (between posts) for feed pages. -->
+  <b:include cond='data:view.isMultipleItems and data:post.includeAd' data='post' name='inlineAd'/>
+</b:includable>
+      <b:includable id='postCommentsLink'>
+  <b:if cond='data:view.isMultipleItems'>
+    <span class='byline post-comment-link container'>
+      <b:include cond='data:post.commentSource != 1' name='commentsLink'/>
+    </span>
+  </b:if>
+</b:includable>
+      <b:includable id='postFooter' var='post'>
+  <div class='post-footer'>
+    <b:include name='footerBylines'/>
+    <b:include data='post' name='postFooterAuthorProfile'/>
+  </div>
+</b:includable>
+      <b:includable id='postFooterAuthorProfile' var='post'>
+  <b:if cond='data:post.author.aboutMe and data:view.isPost'>
+    <div class='author-profile'>
+      <b:if cond='data:post.author.authorPhoto.url'>
+        <img class='author-image' expr:src='data:post.author.authorPhoto.url' width='50px'/>
+        <div class='author-about'>
+          <b:include data='post' name='aboutPostAuthor'/>
+        </div>
+      <b:else/>
+        <b:include data='post' name='aboutPostAuthor'/>
+      </b:if>
+    </div>
+  </b:if>
+</b:includable>
+      <b:includable id='postHeader' var='post'>
+  <b:include name='headerByline'/>
+</b:includable>
+      <b:includable id='postMeta' var='post'>
+  <b:include data='post' name='postMetadataJSON'/>
+</b:includable>
+      <b:includable id='postPagination'>
+  <div class='blog-pager container' id='blog-pager'>
+    <b:include cond='data:newerPageUrl' name='previousPageLink'/>
+    <b:include cond='data:olderPageUrl' name='nextPageLink'/>
+    <b:include cond='data:view.url != data:blog.homepageUrl' name='homePageLink'/>
+  </div>
+</b:includable>
+      <b:includable id='postTitle' var='post'>
+  <a expr:name='data:post.id'/>
+  <b:if cond='data:post.title != &quot;&quot;'>
+    <h3 class='post-title entry-title'>
+      <b:if cond='data:post.link or (data:post.url and data:view.url != data:post.url)'>
+        <a expr:href='data:post.link ?: data:post.url'><data:post.title/></a>
+      <b:else/>
+        <data:post.title/>
+      </b:if>
+    </h3>
+  </b:if>
+</b:includable>
+      <b:includable id='previousPageLink'>
+  <a class='blog-pager-newer-link' expr:href='data:newerPageUrl' expr:id='data:widget.instanceId + &quot;_blog-pager-newer-link&quot;' expr:title='data:messages.newerPosts'>
+    <data:messages.newerPosts/>
+  </a>
+</b:includable>
+      <b:includable id='threadedCommentForm' var='post'>
+  <div class='comment-form'>
+    <a name='comment-form'/>
+    <h4 id='comment-post-message'><data:messages.postAComment/></h4>
+    <b:if cond='data:this.messages.blogComment != &quot;&quot;'>
+      <p><data:this.messages.blogComment/></p>
+    </b:if>
+    <b:include data='post' name='commentFormIframeSrc'/>
+    <iframe allowtransparency='allowtransparency' class='blogger-iframe-colorize blogger-comment-from-post' expr:height='data:cmtIframeInitialHeight ?: &quot;90px&quot;' frameborder='0' id='comment-editor' name='comment-editor' src='' width='100%'/>
+    <data:post.cmtfpIframe/>
+    <script type='text/javascript'>
+      BLOG_CMT_createIframe(&#39;<data:post.appRpcRelayPath/>&#39;);
+    </script>
+  </div>
+</b:includable>
+      <b:includable id='threadedCommentJs' var='post'>
+  <script async='async' expr:src='data:post.commentSrc' type='text/javascript'/>
+  <b:template-script inline='true' name='threaded_comments'/>
+  <script type='text/javascript'>
+    blogger.widgets.blog.initThreadedComments(
+        <data:post.commentJso/>,
+        <data:post.commentMsgs/>,
+        <data:post.commentConfig/>);
+  </script>
+</b:includable>
+      <b:includable id='threadedComments' var='post'>
+  <section class='comments threaded' expr:data-embed='data:post.embedCommentForm' expr:data-num-comments='data:post.numberOfComments' id='comments'>
+    <a name='comments'/>
+
+    <b:include name='commentsTitle'/>
+
+    <div class='comments-content'>
+      <b:if cond='data:post.embedCommentForm'>
+        <b:include data='post' name='threadedCommentJs'/>
+      </b:if>
+      <div id='comment-holder'>
+         <data:post.commentHtml/>
+      </div>
+    </div>
+
+    <p class='comment-footer'>
+      <b:if cond='data:post.allowNewComments'>
+        <b:include data='post' name='threadedCommentForm'/>
+      <b:else/>
+        <data:post.noNewCommentsText/>
+      </b:if>
+      <b:if cond='data:post.showManageComments'>
+        <b:include data='post' name='manageComments'/>
+      </b:if>
+    </p>
+
+    <b:if cond='data:showCmtPopup'>
+      <div id='comment-popup'>
+        <iframe allowtransparency='allowtransparency' frameborder='0' id='comment-actions' name='comment-actions' scrolling='no'>
+        </iframe>
+      </div>
+    </b:if>
+  </section>
+</b:includable>
+      <b:includable id='tooltipCss'>
+  <!-- LINT.IfChange -->
+  <style>
+    .post-body a.b-tooltip-container {
+      position: relative;
+      display: inline-block;
+    }
+
+    .post-body a.b-tooltip-container .b-tooltip {
+      display: block !important;
+      position: absolute;
+      top: 100%;
+      left: 50%;
+      transform: translate(-20%, 1px);
+      visibility: hidden;
+      opacity: 0;
+      z-index: 1;
+      transition: opacity 0.2s ease-in-out;
+    }
+
+    .post-body a.b-tooltip-container .b-tooltip iframe {
+      width: 200px;
+      height: 198px;
+      max-width: none;
+      border: none;
+      border-radius: 20px;
+      box-shadow: 1px 1px 3px 1px rgba(0, 0, 0, 0.2);
+    }
+
+    @media (hover: hover) {
+      .post-body a.b-tooltip-container:hover .b-tooltip {
+        visibility: visible;
+        opacity: 1;
+      }
+    }
+  </style>
+  <!-- LINT.ThenChange(//depot/google3/java/com/google/blogger/b2/layouts/widgets/v2-style.css) -->
+</b:includable>
+    </b:widget>
+  </b:section>
+
+  <!-- ===== Main Wrapper (App Shell) ===== -->
+  <div class='flex flex-col min-h-screen bg-px-dark text-px-textMain font-cairo' id='px-league-app'>
+
+    <!-- Main Header (Top) -->
+    <header class='bg-px-card border-b border-white/5 py-4 px-6 flex justify-between items-center sticky top-0 z-50'>
+      <!-- Right side: Logo/Brand Name -->
+      <div class='flex items-center gap-3'>
+        <button aria-label='رجوع إلى المباريات' class='inline-flex items-center gap-1.5 h-9 px-3 rounded-lg bg-px-dark border border-white/5 text-sm font-bold text-px-textMuted hover:text-px-textMain transition-colors' hidden='hidden' id='px-back' type='button'>رجوع</button>
+        <a class='flex items-center gap-2.5' href='#home'>
+          <span class='w-9 h-9 rounded-xl bg-gradient-to-br from-px-green to-emerald-600 flex items-center justify-center font-extrabold text-px-dark text-lg shadow-md shadow-px-green/20'>PX</span>
+          <span class='text-xl font-extrabold tracking-wide text-px-textMain' dir='ltr'>PX <span class='text-px-green'>League</span></span>
+        </a>
+      </div>
+
+      <!-- Center/Left side: Main Navigation links & Search -->
+      <div class='flex items-center gap-6'>
+        <nav class='hidden md:flex items-center gap-5 text-sm font-medium'>
+          <a class='text-px-textMain hover:text-px-green transition' href='#home'>المباريات</a>
+          <a class='text-px-textMuted hover:text-px-green transition' href='#home'>البطولات</a>
+          <a class='text-px-textMuted hover:text-px-green transition' href='#home'>الهدافون</a>
+          <a class='text-px-textMuted hover:text-px-green transition' href='#home'>التوقعات</a>
+          <a class='text-px-textMuted hover:text-px-green transition' href='#home'>الأخبار</a>
+        </nav>
+        <div class='flex items-center gap-3 border-r border-white/10 pr-4 mr-1'>
+          <button aria-label='بحث' class='text-px-textMuted hover:text-px-green transition p-1.5 rounded-lg hover:bg-white/5' type='button'>
+            <svg class='w-4 h-4' fill='none' stroke='currentColor' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' viewBox='0 0 24 24'><circle cx='11' cy='11' r='8'/><line x1='21' x2='16.65' y1='21' y2='16.65'/></svg>
+          </button>
+          <div class='flex items-center gap-2 text-xs text-px-textMuted'>
+            <span class='px-live-dot'/>
+            <span>مباشر: <b class='text-px-neon' id='px-live-count'>&#8211;</b></span>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- Sub-Header (Leagues Bar) -->
+    <div class='bg-px-dark border-b border-white/5 py-2 px-4'>
+      <div aria-label='تصفية حسب البطولة' class='flex overflow-x-auto gap-3 hide-scrollbar max-w-6xl mx-auto' id='px-comps' role='toolbar'/>
+    </div>
+
+    <!-- Main Content Area (flex-grow) -->
+    <main class='flex-grow max-w-6xl w-full mx-auto px-4 py-6'>
+      <!-- Home view: matches schedule -->
+      <section id='home-view'>
+        <nav class='flex justify-center mb-6'>
+          <div class='inline-flex gap-1 p-1 rounded-xl bg-px-card border border-white/5' role='tablist'>
+            <button class='px-day px-5 py-2 rounded-lg text-sm font-bold transition-colors' data-day='yesterday' type='button'>الأمس</button>
+            <button class='px-day px-5 py-2 rounded-lg text-sm font-bold transition-colors' data-day='today' type='button'>اليوم</button>
+            <button class='px-day px-5 py-2 rounded-lg text-sm font-bold transition-colors' data-day='tomorrow' type='button'>الغد</button>
+          </div>
+        </nav>
+
+        <p class='text-center text-px-textMuted text-sm mb-6' id='px-date-label'/>
+
+        <div aria-live='polite' id='px-matches'/>
+      </section>
+
+      <!-- Match details view: #match/{id} -->
+      <section aria-live='polite' class='max-w-3xl mx-auto' hidden='hidden' id='match-view'/>
+    </main>
+
+    <!-- Comprehensive Footer (Bottom) -->
+    <footer class='bg-px-card mt-auto border-t border-px-green/20 pt-10 pb-6'>
+      <div class='max-w-6xl mx-auto px-4 grid grid-cols-1 md:grid-cols-3 gap-8 text-sm'>
+        <!-- Column 1 (Right): PX League Info -->
+        <div>
+          <div class='flex items-center gap-2.5 mb-3'>
+            <span class='w-8 h-8 rounded-lg bg-px-green flex items-center justify-center font-extrabold text-px-dark text-base'>PX</span>
+            <span class='text-lg font-extrabold tracking-wide text-px-textMain' dir='ltr'>PX <span class='text-px-green'>League</span></span>
+          </div>
+          <p class='text-sm text-px-textMuted leading-relaxed mb-4'>
+            المباريات والنتائج والأخبار والتوقعات في تجربة عربية سريعة وموثوقة.
+          </p>
+          <p class='text-xs text-px-textMuted/70' dir='ltr'>
+            &#169; 2026 PX League. All rights reserved.
+          </p>
+        </div>
+
+        <!-- Column 2 (Center): استكشف -->
+        <div>
+          <h3 class='text-sm font-bold text-px-textMain mb-3 border-b border-white/5 pb-2'>استكشف</h3>
+          <ul class='space-y-2 text-sm text-px-textMuted'>
+            <li><a class='hover:text-px-green transition block' href='#home'>المباريات</a></li>
+            <li><a class='hover:text-px-green transition block' href='#home'>البطولات</a></li>
+            <li><a class='hover:text-px-green transition block' href='#home'>الفرق</a></li>
+            <li><a class='hover:text-px-green transition block' href='#home'>جدول الترتيب</a></li>
+            <li><a class='hover:text-px-green transition block' href='#home'>أرشيف النتائج</a></li>
+          </ul>
+        </div>
+
+        <!-- Column 3 (Left): PX League -->
+        <div>
+          <h3 class='text-sm font-bold text-px-textMain mb-3 border-b border-white/5 pb-2'>PX League</h3>
+          <ul class='space-y-2 text-sm text-px-textMuted'>
+            <li><a class='hover:text-px-green transition block' href='#'>عن الموقع</a></li>
+            <li><a class='hover:text-px-green transition block' href='#'>تواصل معنا</a></li>
+            <li><a class='hover:text-px-green transition block' href='#'>سياسة الخصوصية</a></li>
+            <li><a class='hover:text-px-green transition block' href='#'>الشروط والأحكام</a></li>
+            <li><a class='hover:text-px-green transition block' href='#'>إخلاء المسؤولية</a></li>
+          </ul>
+        </div>
+      </div>
+    </footer>
+
+  </div>
+
+  <script>
+  //<![CDATA[
+  (() => {
+    'use strict';
+
+    /* =====================================================================
+       1. Configuration
+       ===================================================================== */
+    const CONFIG = Object.freeze({
+      API_ORIGIN: 'https://px-league-proxy.pxleague.workers.dev',
+      TEAM_IMG: 'https://imgs.ysscores.com/teams/64/',          // team crests (verified)
+      CHAMP_IMG: 'https://imgs.ysscores.com/championship/48/',  // competition crests (verified)
+      REQUEST_TIMEOUT_MS: 15000,     // no request may hang the page
+      LIST_REFRESH_MS: 60000,        // Today tab auto refresh
+      LIVE_POLL_MS: 30000,           // live match details polling
+      BROADCAST_FOLLOWUP_MS: 4000,   // re-check a list whose channel/commentator info is still being fetched
+      BROADCAST_FOLLOWUP_MAX: 5,     // ...at most this many times per list load
+      PRE_KICKOFF_WINDOW_S: 3600,    // upcoming match: start checking 60 min before kickoff
+      PRE_KICKOFF_POLL_MS: 120000,   // ...every 2 minutes (lineups / kickoff)
+      FILTERS_KEY: 'pxLeague.filters',
+      // Live stream test URL isolated in one clearly named constant (Saudi Arabia vs South Korea)
+      LIVE_STREAM_URL: 'https://da91pg4szkdsa.cloudfront.net/time3/master.m3u8'
+    });
+
+    /* Match status codes verified against real API responses:
+       0 = not started, 1 = first half, 2 = half time, 3 = second half, 4 = finished.
+       Any other value has no confirmed meaning and is shown neutrally, never as LIVE. */
+    const NOT_STARTED = 0;
+    const LIVE_STATUSES = [1, 2, 3];
+    const FINISHED = 4;
+
+    /* Competition filter keyed by championship.id (stable across days and seasons). */
+    const COMPETITIONS = [
+      { id: null,  label: 'كل المباريات' },
+      { id: 12048, label: 'دوري أبطال أوروبا' },
+      { id: 5001,  label: 'دوري روشن السعودي' },
+      { id: 6811,  label: 'الدوري الإنجليزي' },
+      { id: 1933,  label: 'الدوري الإسباني' },
+      { id: 3734,  label: 'الدوري الإيطالي' },
+      { id: 2606,  label: 'الدوري الألماني' },
+      { id: 1985,  label: 'الدوري الفرنسي' }
+    ];
+    const DAYS = { yesterday: -1, today: 0, tomorrow: 1 };
+    const IMG_FILE_RE = /^[A-Za-z0-9._-]+\.(png|jpe?g|gif|webp|svg)$/i;
+
+    /* =====================================================================
+       2. Utilities
+       ===================================================================== */
+    const $ = (id) => document.getElementById(id);
+    const ESC_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+    const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ESC_MAP[c]);
+    const isAbort = (err) => !!err && err.name === 'AbortError';
+    const uniq = (arr) => arr.filter((v, i) => v && arr.indexOf(v) === i);
+    const validId = (id) => Number.isInteger(id) && id > 0 && id < 1e10;
+
+    const pad = (n) => String(n).padStart(2, '0');
+    const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    const dateForDay = (day) => { const d = new Date(); d.setDate(d.getDate() + DAYS[day]); return ymd(d); };
+    const longDate = (d) => d.toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+
+    const isLive = (m) => LIVE_STATUSES.includes(Number(m.status));
+
+    const kickoffTime = (m) => m.match_timestamp
+      ? new Date(m.match_timestamp * 1000).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })
+      : String(m.match_time || '').slice(0, 5);
+
+    const matchDate = (m) => m.match_timestamp ? longDate(new Date(m.match_timestamp * 1000)) : (m.match_date || '');
+
+    function liveMinute(m) {
+      const now = Date.now() / 1000;
+      const s = Number(m.status);
+      if (s === 2) return 'استراحة';
+      if (s === 1) {
+        const start = m.ht_time || m.match_timestamp;
+        return `${Math.min(45, Math.max(1, Math.floor((now - start) / 60) + 1))}'`;
+      }
+      if (s === 3 && m.ht_time) {
+        return `${Math.min(90, Math.max(46, 45 + Math.floor((now - m.ht_time) / 60) + 1))}'`;
+      }
+      return 'مباشر';
+    }
+
+    /* Inline SVG icons (inherit currentColor) */
+    const SVG = (paths) => `<svg class="px-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+    const ICON = {
+      mic: SVG('<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1M12 18v4M8 22h8"/>'),
+      tv: SVG('<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M17 2l-5 5-5-5"/>'),
+      ball: SVG('<circle cx="12" cy="12" r="9"/><path d="M12 7.5l4 2.9-1.5 4.6h-5L8 10.4z"/>'),
+      up: SVG('<path d="M12 19V5M5 12l7-7 7 7"/>'),
+      down: SVG('<path d="M12 5v14M5 12l7 7 7-7"/>'),
+      back: SVG('<path d="M9 6l6 6-6 6"/>'),
+      pin: SVG('<path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/>'),
+      whistle: SVG('<circle cx="9" cy="14" r="5"/><path d="M13 11l8-4v4l-6 2"/>'),
+      cal: SVG('<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 11h18"/>'),
+      clock: SVG('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
+      trophy: SVG('<path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0z"/><path d="M17 5h3v2a3 3 0 0 1-3 3M7 5H4v2a3 3 0 0 0 3 3"/>'),
+      warning: SVG('<path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>')
+    };
+
+    /* size: '' (40px), 'md' (48px card), 'lg' (64px details header), 'sm' (22px) */
+    function crestHTML(team, size = '', base = CONFIG.TEAM_IMG) {
+      const file = team && team.image;
+      const cls = size ? ` px-crest-${size}` : '';
+      const dim = size === 'md' ? '48' : size === 'lg' ? '64' : size === 'sm' ? '22' : '40';
+      if (typeof file === 'string' && IMG_FILE_RE.test(file)) {
+        return `<img class="px-crest${cls}" src="${base}${esc(file)}" alt="" width="${dim}" height="${dim}" loading="lazy" decoding="async" referrerpolicy="no-referrer"/>`;
+      }
+      return `<span class="px-crest-fallback${cls}" aria-hidden="true"></span>`;
+    }
+
+    /* Broken image -> neutral placeholder of the same size (error events don't bubble: capture). */
+    function crestFallbackOnError(e) {
+      const t = e.target;
+      if (t && t.tagName === 'IMG' && t.classList.contains('px-crest')) {
+        const ph = document.createElement('span');
+        ph.className = t.className.replace('px-crest', 'px-crest-fallback');
+        ph.setAttribute('aria-hidden', 'true');
+        t.replaceWith(ph);
+      }
+    }
+
+    /* Home score sits on the home team's side (first column = right in RTL).
+       Separate flex items, so the bidi algorithm cannot swap the numbers. */
+    const scoreHTML = (hs, as, cls) =>
+      `<span class="inline-flex items-center gap-2 tabular-nums ${cls}"><span>${esc(hs)}</span><span aria-hidden="true">-</span><span>${esc(as)}</span></span>`;
+
+    const storage = {
+      get(key) { try { return JSON.parse(window.sessionStorage.getItem(key) || 'null'); } catch (e) { return null; } },
+      set(key, value) { try { window.sessionStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* private mode */ } }
+    };
+
+    /* =====================================================================
+       3. API client (Cloudflare Worker only)
+       ===================================================================== */
+    const Api = {
+      /* GET JSON with a hard timeout. A timeout rejects with code TIMEOUT;
+         an abort from `outerSignal` (navigation / newer request) rejects as AbortError. */
+      request(url, outerSignal, fresh = false) {
+        const ctrl = new AbortController();
+        let timedOut = false;
+        const timer = setTimeout(() => { timedOut = true; ctrl.abort(); }, CONFIG.REQUEST_TIMEOUT_MS);
+        const forward = () => ctrl.abort();
+        if (outerSignal) {
+          if (outerSignal.aborted) ctrl.abort();
+          else outerSignal.addEventListener('abort', forward, { once: true });
+        }
+        // fresh: bypass the browser HTTP cache (follow-ups must see newly filled data)
+        return fetch(url, fresh ? { signal: ctrl.signal, cache: 'no-store' } : { signal: ctrl.signal })
+          .then(async (res) => {
+            let body = null;
+            try { body = await res.json(); } catch (e) { body = null; }
+            if (!res.ok || !body || body.status !== true) {
+              const err = new Error('Request failed');
+              err.code = body && body.error ? body.error.code : `HTTP_${res.status}`;
+              throw err;
+            }
+            return body;
+          })
+          .catch((err) => {
+            if (timedOut) { const e = new Error('Request timed out'); e.code = 'TIMEOUT'; throw e; }
+            throw err;
+          })
+          .finally(() => {
+            clearTimeout(timer);
+            if (outerSignal) outerSignal.removeEventListener('abort', forward);
+          });
+      },
+
+      /* -> { list, pending }. `broadcasts_pending` (Worker): matches whose channel/commentator
+         info is still being fetched in the background; absent on older Workers -> 0. */
+      matches(date, signal, fresh = false) {
+        return this.request(`${CONFIG.API_ORIGIN}/matches?date=${encodeURIComponent(date)}`, signal, fresh).then((body) => {
+          if (!Array.isArray(body.data)) { const e = new Error('Unexpected payload'); e.code = 'BAD_PAYLOAD'; throw e; }
+          const pending = Number.isInteger(body.broadcasts_pending) && body.broadcasts_pending > 0 ? body.broadcasts_pending : 0;
+          return { list: body.data, pending };
+        });
+      },
+
+      match(id, signal) {
+        return this.request(`${CONFIG.API_ORIGIN}/match?id=${encodeURIComponent(id)}`, signal).then((body) => {
+          if (!body.data || typeof body.data !== 'object') { const e = new Error('Unexpected payload'); e.code = 'BAD_PAYLOAD'; throw e; }
+          return { data: body.data, unavailable: Array.isArray(body.unavailable) ? body.unavailable : [] };
+        });
+      }
+    };
+
+    /* =====================================================================
+       4. Application state
+       ===================================================================== */
+    const state = {
+      view: null,                 // 'home' | 'match'
+      day: 'today',
+      comp: null,                 // selected championship.id, null = all
+      list: null,                 // matches of the selected day (last good response)
+      listCtrl: null,
+      listReqId: 0,
+      listLoaded: false,
+      lastListLoad: 0,
+      homeScroll: 0,
+      followUpTimer: null,        // pending channel/commentator re-check of the current list
+      followUps: 0,
+      byId: new Map()             // match_id -> match from any loaded day (instant details header)
+    };
+
+    function saveFilters() { storage.set(CONFIG.FILTERS_KEY, { day: state.day, comp: state.comp }); }
+    function restoreFilters() {
+      const v = storage.get(CONFIG.FILTERS_KEY);
+      if (!v) return;
+      if (v.day in DAYS) state.day = v.day;
+      if (COMPETITIONS.some((c) => c.id === v.comp)) state.comp = v.comp;
+    }
+
+    /* =====================================================================
+       5. Home view — schedule, date tabs, league filters, match cards
+       ===================================================================== */
+    const Home = (() => {
+      const el = {};
+
+      function statusBadge(m) {
+        const hs = m.home_scores == null ? 0 : m.home_scores;
+        const as = m.away_scores == null ? 0 : m.away_scores;
+        const s = Number(m.status);
+        if (isLive(m)) {
+          return `<div class="bg-px-dark px-3 py-1 rounded-lg text-lg font-bold flex items-center justify-center gap-1.5 text-px-textMain">
+                    ${scoreHTML(hs, as, '')}
+                    <span class="px-live-dot"></span>
+                  </div>
+                  <span class="text-xs text-px-neon font-bold mt-1">${esc(liveMinute(m))}</span>`;
+        }
+        if (s === FINISHED) {
+          return `<div class="bg-px-dark px-3 py-1 rounded-lg text-lg font-bold text-px-textMain">
+                    ${scoreHTML(hs, as, '')}
+                  </div>
+                  <span class="text-xs text-px-textMuted mt-1">انتهت</span>`;
+        }
+        const label = s === NOT_STARTED ? 'لم تبدأ' : '—';
+        return `<div class="bg-px-dark px-3 py-1 rounded-lg text-lg font-bold text-px-textMain">
+                  ${esc(kickoffTime(m))}
+                </div>
+                <span class="text-xs text-px-textMuted mt-1">${label}</span>`;
+      }
+
+      const teamCardCol = (team) => `
+        <div class="w-1/3 flex flex-col items-center text-center min-w-0 px-1">
+          ${crestHTML(team, 'md')}
+          <span class="text-sm font-bold text-center mt-2 leading-snug break-words w-full truncate" title="${esc((team && team.title) || '—')}">
+            ${esc((team && team.title) || '—')}
+          </span>
+        </div>`;
+
+      /* TV channel / commentator footer under match info.
+         Preserves exact channel-commentator pair relationships and avoids premature "غير متوفر" during enrichment. */
+      function broadcastFooter(m) {
+        if (m.broadcasts === undefined) {
+          return `<div class="bg-px-dark/30 border-t border-white/5 flex px-4 py-2 text-xs text-px-textMuted justify-center items-center gap-2" data-broadcasts="pending">
+                    <span class="inline-block w-1.5 h-1.5 rounded-full bg-px-neon animate-pulse"></span>
+                    <span class="text-[11px] text-px-textMuted/70">جارٍ التحقق من البث...</span>
+                  </div>`;
+        }
+
+        const pairs = [];
+        const seen = new Set();
+        if (Array.isArray(m.broadcasts)) {
+          for (const b of m.broadcasts) {
+            if (!b || (!b.channel && !b.commentator)) continue;
+            const k = `${b.channel || ''}|${b.commentator || ''}`;
+            if (!seen.has(k)) {
+              seen.add(k);
+              pairs.push({ channel: b.channel || null, commentator: b.commentator || null });
+            }
+          }
+        }
+
+        if (!pairs.length) {
+          return `<div class="bg-px-dark/30 border-t border-white/5 flex px-4 py-2 text-xs text-px-textMuted" data-broadcasts="empty">
+                    <div class="flex items-center gap-1.5 w-1/2 border-l border-white/10 pl-2 min-w-0">
+                      <span class="text-px-textMuted/40 shrink-0">${ICON.tv}</span>
+                      <span class="truncate text-px-textMuted/60">غير متوفر</span>
+                    </div>
+                    <div class="flex items-center gap-1.5 w-1/2 justify-center pr-2 min-w-0">
+                      <span class="text-px-textMuted/40 shrink-0">${ICON.mic}</span>
+                      <span class="truncate text-px-textMuted/60">غير متوفر</span>
+                    </div>
+                  </div>`;
+        }
+
+        const pairRows = pairs.map((p) => {
+          const chText = p.channel ? esc(p.channel) : 'غير متوفر';
+          const comText = p.commentator ? esc(p.commentator) : 'غير متوفر';
+          const chCls = p.channel ? 'text-px-textMain/90' : 'text-px-textMuted/60';
+          const comCls = p.commentator ? 'text-px-textMain/90' : 'text-px-textMuted/60';
+          const chTitle = p.channel ? `القناة: ${p.channel}` : 'القناة: غير متوفر';
+          const comTitle = p.commentator ? `المعلق: ${p.commentator}` : 'المعلق: غير متوفر';
+
+          return `<div class="flex px-4 py-2 items-center text-xs text-px-textMuted">
+                    <div class="flex items-center gap-1.5 w-1/2 border-l border-white/10 pl-2 min-w-0" title="${esc(chTitle)}">
+                      <span class="${p.channel ? 'text-px-green' : 'text-px-textMuted/40'} shrink-0">${ICON.tv}</span>
+                      <span class="truncate ${chCls}">${chText}</span>
+                    </div>
+                    <div class="flex items-center gap-1.5 w-1/2 justify-center pr-2 min-w-0" title="${esc(comTitle)}">
+                      <span class="${p.commentator ? 'text-px-green' : 'text-px-textMuted/40'} shrink-0">${ICON.mic}</span>
+                      <span class="truncate ${comCls}">${comText}</span>
+                    </div>
+                  </div>`;
+        }).join('');
+
+        return `<div class="bg-px-dark/30 border-t border-white/5 divide-y divide-white/5" data-broadcasts="ready">
+                  ${pairRows}
+                </div>`;
+      }
+
+      function cardHTML(m) {
+        const league = (m.championship && m.championship.title) || '—';
+        const live = isLive(m);
+        const article = `
+          <article class="h-full bg-px-card rounded-xl overflow-hidden border border-white/5 hover:border-px-green/50 transition duration-300 flex flex-col justify-between${live ? ' ring-1 ring-px-neon/40' : ''}">
+            <div>
+              <header class="px-4 py-2 border-b border-white/5 flex items-center justify-between gap-2 text-xs text-px-textMuted">
+                <span class="truncate font-semibold">${esc(league)}</span>
+                ${live ? '<span class="flex items-center gap-1.5 text-[10px] font-extrabold tracking-widest text-px-neon shrink-0"><span class="px-live-dot"></span>LIVE</span>' : ''}
+              </header>
+              <div class="flex items-center p-4 min-w-0">
+                ${teamCardCol(m.home_team)}
+                <div class="w-1/3 flex flex-col items-center justify-center text-center px-1">
+                  ${statusBadge(m)}
+                </div>
+                ${teamCardCol(m.away_team)}
+              </div>
+            </div>
+            ${broadcastFooter(m)}
+          </article>`;
+        if (!validId(m.match_id)) return article;
+        const name = `${(m.home_team && m.home_team.title) || ''} - ${(m.away_team && m.away_team.title) || ''}`;
+        return `<a class="block rounded-xl focus:outline-none focus-visible:ring-2 focus-visible:ring-px-green transition-transform duration-200 hover:-translate-y-0.5" href="#match/${m.match_id}" aria-label="${esc(name)}">${article}</a>`;
+      }
+
+      const compOf = (m) => (m.championship ? Number(m.championship.id) : null);
+      const compLabel = (id) => (COMPETITIONS.find((c) => c.id === id) || {}).label || '';
+
+      function paintDayTabs() {
+        el.days.forEach((b) => {
+          const on = b.dataset.day === state.day;
+          b.setAttribute('aria-selected', String(on));
+          b.classList.toggle('bg-px-green', on);
+          b.classList.toggle('text-px-dark', on);
+          b.classList.toggle('text-px-textMuted', !on);
+          b.classList.toggle('hover:text-px-textMain', !on);
+        });
+      }
+
+      function renderCompBar() {
+        el.comps.innerHTML = COMPETITIONS.map((c) => {
+          const on = c.id === state.comp;
+          const count = state.list ? (c.id === null ? state.list.length : state.list.filter((m) => compOf(m) === c.id).length) : null;
+          const baseCls = 'flex items-center gap-2 px-4 py-1.5 rounded-full whitespace-nowrap text-xs cursor-pointer transition shrink-0';
+          const cls = on
+            ? `${baseCls} bg-px-green text-px-dark font-bold shadow-sm shadow-px-green/20`
+            : `${baseCls} bg-px-card text-px-textMain hover:bg-white/10 border border-white/5${count === 0 ? ' opacity-60' : ''}`;
+          const badge = count === null ? '' :
+            `<span class="min-w-[1.125rem] h-4 px-1 rounded-full text-[10px] leading-4 text-center font-bold ${on ? 'bg-px-dark/20 text-px-dark' : 'bg-px-dark text-px-textMuted'}">${count}</span>`;
+          return `<button type="button" class="${cls}" data-comp="${c.id === null ? '' : c.id}" aria-pressed="${on}">
+                    <span>${esc(c.label)}</span>${badge}
+                  </button>`;
+        }).join('');
+      }
+
+      const panelHTML = (inner) => `<div class="bg-px-card rounded-xl p-10 text-center">${inner}</div>`;
+
+      function renderSkeleton() {
+        el.grid.innerHTML = `<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">${'<div class="px-skeleton rounded-xl h-36"></div>'.repeat(6)}</div>`;
+      }
+
+      function renderError(err) {
+        const msg = err && err.code === 'TIMEOUT' ? 'استغرق الخادم وقتاً طويلاً للرد.' : 'تحقق من اتصالك ثم أعد المحاولة.';
+        el.grid.innerHTML = panelHTML(`
+          <p class="text-lg font-bold mb-2">تعذّر تحميل المباريات</p>
+          <p class="text-px-textMuted text-sm mb-4">${msg}</p>
+          <button type="button" data-act="retry-list" class="px-5 py-2 rounded-lg bg-px-green text-px-dark font-bold">إعادة المحاولة</button>`);
+      }
+
+      function renderList() {
+        const all = state.list;
+        if (!all) return;
+        $('px-live-count').textContent = all.filter(isLive).length;
+        if (!all.length) {
+          el.grid.innerHTML = panelHTML('<p class="text-px-textMuted">لا توجد مباريات في هذا اليوم.</p>');
+          return;
+        }
+        const list = state.comp === null ? all.slice() : all.filter((m) => compOf(m) === state.comp);
+        if (!list.length) {
+          el.grid.innerHTML = panelHTML(`
+            <p class="text-px-textMuted mb-4">لا توجد مباريات في ${esc(compLabel(state.comp))} في هذا اليوم.</p>
+            <button type="button" data-comp="" class="px-5 py-2 rounded-lg bg-px-green text-px-dark font-bold">عرض كل المباريات</button>`);
+          return;
+        }
+        // live first, then upcoming, finished, unknown; within each group by kickoff
+        const rank = (m) => (isLive(m) ? 0 : Number(m.status) === NOT_STARTED ? 1 : Number(m.status) === FINISHED ? 2 : 3);
+        list.sort((a, b) => (rank(a) - rank(b)) || ((a.match_timestamp || 0) - (b.match_timestamp || 0)));
+        el.grid.innerHTML = `<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">${list.map(cardHTML).join('')}</div>`;
+      }
+
+      function setList(list) {
+        state.list = list;
+        state.lastListLoad = Date.now();
+        list.forEach((m) => { if (validId(m.match_id)) state.byId.set(m.match_id, m); });
+        renderCompBar();
+        renderList();
+      }
+
+      function cancelFollowUp() {
+        clearTimeout(state.followUpTimer);
+        state.followUpTimer = null;
+      }
+
+      /* Channel/commentator info is filled by the Worker in the background. While it reports
+         `pending`, re-check a few times (bounded) so the cards fill in without user action. */
+      function scheduleFollowUp(pending, reqId) {
+        cancelFollowUp();
+        if (!pending || state.followUps >= CONFIG.BROADCAST_FOLLOWUP_MAX) return;
+        state.followUpTimer = setTimeout(() => {
+          state.followUpTimer = null;
+          if (reqId !== state.listReqId || state.view !== 'home' || document.hidden) return;
+          state.followUps++;
+          load(true, true);
+        }, CONFIG.BROADCAST_FOLLOWUP_MS);
+      }
+
+      /* silent = background refresh: keeps the last good list on screen.
+         followUp = broadcast re-check (keeps its attempt budget; bypasses the browser cache). */
+      function load(silent = false, followUp = false) {
+        const date = dateForDay(state.day);
+        el.label.textContent = longDate(new Date(`${date}T12:00:00`));
+        if (state.listCtrl) state.listCtrl.abort();               // one list request at a time
+        cancelFollowUp();                                         // any load supersedes a pending re-check
+        if (!followUp) state.followUps = 0;
+        const ctrl = new AbortController();
+        state.listCtrl = ctrl;
+        state.listLoaded = true;
+        const reqId = ++state.listReqId;
+        if (!silent) { state.list = null; renderSkeleton(); renderCompBar(); }
+
+        Api.matches(date, ctrl.signal, followUp)
+          .then(({ list, pending }) => {
+            if (reqId !== state.listReqId) return;
+            setList(list);
+            scheduleFollowUp(pending, reqId);
+          })
+          .catch((err) => {
+            if (reqId !== state.listReqId || isAbort(err)) return;  // superseded
+            console.warn('[PX League] matches request failed:', err);
+            if (!silent || !state.list) renderError(err);            // nothing on screen -> show the error
+          })
+          .finally(() => { if (state.listCtrl === ctrl) state.listCtrl = null; });
+      }
+
+      function selectDay(day) {
+        if (!(day in DAYS) || day === state.day) return;
+        state.day = day;
+        saveFilters();
+        paintDayTabs();
+        load(false);
+      }
+
+      function selectComp(e) {
+        const btn = e.target.closest('[data-comp]');
+        if (!btn) return false;
+        const v = btn.getAttribute('data-comp');
+        const id = v === '' ? null : Number(v);
+        if (id !== state.comp) {
+          state.comp = id;
+          saveFilters();
+          renderCompBar();
+          renderList();
+          const active = el.comps.querySelector('[aria-pressed="true"]');
+          if (active) active.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        }
+        return true;
+      }
+
+      function init() {
+        el.view = $('home-view');
+        el.days = Array.from(document.querySelectorAll('.px-day'));
+        el.comps = $('px-comps');
+        el.label = $('px-date-label');
+        el.grid = $('px-matches');
+
+        el.days.forEach((b) => b.addEventListener('click', () => selectDay(b.dataset.day)));
+        el.comps.addEventListener('click', selectComp);
+        el.grid.addEventListener('click', (e) => {
+          if (selectComp(e)) return;
+          if (e.target.closest('[data-act="retry-list"]')) load(false);
+        });
+        el.grid.addEventListener('error', crestFallbackOnError, true);
+
+        // Auto refresh: Today tab only, page visible, home view only
+        setInterval(() => {
+          if (state.view === 'home' && state.day === 'today' && !document.hidden) load(true);
+        }, CONFIG.LIST_REFRESH_MS);
+
+        paintDayTabs();
+        renderCompBar();
+      }
+
+      function show(restoreScroll) {
+        el.view.hidden = false;
+        if (!state.listLoaded) load(false);
+        else if (state.day === 'today' && Date.now() - state.lastListLoad > CONFIG.LIST_REFRESH_MS) load(true);
+        if (restoreScroll) window.scrollTo(0, state.homeScroll || 0);
+      }
+
+      function hide() {
+        state.homeScroll = window.pageYOffset || 0;
+        cancelFollowUp();                                         // no list traffic while a match is open
+        el.view.hidden = true;
+      }
+
+      return { init, show, hide, load };
+    })();
+
+    /* =====================================================================
+       6. Match details view — #match/{id}
+       ===================================================================== */
+    const MatchView = (() => {
+      const TABS = [
+        { id: 'overview', label: 'نظرة عامة' },
+        { id: 'lineups', label: 'التشكيلة' },
+        { id: 'events', label: 'الأحداث' },
+        { id: 'stats', label: 'الإحصائيات' }
+      ];
+      const PHASES = { start: 'انطلاق المباراة', half_time: 'نهاية الشوط الأول', second_half: 'بداية الشوط الثاني', full_time: 'نهاية المباراة' };
+      const POSITION_GROUPS = [['G', 'حراسة المرمى'], ['D', 'الدفاع'], ['M', 'الوسط'], ['F', 'الهجوم']];
+      const STAT_LABELS = [
+        ['ball_possession', 'الاستحواذ', '%'],
+        ['total_shots', 'التسديدات', ''],
+        ['fouls', 'الأخطاء', ''],
+        ['offsides', 'التسلل', ''],
+        ['xg', 'الأهداف المتوقعة (xG)', '']
+      ];
+      const NO_DATA = 'لا توجد بيانات متاحة';
+
+      const m = {
+        id: null, data: null, header: null, unavailable: [], error: null,
+        tab: 'overview', ctrl: null, timer: null, pendingWhenVisible: false, sig: {}
+      };
+      let root = null;
+
+      /* ---------- small builders ---------- */
+      const panel = (inner, extra = '') => `<div class="bg-px-card rounded-2xl border border-white/5 p-4 sm:p-5 ${extra}">${inner}</div>`;
+      const noDataHTML = (title = 'لا تتوفر بيانات حالياً', subtitle = 'لم يرسل المصدر أحداثاً لهذه المباراة.') => panel(`
+        <div class="flex flex-col items-center justify-center text-center py-10 px-4">
+          <div class="w-12 h-12 rounded-full bg-amber-400/10 text-amber-400 flex items-center justify-center mb-4 [&>svg]:w-6 [&>svg]:h-6">
+            ${ICON.warning}
+          </div>
+          <h4 class="text-lg font-bold text-px-textMain mb-1">${esc(title)}</h4>
+          <p class="text-sm text-px-textMuted">${esc(subtitle)}</p>
+        </div>`);
+      const retryHTML = (text) => panel(`
+        <div class="text-center py-6">
+          <p class="text-sm text-px-textMuted mb-4">${esc(text)}</p>
+          <button type="button" data-act="retry" class="px-5 py-2 rounded-lg bg-px-green text-px-dark text-sm font-bold">إعادة المحاولة</button>
+        </div>`);
+      const spinnerHTML = () => `<div class="flex flex-col items-center justify-center gap-3 py-16" role="status"><div class="px-spinner"></div><span class="text-sm text-px-textMuted">جارٍ تحميل تفاصيل المباراة…</span></div>`;
+      const minuteLabel = (e) => `${e.minute}${e.extra ? `+${e.extra}` : ''}'`;
+      const hasEvents = (d) => Array.isArray(d.events) && d.events.some((e) => e.kind !== 'period');
+
+      function setRegion(id, html) {                // only changed regions touch the DOM
+        if (m.sig[id] === html) return;
+        const node = $(id);
+        if (!node) return;
+        m.sig[id] = html;
+        node.innerHTML = html;
+      }
+
+      function isStreamMatch(d) {
+        if (!d) return false;
+        if (d.match_id === 6539343) return true;
+        const ht = (d.home_team && (d.home_team.title || d.home_team.full_title)) || '';
+        const at = (d.away_team && (d.away_team.title || d.away_team.full_title)) || '';
+        const isKSA = (t) => t.includes('السعودية') || t.includes('Saudi');
+        const isKOR = (t) => t.includes('كوريا') || t.includes('Korea');
+        return (isKSA(ht) && isKOR(at)) || (isKSA(at) && isKOR(ht));
+      }
+
+      function playerHTML(d) {
+        if (!isStreamMatch(d)) return '';
+        return `
+          <section aria-label="البث المباشر" class="bg-px-card rounded-2xl p-2.5 sm:p-3 mb-4 sm:mb-6 border border-white/10 shadow-[0_0_25px_rgba(16,185,129,0.12)]">
+            <div class="relative w-full aspect-video rounded-xl overflow-hidden bg-black flex items-center justify-center">
+              <video id="px-player" controls playsinline class="w-full h-full object-contain bg-black" preload="metadata"></video>
+              <div id="px-player-overlay" class="absolute inset-0 bg-black/85 flex flex-col items-center justify-center p-4 text-center z-10 transition-opacity">
+                <div id="px-player-overlay-content">
+                  <div class="px-spinner mb-3"></div>
+                  <p class="text-sm font-semibold text-px-textMain">جارٍ الاتصال بالبث المباشر...</p>
+                </div>
+              </div>
+            </div>
+          </section>`;
+      }
+
+      function shellHTML() {
+        return `
+          <article class="bg-px-card rounded-2xl border border-white/5 p-4 sm:p-6 mb-4">
+            <div id="d-meta"></div>
+            <div class="grid grid-cols-[1fr_auto_1fr] items-start gap-2 sm:gap-4 mt-5">
+              <div id="d-home"></div><div id="d-center"></div><div id="d-away"></div>
+            </div>
+          </article>
+          <div id="d-player"></div>
+          <div id="d-tabs"></div>
+          <div id="d-body"></div>`;
+      }
+
+      /* ---------- header ---------- */
+      function metaHTML(d) {
+        const c = d.championship || {};
+        return `
+          <div class="flex flex-col items-center gap-1 text-center">
+            <div class="flex items-center gap-2 text-sm font-bold">
+              ${c.image ? crestHTML({ image: c.image }, 'sm', CONFIG.CHAMP_IMG) : ''}
+              <span>${esc(c.title || '—')}</span>
+              ${d.round ? `<span class="text-px-textMuted font-semibold">· ${esc(d.round)}</span>` : ''}
+            </div>
+            <div class="text-xs text-px-textMuted">${esc(matchDate(d))}</div>
+          </div>`;
+      }
+
+      const bigTeamHTML = (team) => `
+        <div class="flex flex-col items-center gap-2 min-w-0 text-center">
+          ${crestHTML(team, 'lg')}
+          <span class="font-extrabold text-sm sm:text-base leading-snug break-words w-full">${esc((team && team.title) || '—')}</span>
+        </div>`;
+
+      function centerHTML(d) {
+        const s = Number(d.status);
+        const hs = d.home_scores == null ? 0 : d.home_scores;
+        const as = d.away_scores == null ? 0 : d.away_scores;
+        const score = `<div>${scoreHTML(hs, as, 'text-4xl sm:text-5xl font-extrabold gap-3')}</div>`;
+        const ht = d.half_time ? `<div class="text-[11px] text-px-textMuted">الشوط الأول ${scoreHTML(d.half_time.home, d.half_time.away, 'gap-1')}</div>` : '';
+        let inner;
+        if (isLive(d)) {
+          inner = `${score}<div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-px-neon/10 text-px-neon text-xs font-extrabold"><span class="px-live-dot"></span>${esc(liveMinute(d))}</div>${ht}`;
+        } else if (s === FINISHED) {
+          inner = `${score}<div class="px-3 py-1 rounded-full bg-px-dark text-px-textMuted text-xs font-bold">انتهت</div>${ht}`;
+        } else if (s === NOT_STARTED) {
+          inner = `<div class="text-2xl sm:text-3xl font-extrabold">${esc(kickoffTime(d))}</div><div class="px-3 py-1 rounded-full bg-px-dark text-px-textMuted text-xs font-bold">لم تبدأ</div>`;
+        } else {
+          inner = `<div class="text-2xl font-extrabold">${esc(kickoffTime(d))}</div><div class="text-xs text-px-textMuted">—</div>`;
+        }
+        return `<div class="flex flex-col items-center gap-2 pt-2 min-w-[6.5rem]">${inner}</div>`;
+      }
+
+      /* ---------- tabs ---------- */
+      function tabsHTML() {
+        return `<div class="mb-4"><div class="flex gap-1 p-1 w-full sm:w-max mx-auto rounded-xl bg-px-card border border-white/5" role="tablist">
+          ${TABS.map((t) => {
+            const on = t.id === m.tab;
+            return `<button type="button" role="tab" aria-selected="${on}" data-tab="${t.id}"
+                      class="flex-1 sm:flex-none min-w-0 px-2 sm:px-4 py-2 rounded-lg text-[13px] sm:text-sm font-bold whitespace-nowrap transition-colors ${on ? 'bg-px-green text-px-dark' : 'text-px-textMuted hover:text-px-textMain'}">${t.label}</button>`;
+          }).join('')}</div></div>`;
+      }
+
+      /* ---------- events ---------- */
+      function eventBody(e) {
+        switch (e.kind) {
+          case 'goal':
+            return `<div class="flex items-start gap-2"><span class="text-px-green mt-0.5">${ICON.ball}</span><div class="min-w-0">
+                      <div class="font-bold break-words">${esc(e.player || 'هدف')}</div>
+                      ${e.assist ? `<div class="text-[11px] text-px-textMuted break-words">صناعة: ${esc(e.assist)}</div>` : ''}</div></div>`;
+          case 'own_goal':
+            return `<div class="flex items-start gap-2"><span class="text-red-400 mt-0.5">${ICON.ball}</span><div class="min-w-0">
+                      <div class="font-bold break-words">${esc(e.player || '')}</div><div class="text-[11px] text-px-textMuted">هدف عكسي</div></div></div>`;
+          case 'yellow':
+          case 'red':
+            return `<div class="flex items-center gap-2"><span class="px-card-${e.kind}" aria-hidden="true"></span>
+                      <span class="sr-only">${e.kind === 'red' ? 'بطاقة حمراء' : 'بطاقة صفراء'}: </span>
+                      <span class="font-semibold break-words min-w-0">${esc(e.player || '')}</span></div>`;
+          case 'sub':
+            return `<div class="flex flex-col gap-0.5 min-w-0">
+                      ${e.player_on ? `<div class="flex items-center gap-1.5"><span class="text-px-green">${ICON.up}</span><span class="sr-only">دخول: </span><span class="font-semibold break-words">${esc(e.player_on)}</span></div>` : ''}
+                      ${e.player_off ? `<div class="flex items-center gap-1.5 text-px-textMuted"><span class="text-red-400">${ICON.down}</span><span class="sr-only">خروج: </span><span class="break-words">${esc(e.player_off)}</span></div>` : ''}
+                    </div>`;
+          default:
+            return '';
+        }
+      }
+
+      function timelineHTML(events, withPeriods) {
+        return `<ol class="flex flex-col gap-1">${events.map((e) => {
+          if (e.kind === 'period') {
+            if (!withPeriods || !PHASES[e.phase]) return '';
+            return `<li class="flex items-center gap-3 py-2 text-[11px] font-bold text-px-textMuted"><span class="flex-1 h-px bg-white/10"></span>${esc(PHASES[e.phase])}<span class="flex-1 h-px bg-white/10"></span></li>`;
+          }
+          const body = eventBody(e);
+          const home = e.team === 'away' ? '' : body;
+          const away = e.team === 'away' ? body : '';
+          return `<li class="grid grid-cols-[1fr_auto_1fr] items-center gap-3 py-1.5 text-sm">
+                    <div class="min-w-0">${home}</div>
+                    <span class="min-w-[3.25rem] text-center px-2 py-0.5 rounded-md bg-px-dark text-xs font-bold tabular-nums" dir="ltr">${esc(minuteLabel(e))}</span>
+                    <div class="min-w-0 flex justify-end text-left">${away}</div>
+                  </li>`;
+        }).join('')}</ol>`;
+      }
+
+      /* ---------- tab bodies ---------- */
+      function overviewHTML(d) {
+        let out = '';
+
+        const bc = (Array.isArray(d.broadcasts) ? d.broadcasts : []).filter((x) => x && (x.channel || x.commentator));
+        out += panel(`
+          <h3 class="text-sm font-extrabold mb-3">البث التلفزيوني</h3>
+          ${bc.length ? `<ul class="flex flex-col gap-2 text-sm">${bc.map((x) => `
+            <li class="flex flex-wrap items-center gap-x-5 gap-y-1">
+              ${x.channel ? `<span class="inline-flex items-center gap-1.5"><span class="text-px-green">${ICON.tv}</span><span class="sr-only">القناة: </span>${esc(x.channel)}</span>` : ''}
+              ${x.commentator ? `<span class="inline-flex items-center gap-1.5 text-px-textMuted"><span class="text-px-green">${ICON.mic}</span><span class="sr-only">المعلق: </span>${esc(x.commentator)}</span>` : ''}
+            </li>`).join('')}</ul>` : `<p class="text-sm text-px-textMuted">${NO_DATA}</p>`}`, 'mb-4');
+
+        const rows = [
+          [ICON.trophy, 'البطولة', d.championship && d.championship.title],
+          [ICON.cal, 'التاريخ', matchDate(d)],
+          [ICON.clock, 'موعد الانطلاق', kickoffTime(d)],
+          [ICON.pin, 'الملعب', d.stadium],
+          [ICON.whistle, (d.referee && d.referee.role) || 'الحكم', d.referee && d.referee.name]
+        ].filter((r) => r[2]);
+        out += panel(`
+          <h3 class="text-sm font-extrabold mb-2">معلومات المباراة</h3>
+          <dl class="divide-y divide-white/5">${rows.map(([icon, label, value]) => `
+            <div class="flex items-center justify-between gap-4 py-2.5 text-sm">
+              <dt class="flex items-center gap-2 text-px-textMuted"><span class="text-px-green">${icon}</span>${esc(label)}</dt>
+              <dd class="font-bold text-left">${esc(value)}</dd>
+            </div>`).join('')}</dl>`, 'mb-4');
+
+        const key = (d.events || []).filter((e) => e.kind === 'goal' || e.kind === 'own_goal' || e.kind === 'red');
+        if (key.length) out += panel(`<h3 class="text-sm font-extrabold mb-3">أبرز الأحداث</h3>${timelineHTML(key, false)}`, 'mb-4');
+
+        if (m.unavailable.length) out += retryHTML('تعذّر تحميل بعض بيانات المباراة مؤقتاً.');
+        return out;
+      }
+
+      function playerRowHTML(p, offMinute, showRating) {
+        let icons = '';
+        for (let g = 0; g < Math.min(p.goals || 0, 5); g++) icons += `<span class="text-px-green" title="هدف">${ICON.ball}</span>`;
+        if (p.own_goals) icons += `<span class="text-red-400" title="هدف عكسي">${ICON.ball}</span>`;
+        if (p.yellow) icons += '<span class="px-card-yellow" title="بطاقة صفراء"></span>';
+        if (p.red) icons += '<span class="px-card-red" title="بطاقة حمراء"></span>';
+        if (offMinute != null) icons += `<span class="inline-flex items-center text-red-400 text-[11px] font-bold" title="خروج">${ICON.down}<span dir="ltr">${esc(offMinute)}'</span></span>`;
+        if (p.sub_minute != null) icons += `<span class="inline-flex items-center text-px-green text-[11px] font-bold" title="دخول">${ICON.up}<span dir="ltr">${esc(p.sub_minute)}'</span></span>`;
+        const rating = showRating && typeof p.rating === 'number'
+          ? `<span class="shrink-0 min-w-[2.25rem] text-center px-1.5 py-0.5 rounded bg-px-dark text-[11px] font-bold tabular-nums" dir="ltr">${esc(p.rating.toFixed(1))}</span>` : '';
+        return `<li class="flex items-center gap-2.5 py-1.5 text-sm">
+                  <span class="w-7 h-7 shrink-0 rounded-md bg-px-dark flex items-center justify-center text-xs font-bold tabular-nums">${esc(p.number == null ? '' : p.number)}</span>
+                  <span class="flex-1 min-w-0 truncate font-semibold">${esc(p.name)}${p.captain ? ' <span class="text-[10px] text-px-neon font-extrabold">(ك)</span>' : ''}</span>
+                  <span class="flex items-center gap-1 shrink-0">${icons}</span>${rating}
+                </li>`;
+      }
+
+      function sideHTML(side, team, expected) {
+        const off = {};
+        side.subs.forEach((s) => { if (s.replaced_id != null && s.sub_minute != null) off[s.replaced_id] = s.sub_minute; });
+        const showRating = !expected;
+        const used = new Set();
+        let groups = '';
+        POSITION_GROUPS.forEach(([code, label]) => {
+          const ps = side.starters.filter((p) => String(p.position || '').charAt(0).toUpperCase() === code);
+          ps.forEach((p) => used.add(p.id));
+          if (ps.length) {
+            groups += `<p class="mt-3 mb-1 text-[11px] font-bold text-px-textMuted">${label}</p>
+                       <ul class="divide-y divide-white/5">${ps.map((p) => playerRowHTML(p, off[p.id], showRating)).join('')}</ul>`;
+          }
+        });
+        const rest = side.starters.filter((p) => !used.has(p.id));
+        if (rest.length) groups += `<ul class="mt-3 divide-y divide-white/5">${rest.map((p) => playerRowHTML(p, off[p.id], showRating)).join('')}</ul>`;
+        const subs = side.subs.length
+          ? `<p class="mt-4 mb-1 text-[11px] font-bold text-px-textMuted">البدلاء</p><ul class="divide-y divide-white/5">${side.subs.map((p) => playerRowHTML(p, null, showRating)).join('')}</ul>`
+          : '';
+        return panel(`
+          <div class="flex items-center justify-between gap-2">
+            <div class="flex items-center gap-2 min-w-0">${crestHTML(team, 'sm')}<span class="font-extrabold truncate">${esc((team && team.title) || '')}</span></div>
+            ${side.formation ? `<span class="shrink-0 px-2 py-0.5 rounded-md bg-px-dark text-xs font-bold text-px-neon" dir="ltr">${esc(side.formation)}</span>` : ''}
+          </div>
+          ${side.coach ? `<p class="mt-1 text-xs text-px-textMuted">المدرب: ${esc(side.coach)}</p>` : ''}
+          ${groups || `<p class="mt-3 text-sm text-px-textMuted">${NO_DATA}</p>`}${subs}`);
+      }
+
+      function lineupsHTML(d) {
+        const l = d.lineups;
+        if (!l) {
+          if (m.unavailable.includes('lineups')) return retryHTML('تعذّر تحميل التشكيلة مؤقتاً.');
+          return noDataHTML();
+        }
+        const badge = l.expected
+          ? '<p class="mb-3 text-center text-xs font-bold"><span class="inline-block px-3 py-1 rounded-full bg-amber-400/10 text-amber-300">تشكيلة متوقعة — قد تتغير قبل المباراة</span></p>'
+          : '';
+        return `${badge}<div class="grid gap-4 md:grid-cols-2">${sideHTML(l.home, d.home_team, l.expected)}${sideHTML(l.away, d.away_team, l.expected)}</div>`;
+      }
+
+      function eventsHTML(d) {
+        if (!hasEvents(d)) {
+          if (m.unavailable.includes('events')) return retryHTML('تعذّر تحميل أحداث المباراة مؤقتاً.');
+          return noDataHTML();
+        }
+        const heads = `<div class="grid grid-cols-[1fr_auto_1fr] gap-3 mb-2 text-xs font-bold text-px-textMuted">
+                         <span class="truncate">${esc(d.home_team && d.home_team.title)}</span><span class="min-w-[3.25rem]"></span>
+                         <span class="truncate text-left">${esc(d.away_team && d.away_team.title)}</span></div>`;
+        const note = d.hidden_events > 0
+          ? `<p class="mt-3 text-[11px] text-px-textMuted text-center">لم يُعرض ${esc(d.hidden_events)} من الأحداث غير المصنفة.</p>` : '';
+        return panel(heads + timelineHTML(d.events, true) + note);
+      }
+
+      function statsHTML(d) {
+        const s = d.stats;
+        if (!s) return noDataHTML();
+        const rows = STAT_LABELS.filter(([key]) => key in s.home || key in s.away).map(([key, label, unit]) => {
+          const h = s.home[key];
+          const a = s.away[key];
+          const fmt = (v) => (v == null ? '—' : `${esc(v)}${unit}`);
+          let bar = '';
+          if (h != null && a != null && h + a > 0) {
+            const hp = Math.round((h / (h + a)) * 100);
+            bar = `<div class="mt-1.5 flex h-1.5 rounded-full overflow-hidden bg-px-dark gap-0.5">
+                     <span class="bg-px-green rounded-full" style="width:${hp}%"></span><span class="bg-slate-500 rounded-full" style="width:${100 - hp}%"></span></div>`;
+          }
+          return `<div class="py-2.5">
+                    <div class="flex items-center justify-between text-sm">
+                      <span class="font-extrabold tabular-nums" dir="ltr">${fmt(h)}</span>
+                      <span class="text-xs text-px-textMuted">${label}</span>
+                      <span class="font-extrabold tabular-nums" dir="ltr">${fmt(a)}</span>
+                    </div>${bar}</div>`;
+        }).join('');
+        if (!rows) return noDataHTML();
+        const heads = `<div class="flex items-center justify-between text-xs font-bold text-px-textMuted mb-1">
+                         <span class="flex items-center gap-1.5">${crestHTML(d.home_team, 'sm')}${esc(d.home_team && d.home_team.title)}</span>
+                         <span class="flex items-center gap-1.5">${esc(d.away_team && d.away_team.title)}${crestHTML(d.away_team, 'sm')}</span></div>`;
+        return panel(`${heads}<div class="divide-y divide-white/5">${rows}</div>`);
+      }
+
+      function errorHTML(err) {
+        if (err && err.code === 'MATCH_NOT_FOUND') {
+          return panel(`<div class="text-center py-6">
+            <p class="text-lg font-bold mb-2">لم يتم العثور على المباراة</p>
+            <p class="text-sm text-px-textMuted mb-4">ربما تم تغيير الرابط أو حذف المباراة.</p>
+            <a href="#home" class="inline-block px-5 py-2 rounded-lg bg-px-green text-px-dark text-sm font-bold">عرض كل المباريات</a></div>`);
+        }
+        const msg = err && err.code === 'TIMEOUT' ? 'استغرق الخادم وقتاً طويلاً للرد.' : 'تحقق من اتصالك ثم أعد المحاولة.';
+        return panel(`<div class="text-center py-6">
+          <p class="text-lg font-bold mb-2">تعذّر تحميل تفاصيل المباراة</p>
+          <p class="text-sm text-px-textMuted mb-4">${msg}</p>
+          <button type="button" data-act="retry" class="px-5 py-2 rounded-lg bg-px-green text-px-dark text-sm font-bold">إعادة المحاولة</button></div>`);
+      }
+
+      /* ---------- render ---------- */
+      function render() {
+        const d = m.data || m.header;              // header from the loaded list = instant first paint
+        if (d) {
+          document.title = `${(d.home_team && d.home_team.title) || ''} × ${(d.away_team && d.away_team.title) || ''} | PX League`;
+          setRegion('d-meta', metaHTML(d));
+          setRegion('d-home', bigTeamHTML(d.home_team));
+          setRegion('d-center', centerHTML(d));
+          setRegion('d-away', bigTeamHTML(d.away_team));
+          setRegion('d-player', playerHTML(d));
+          if (isStreamMatch(d) && !hlsInstance && $('px-player')) {
+            initPlayer(d);
+          }
+        } else {
+          setRegion('d-meta', '<div class="px-skeleton rounded h-4 w-40 mx-auto"></div>');
+          setRegion('d-home', '<div class="px-skeleton rounded-full w-14 h-14 mx-auto"></div>');
+          setRegion('d-center', '<div class="px-skeleton rounded h-10 w-24"></div>');
+          setRegion('d-away', '<div class="px-skeleton rounded-full w-14 h-14 mx-auto"></div>');
+          setRegion('d-player', '');
+        }
+
+        if (m.error) { setRegion('d-tabs', ''); setRegion('d-body', errorHTML(m.error)); return; }
+        if (!m.data) { setRegion('d-tabs', ''); setRegion('d-body', spinnerHTML()); return; }
+
+        setRegion('d-tabs', tabsHTML());
+        const body = m.tab === 'lineups' ? lineupsHTML(m.data)
+                   : m.tab === 'events' ? eventsHTML(m.data)
+                   : m.tab === 'stats' ? statsHTML(m.data)
+                   : overviewHTML(m.data);
+        setRegion('d-body', body);
+      }
+
+      function safeRender() {
+        try { render(); } catch (err) { console.error('[PX League] render failed:', err); }
+      }
+
+      /* ---------- live video player (HLS) ---------- */
+      let hlsInstance = null;
+      let playerRetryCount = 0;
+      const MAX_PLAYER_RETRIES = 1;
+
+      function setPlayerOverlay(html) {
+        const overlay = $('px-player-overlay');
+        const content = $('px-player-overlay-content');
+        if (!overlay || !content) return;
+        if (html == null) {
+          overlay.setAttribute('hidden', 'hidden');
+        } else {
+          content.innerHTML = html;
+          overlay.removeAttribute('hidden');
+        }
+      }
+
+      function showPlayerLoading() {
+        setPlayerOverlay(`
+          <div class="px-spinner mb-3"></div>
+          <p class="text-sm font-semibold text-px-textMain">جارٍ الاتصال بالبث المباشر...</p>`);
+      }
+
+      function showPlayerError(msg, canRetry = true) {
+        const retryBtn = canRetry
+          ? `<button type="button" data-act="retry-player" class="mt-3 px-4 py-1.5 rounded-lg bg-px-green text-px-dark text-xs font-bold hover:brightness-110 transition">إعادة المحاولة</button>`
+          : '';
+        setPlayerOverlay(`
+          <div class="w-10 h-10 rounded-full bg-red-500/10 text-red-400 flex items-center justify-center mb-2 [&>svg]:w-5 [&>svg]:h-5">
+            ${ICON.warning}
+          </div>
+          <p class="text-sm font-bold text-red-400 mb-1">تعذّر تشغيل البث المباشر</p>
+          <p class="text-xs text-px-textMuted max-w-xs leading-relaxed">${esc(msg)}</p>
+          ${retryBtn}`);
+      }
+
+      function destroyPlayer() {
+        if (hlsInstance) {
+          try { hlsInstance.destroy(); } catch (e) {}
+          hlsInstance = null;
+        }
+        const video = $('px-player');
+        if (video) {
+          try {
+            video.pause();
+            video.removeAttribute('src');
+            video.load();
+          } catch (e) {}
+        }
+      }
+
+      function initPlayer(d, forceUrl = null) {
+        destroyPlayer();
+        playerRetryCount = 0;
+        const target = d || m.data || m.header;
+        if (!isStreamMatch(target)) return;
+
+        const video = $('px-player');
+        if (!video) return;
+
+        const streamUrl = forceUrl || CONFIG.LIVE_STREAM_URL;
+        showPlayerLoading();
+
+        if (typeof Hls !== 'undefined' && Hls.isSupported()) {
+          hlsInstance = new Hls({ debug: false, maxBufferLength: 30 });
+          hlsInstance.loadSource(streamUrl);
+          hlsInstance.attachMedia(video);
+
+          hlsInstance.on(Hls.Events.ERROR, (event, data) => {
+            if (data.fatal) {
+              switch (data.type) {
+                case Hls.ErrorTypes.NETWORK_ERROR:
+                  if (data.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR && (!data.response || data.response.code === 0)) {
+                    destroyPlayer();
+                    showPlayerError('تعذّر الوصول إلى ملفات البث (تم حظر الطلب بسبب قيود CORS من خادم المصدر).');
+                  } else if (playerRetryCount < MAX_PLAYER_RETRIES) {
+                    playerRetryCount++;
+                    hlsInstance.startLoad();
+                  } else {
+                    destroyPlayer();
+                    showPlayerError('تعذّر الاتصال بخادم البث المباشر.');
+                  }
+                  break;
+                case Hls.ErrorTypes.MEDIA_ERROR:
+                  if (playerRetryCount < MAX_PLAYER_RETRIES) {
+                    playerRetryCount++;
+                    hlsInstance.recoverMediaError();
+                  } else {
+                    destroyPlayer();
+                    showPlayerError('حدث خطأ أثناء فك تشفير وسائط الفيديو.');
+                  }
+                  break;
+                default:
+                  destroyPlayer();
+                  showPlayerError('حدث خطأ غير متوقع أثناء تشغيل البث.');
+                  break;
+              }
+            }
+          });
+
+          video.addEventListener('playing', () => setPlayerOverlay(null), { once: false });
+          video.addEventListener('canplay', () => {
+            if (!video.paused) setPlayerOverlay(null);
+          });
+        } else if (video.canPlayType && video.canPlayType('application/vnd.apple.mpegurl')) {
+          video.src = streamUrl;
+          video.addEventListener('playing', () => setPlayerOverlay(null));
+          video.addEventListener('canplay', () => {
+            if (!video.paused) setPlayerOverlay(null);
+          });
+          video.addEventListener('error', () => {
+            showPlayerError('تعذّر تحميل البث في المشغل الأصلي.');
+          });
+        } else {
+          showPlayerError('المتصفح الحالي لا يدعم تشغيل هذا النوع من البث.', false);
+        }
+      }
+
+      /* ---------- fetch + polling ---------- */
+      function stop() {
+        clearTimeout(m.timer);
+        m.timer = null;
+        m.pendingWhenVisible = false;
+        if (m.ctrl) { m.ctrl.abort(); m.ctrl = null; }
+        destroyPlayer();
+      }
+
+      function schedule() {
+        clearTimeout(m.timer);
+        m.timer = null;
+        if (state.view !== 'match') return;
+        // Without details yet (first request failed) the list header still says whether it is live.
+        const d = m.data || m.header;
+        if (!d) return;
+        const s = Number(d.status);
+        let delay = 0;
+        if (LIVE_STATUSES.includes(s)) {
+          delay = CONFIG.LIVE_POLL_MS;
+        } else if (s === NOT_STARTED && d.match_timestamp) {
+          const untilWindow = d.match_timestamp - CONFIG.PRE_KICKOFF_WINDOW_S - Date.now() / 1000;
+          delay = untilWindow <= 0 ? CONFIG.PRE_KICKOFF_POLL_MS : Math.min(untilWindow * 1000 + 1000, 6 * 3600000);
+        }
+        if (!delay) return;                          // finished / unknown status: no polling
+        m.timer = setTimeout(() => {
+          if (document.hidden) { m.pendingWhenVisible = true; return; }
+          load(true);
+        }, delay);
+      }
+
+      /* silent = poll: a failed poll keeps the last good data on screen. */
+      function load(silent = false) {
+        const id = m.id;
+        if (!id) return;
+        if (m.ctrl) m.ctrl.abort();                  // one request at a time
+        const ctrl = new AbortController();
+        m.ctrl = ctrl;
+        clearTimeout(m.timer);                       // a manual retry replaces a scheduled poll
+        m.timer = null;
+        if (!silent && m.error) { m.error = null; safeRender(); }
+        const current = () => id === m.id && ctrl === m.ctrl;
+
+        Api.match(id, ctrl.signal)
+          .then((res) => {
+            if (!current()) return;                  // superseded: never overwrite newer data
+            m.error = null;
+            m.data = res.data;
+            m.unavailable = res.unavailable;
+          })
+          .catch((err) => {
+            if (!current() || isAbort(err)) return;  // navigation / newer request
+            console.warn('[PX League] match request failed:', err);
+            if (!silent || !m.data) m.error = err;
+          })
+          .then(() => { if (current()) safeRender(); })
+          .finally(() => {
+            if (ctrl === m.ctrl) { m.ctrl = null; schedule(); }   // polling continues after errors too
+          });
+      }
+
+      /* ---------- lifecycle ---------- */
+      function open(id) {
+        if (id === m.id && state.view === 'match') return;
+        stop();
+        Object.assign(m, { id, data: null, unavailable: [], error: null, tab: 'overview', sig: {}, header: state.byId.get(id) || null });
+        root.innerHTML = shellHTML();
+        root.hidden = false;
+        window.scrollTo(0, 0);
+        safeRender();
+        load(false);
+      }
+
+      function close() {
+        stop();
+        m.id = null;
+        m.sig = {};
+        root.hidden = true;
+        root.innerHTML = '';
+      }
+
+      function init() {
+        root = $('match-view');
+        root.addEventListener('click', (e) => {
+          if (e.target.closest('[data-act="retry-player"]')) {
+            initPlayer(m.data || m.header);
+            return;
+          }
+          const tab = e.target.closest('[data-tab]');
+          if (tab) {
+            if (tab.dataset.tab !== m.tab) { m.tab = tab.dataset.tab; safeRender(); }
+            return;
+          }
+          if (e.target.closest('[data-act="retry"]')) load(!!m.data);   // keep visible data on partial retry
+        });
+        root.addEventListener('error', crestFallbackOnError, true);
+        document.addEventListener('visibilitychange', () => {
+          if (!document.hidden && state.view === 'match' && m.pendingWhenVisible) {
+            m.pendingWhenVisible = false;
+            load(true);
+          }
+        });
+      }
+
+      return { init, open, close };
+    })();
+
+    /* =====================================================================
+       7. Router — '' / #home -> schedule, #match/{id} -> details
+       ===================================================================== */
+    const Router = (() => {
+      const baseTitle = document.title;
+      let backBtn = null;
+      let enteredFromHome = false;
+
+      function parse() {
+        const match = /^#match\/([1-9][0-9]{0,9})$/.exec(window.location.hash || '');
+        return match ? { name: 'match', id: Number(match[1]) } : { name: 'home' };
+      }
+
+      function route() {
+        const r = parse();
+        if (r.name === 'match') {
+          enteredFromHome = state.view === 'home';
+          if (state.view === 'home') Home.hide();
+          state.view = 'match';
+          backBtn.hidden = false;
+          MatchView.open(r.id);
+        } else {
+          const wasMatch = state.view === 'match';
+          MatchView.close();
+          state.view = 'home';
+          backBtn.hidden = true;
+          document.title = baseTitle;
+          Home.show(wasMatch);
+        }
+      }
+
+      function goBack() {
+        if (enteredFromHome) { window.history.back(); return; }
+        // opened directly (shared link / refresh): replace the entry with the schedule
+        window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#home`);
+        route();
+      }
+
+      function init() {
+        backBtn = $('px-back');
+        backBtn.innerHTML = `${ICON.back}<span>رجوع</span>`;
+        backBtn.addEventListener('click', goBack);
+        window.addEventListener('hashchange', route);
+      }
+
+      return { init, route };
+    })();
+
+    /* =====================================================================
+       8. Boot
+       ===================================================================== */
+    restoreFilters();
+    Home.init();
+    MatchView.init();
+    Router.init();
+    Router.route();
+  })();
+  //]]>
+  </script>
+</body>
+</html>

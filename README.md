@@ -3,7 +3,7 @@
 A Dockerized live video streaming stack with an admin control panel. It supports **two delivery modes**:
 
 1. **Nginx Edge Mode (playlist token-protected):** RTMP ingest -> MediaMTX -> FFmpeg HLS packaging (`2s` segments, sliding window 6) -> Nginx serves `.m3u8` as `.css` and `.ts` as `.js`, with `proxy_cache_lock` segment micro-caching. Every playlist (`.css`) request is checked against a short-lived viewer token; segments (`.js`) are public and fully cacheable (see section 7).
-2. **Cloudflare R2 Zero-Egress Mode (public):** the backend's R2 watcher watches `/hls`, rewrites segment links to `.js`, uploads segments first and then manifests (`index.html` / `index.css`) to R2 under randomized folder slugs (`/hd/{random_slug}/`), and purges segments older than `MAX_SEGMENT_AGE_SECONDS`. R2 delivery is not token-protected.
+2. **Cloudflare R2 Zero-Egress Mode (public):** the backend's R2 watcher watches `/hls`, rewrites segment links to `.js`, uploads segments first and then the manifest (`index.html`; also `index.css` when `R2_PLAYLIST_FILES=html,css`) to R2 under randomized folder slugs (`/hd/{random_slug}/`), and purges segments older than `MAX_SEGMENT_AGE_SECONDS` (only while a stream is uploading). R2 delivery is not token-protected.
 
 ---
 
@@ -299,15 +299,21 @@ Because live streaming playlists change every 2 seconds while media segments are
 1. In Cloudflare Dashboard -> Select your custom domain (e.g., `r2-custom-domain.shop`).
 2. Navigate to **Caching** -> **Cache Rules** -> Click **Create rule**.
 
-#### Cache Rule A: Playlists (Never Cache Manifests)
-- **Rule Name:** `Live HLS Manifests - Bypass Cache`
-- **When incoming requests match:**
-  - Field: `URI Path`
-  - Operator: `matches regex`
-  - Value: `^/hd/.+/(index\.html|index\.css|master\.css|\.m3u8)$`
-  *(Or simple wildcard: `URI Path` contains `/index.html` OR `URI Path` contains `/index.css`)*
-- **Cache eligibility:** **Bypass cache**
+#### Cache Rule A: Playlists (1-second edge cache)
+The backend uploads playlists with `Cache-Control: public, max-age=1, s-maxage=1` (`R2_PLAYLIST_MAX_AGE`).
+Cloudflare must be allowed to cache them, otherwise every viewer reload (one per viewer every ~2 s) is a
+billed R2 Class B read: ~25,000/s at 50,000 viewers.
+- **Rule Name:** `Live HLS Manifests - 1s Edge Cache`
+- **When incoming requests match** (Edit expression; works on every plan. The `matches` regex
+  operator is Business/Enterprise only, so do not use it on Free/Pro):
+  `(http.host eq "R2_CUSTOM_DOMAIN" and starts_with(http.request.uri.path, "/hd/") and (ends_with(http.request.uri.path, "/index.html") or ends_with(http.request.uri.path, "/index.css")))`
+- **Cache eligibility:** **Eligible for cache** (`.html` is not cached by default, so this rule is required)
+- **Edge TTL:** **Use cache-control header if present, bypass cache if not** (honours the 1 s from R2)
+- **Browser TTL:** **Respect origin**
+- Do **not** set a longer override TTL: a playlist older than a few seconds stalls playback.
 - Click **Deploy**.
+- Verify: request the playlist twice within a second; the second response must show `cf-cache-status: HIT`
+  and `cache-control: public, max-age=1, s-maxage=1`. Rollback: `R2_PLAYLIST_MAX_AGE=0` (no-store again).
 
 #### Cache Rule B: Video Segments (Edge Cache Everything)
 - **Rule Name:** `Live HLS Segments - Cache Everything`
@@ -328,7 +334,7 @@ Because live streaming playlists change every 2 seconds while media segments are
 | :--- | :--- | :--- | :--- | :--- |
 | **HLS Playlist (Edge)** | `/hls/live/match1/index.m3u8` | `/live/match1/index.css` | `text/css; charset=utf-8` | `Cache-Control: no-store` |
 | **Media Segment (Edge)** | `/hls/live/match1/seg_1794671902.ts` | `/live/match1/seg_1794671902.js` | `application/javascript` | `public, max-age=60` (`proxy_cache`) |
-| **HLS Playlist (R2)** | Uploaded rewritten manifest | `/hd/ugrabzavmtzj/index.html` | `text/html; charset=utf-8` | `no-store` (Cloudflare cache bypassed) |
+| **HLS Playlist (R2)** | Uploaded rewritten manifest | `/hd/ugrabzavmtzj/index.html` | `text/html; charset=utf-8` | `public, max-age=1, s-maxage=1` (1 s edge cache) |
 | **Media Segment (R2)** | Uploaded MPEG-TS segment | `/hd/ugrabzavmtzj/seg_1794671902.js` | `application/javascript` | `public, max-age=3600, immutable` |
 
 - Raw `.m3u8` / `.ts` URLs (and anything else under `/live/` or `/hls/`) return **404**.

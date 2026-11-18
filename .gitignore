@@ -22,3 +22,12 @@ yarn-error.log*
 # OS artifacts
 .DS_Store
 Thumbs.db
+
+# Deployment archives bundle .env and TLS private keys: never commit them
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+
+# Wrangler local state (account cache, dev build)
+.wrangler/

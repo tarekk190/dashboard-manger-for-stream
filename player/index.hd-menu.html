@@ -1,0 +1,993 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>مشغّل البث المباشر | StreamOps</title>
+    <!-- Cairo (Arabic UI font) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap">
+    <!-- Hls.js Engine CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.8/dist/hls.min.js"></script>
+    <style>
+        :root {
+            --bg: #030405;
+            --surface: rgba(10, 12, 16, 0.72);
+            --surface-strong: rgba(10, 12, 16, 0.92);
+            --stroke: rgba(255, 255, 255, 0.09);
+            --text: #f4f6f8;
+            --muted: #9aa3ad;
+            --lime: #a3e635;
+            --cyan: #22d3ee;
+            --live: #ff2d55;
+            --glow-lime: 0 0 18px rgba(163, 230, 53, 0.45);
+            --glow-cyan: 0 0 18px rgba(34, 211, 238, 0.4);
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+
+        html, body {
+            width: 100%;
+            height: 100%;
+            background: var(--bg);
+            color: var(--text);
+            font-family: "Cairo", Tahoma, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+            overflow: hidden;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        button { font-family: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+        button:focus-visible, input:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; border-radius: 8px; }
+
+        /* ---------- Stage ---------- */
+        .player {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            background: radial-gradient(ellipse at center, #0b0f14 0%, #000 70%);
+            overflow: hidden;
+        }
+        .player.hide-cursor { cursor: none; }
+
+        video {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            background: #000;
+        }
+
+        /* Top and bottom shades so controls stay readable on bright video */
+        .shade {
+            position: absolute;
+            left: 0; right: 0;
+            pointer-events: none;
+            transition: opacity .25s ease;
+            z-index: 5;
+        }
+        .shade.top { top: 0; height: 110px; background: linear-gradient(to bottom, rgba(0,0,0,.65), transparent); }
+        .shade.bottom { bottom: 0; height: 150px; background: linear-gradient(to top, rgba(0,0,0,.85), transparent); }
+
+        .player.idle .shade,
+        .player.idle .controls { opacity: 0; pointer-events: none; }
+
+
+        /* ---------- Center states ---------- */
+        .center {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 16px;
+            z-index: 15;
+            pointer-events: none;
+        }
+        .center > * { pointer-events: auto; }
+
+        .spinner {
+            width: 56px; height: 56px;
+            border-radius: 50%;
+            background: conic-gradient(from 0deg, transparent 0 25%, var(--cyan) 55%, var(--lime) 100%);
+            -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 5px), #000 calc(100% - 4px));
+                    mask: radial-gradient(farthest-side, transparent calc(100% - 5px), #000 calc(100% - 4px));
+            animation: spin .9s linear infinite;
+            filter: drop-shadow(0 0 10px rgba(34, 211, 238, .5));
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .big-play {
+            width: 84px; height: 84px;
+            border-radius: 50%;
+            display: grid;
+            place-items: center;
+            background: rgba(163, 230, 53, .14);
+            border: 1.5px solid rgba(163, 230, 53, .65);
+            color: var(--lime);
+            box-shadow: var(--glow-lime), inset 0 0 24px rgba(163, 230, 53, .15);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            transition: transform .2s ease, background .2s ease;
+        }
+        .big-play:hover { transform: scale(1.07); background: rgba(163, 230, 53, .22); }
+        /* The play triangle is optically centered by nudging it toward its point (always right) */
+        .big-play svg { width: 34px; height: 34px; transform: translateX(3px); }
+
+        .status-msg {
+            max-width: 86%;
+            padding: 7px 14px;
+            border-radius: 10px;
+            background: var(--surface);
+            border: 1px solid var(--stroke);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            color: #cfd6dd;
+            font-size: 13px;
+            font-weight: 600;
+            text-align: center;
+        }
+        .hidden { display: none !important; }
+
+        /* Muted-autoplay hint */
+        .unmute {
+            position: absolute;
+            top: 16px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 22;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            height: 36px;
+            padding: 0 16px;
+            border-radius: 999px;
+            background: var(--surface-strong);
+            border: 1px solid rgba(34, 211, 238, .45);
+            box-shadow: var(--glow-cyan);
+            color: var(--text);
+            font-size: 13px;
+            font-weight: 700;
+            white-space: nowrap;
+            animation: floatIn .35s ease;
+        }
+        .unmute svg { color: var(--cyan); }
+        @keyframes floatIn { from { opacity: 0; transform: translate(-50%, -6px); } }
+
+        /* ---------- Control bar ---------- */
+        .controls {
+            position: absolute;
+            inset-inline: 12px;
+            bottom: 12px;
+            z-index: 20;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            height: 52px;
+            padding: 0 10px;
+            border-radius: 14px;
+            background: var(--surface);
+            border: 1px solid var(--stroke);
+            backdrop-filter: blur(18px) saturate(150%);
+            -webkit-backdrop-filter: blur(18px) saturate(150%);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, .45);
+            transition: opacity .25s ease;
+        }
+        .ctrl-group { display: flex; align-items: center; gap: 4px; min-width: 0; }
+
+        .ctrl {
+            width: 40px; height: 40px;
+            display: grid;
+            place-items: center;
+            border-radius: 10px;
+            color: #e8edf2;
+            transition: background .15s ease, color .15s ease, box-shadow .15s ease;
+        }
+        .ctrl:hover { background: rgba(255, 255, 255, .08); color: var(--lime); }
+        .ctrl svg { width: 22px; height: 22px; }
+        .ctrl.primary { color: var(--lime); }
+        .ctrl.primary:hover { box-shadow: var(--glow-lime); }
+
+        /* Volume: slider expands on hover / focus (desktop) */
+        .volume { display: flex; align-items: center; }
+        .volume-slider-wrap { width: 0; overflow: hidden; transition: width .2s ease; display: flex; align-items: center; }
+        .volume:hover .volume-slider-wrap,
+        .volume:focus-within .volume-slider-wrap { width: 96px; }
+        input[type="range"] {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 84px;
+            height: 4px;
+            margin: 0 6px;
+            border-radius: 4px;
+            /* In RTL a range fills from the right edge */
+            background: linear-gradient(to left, var(--lime) 0, var(--cyan) var(--pct, 100%), rgba(255,255,255,.18) var(--pct, 100%));
+            cursor: pointer;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 13px; height: 13px; border-radius: 50%;
+            background: #fff;
+            box-shadow: 0 0 0 3px rgba(34, 211, 238, .35);
+        }
+        input[type="range"]::-moz-range-thumb {
+            width: 13px; height: 13px; border: 0; border-radius: 50%;
+            background: #fff;
+            box-shadow: 0 0 0 3px rgba(34, 211, 238, .35);
+        }
+
+        .live-indicator {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            height: 30px;
+            padding: 0 10px;
+            margin-inline-start: 4px;
+            border-radius: 8px;
+            font-size: 12px;
+            font-weight: 700;
+            color: #fff;
+            white-space: nowrap;
+        }
+        .live-indicator .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--live); box-shadow: 0 0 10px var(--live); animation: blink 1.4s infinite; }
+        .live-indicator.behind { color: var(--muted); cursor: pointer; }
+        .live-indicator.behind:hover { color: var(--text); background: rgba(255,255,255,.06); }
+        .live-indicator.behind .dot { background: #6b7280; box-shadow: none; animation: none; }
+        @keyframes blink { 50% { opacity: .35; } }
+
+        .quality {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            height: 24px;
+            padding: 0 8px;
+            border: 0;
+            border-radius: 6px;
+            font: inherit;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: .04em;
+            color: #0a0d10;
+            background: linear-gradient(135deg, var(--lime), var(--cyan));
+            box-shadow: 0 0 12px rgba(163, 230, 53, .35);
+            direction: ltr;
+            unicode-bidi: isolate;
+            margin-inline-end: 4px;
+            cursor: default;
+        }
+        /* Quality selector (R2 mode, only while the HD rendition exists) */
+        .quality-wrap { position: relative; display: inline-flex; }
+        .quality .gear { display: none; width: 13px; height: 13px; transition: transform .3s; }
+        .quality-wrap.has-menu .quality { cursor: pointer; }
+        .quality-wrap.has-menu .quality .gear { display: block; }
+        .quality-wrap.has-menu .quality:hover .gear,
+        .quality[aria-expanded="true"] .gear { transform: rotate(60deg); }
+        .quality:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+        .quality-menu {
+            position: absolute;
+            bottom: calc(100% + 12px);
+            left: 0;
+            min-width: 170px;
+            padding: 6px;
+            border-radius: 12px;
+            background: rgba(10, 13, 16, .92);
+            border: 1px solid rgba(255, 255, 255, .12);
+            box-shadow: 0 12px 30px rgba(0, 0, 0, .5);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            z-index: 5;
+        }
+        .quality-menu button {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            width: 100%;
+            min-height: 40px;
+            padding: 6px 10px;
+            border: 0;
+            border-radius: 8px;
+            background: transparent;
+            color: #e5e7eb;
+            font: inherit;
+            font-size: 13px;
+            font-weight: 700;
+            cursor: pointer;
+            text-align: start;
+        }
+        .quality-menu button small { color: var(--muted); font-size: 11px; font-weight: 600; }
+        .quality-menu button:hover, .quality-menu button:focus-visible { background: rgba(255, 255, 255, .08); outline: none; }
+        .quality-menu button[aria-checked="true"] { color: var(--lime); }
+        .quality-menu button[aria-checked="true"]::before { content: '\2713'; margin-inline-end: 6px; }
+        .quality-menu button span { flex: 1; }
+
+
+        /* ---------- Small screens ---------- */
+        @media (max-width: 520px) {
+            .controls { inset-inline: 8px; bottom: 8px; height: 46px; padding: 0 6px; }
+            .ctrl { width: 36px; height: 36px; }
+            .ctrl svg { width: 20px; height: 20px; }
+            .volume-slider-wrap { display: none; }
+            .big-play { width: 72px; height: 72px; }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="player" id="player">
+        <!-- Video timeline is time-ordered: keep it LTR. Native controls are replaced by the custom bar -->
+        <video id="video" dir="ltr" playsinline webkit-playsinline preload="auto"></video>
+
+        <div class="shade top"></div>
+        <div class="shade bottom"></div>
+
+        <!-- Muted autoplay hint -->
+        <button class="unmute hidden" id="btn-unmute-hint" type="button">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5z"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
+            <span>الصوت مكتوم: اضغط لتشغيله</span>
+        </button>
+
+        <!-- Center states -->
+        <div class="center" id="center-overlay">
+            <div class="spinner" id="loading-spinner"></div>
+            <button class="big-play hidden" id="btn-play-action" type="button" aria-label="تشغيل البث المباشر">
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.14v13.72a1 1 0 0 0 1.52.85l10.9-6.86a1 1 0 0 0 0-1.7L9.52 4.29A1 1 0 0 0 8 5.14z"/></svg>
+            </button>
+            <p class="status-msg" id="status-msg">جاري الاتصال بالبث...</p>
+        </div>
+
+        <!-- Control bar (RTL: the first group sits on the right) -->
+        <div class="controls" id="controls">
+            <div class="ctrl-group">
+                <button class="ctrl primary" id="btn-play" type="button" aria-label="تشغيل" title="تشغيل / إيقاف مؤقت (مسافة)">
+                    <svg id="icon-play" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.14v13.72a1 1 0 0 0 1.52.85l10.9-6.86a1 1 0 0 0 0-1.7L9.52 4.29A1 1 0 0 0 8 5.14z"/></svg>
+                    <svg id="icon-pause" class="hidden" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4.5" width="4" height="15" rx="1.2"/><rect x="14" y="4.5" width="4" height="15" rx="1.2"/></svg>
+                </button>
+
+                <div class="volume">
+                    <button class="ctrl" id="btn-mute" type="button" aria-label="كتم الصوت" title="كتم / تشغيل الصوت (M)">
+                        <svg id="icon-vol-high" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5z" fill="currentColor"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>
+                        <svg id="icon-vol-low" class="hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5z" fill="currentColor"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg>
+                        <svg id="icon-vol-mute" class="hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5z" fill="currentColor"/><line x1="22" y1="9" x2="16" y2="15"/><line x1="16" y1="9" x2="22" y2="15"/></svg>
+                    </button>
+                    <div class="volume-slider-wrap">
+                        <input type="range" id="volume-slider" min="0" max="1" step="0.01" value="1" aria-label="مستوى الصوت">
+                    </div>
+                </div>
+
+                <div class="live-indicator" id="live-indicator" title="أنت تشاهد البث المباشر">
+                    <span class="dot"></span>
+                    <span id="live-indicator-text">مباشر</span>
+                </div>
+            </div>
+
+            <div class="ctrl-group">
+                <div class="quality-wrap" id="quality-wrap">
+                    <button class="quality" id="quality-badge" type="button" title="دقة البث" aria-haspopup="menu" aria-expanded="false" aria-controls="quality-menu" disabled>
+                        <svg class="gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+                        <span id="quality-label">480p</span>
+                    </button>
+                    <div class="quality-menu hidden" id="quality-menu" role="menu" aria-label="جودة البث">
+                        <button type="button" role="menuitemradio" data-quality="sd" aria-checked="true"><span>480p</span><small>توفير البيانات</small></button>
+                        <button type="button" role="menuitemradio" data-quality="hd" aria-checked="false"><span>720p</span><small>جودة أعلى</small></button>
+                    </div>
+                </div>
+                <button class="ctrl" id="btn-fullscreen" type="button" aria-label="ملء الشاشة" title="ملء الشاشة (F)">
+                    <svg id="icon-fs-enter" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
+                    <svg id="icon-fs-exit" class="hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/></svg>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Parse Query Parameters
+        const params = new URLSearchParams(window.location.search);
+        const channelParam = params.get('channel');
+        const r2SlugParam = params.get('r2');
+        const srcParam = params.get('src');
+        const tokenParam = params.get('token');
+
+        // UI Elements
+        const player = document.getElementById('player');
+        const video = document.getElementById('video');
+        const centerOverlay = document.getElementById('center-overlay');
+        const loadingSpinner = document.getElementById('loading-spinner');
+        const statusMsg = document.getElementById('status-msg');
+        const btnPlayAction = document.getElementById('btn-play-action');
+        const btnPlay = document.getElementById('btn-play');
+        const btnMute = document.getElementById('btn-mute');
+        const volumeSlider = document.getElementById('volume-slider');
+        const btnFullscreen = document.getElementById('btn-fullscreen');
+        const btnUnmuteHint = document.getElementById('btn-unmute-hint');
+        const liveIndicator = document.getElementById('live-indicator');
+        const liveIndicatorText = document.getElementById('live-indicator-text');
+        const qualityBadge = document.getElementById('quality-badge');
+        const qualityWrap = document.getElementById('quality-wrap');
+        const qualityLabel = document.getElementById('quality-label');
+        const qualityMenu = document.getElementById('quality-menu');
+
+
+        let hlsInstance = null;
+        let streamManifestUrl = '';
+        let sdManifestUrl = '', hdManifestUrl = '';
+        let qualityMode = 'sd';        // every page load starts on 480p
+        let hdBroken = false;          // HD failed right after switching: not offered again this visit
+        let hdSwitchedAt = 0;
+        const HD_CHECK_MS = 60000;
+        let userPaused = false;     // only the viewer may leave the stream paused
+        let lastProgress = { t: 0, at: Date.now() };
+        let started = false;
+
+        // ------------------------------------------------------------------
+        // Viewer token for the Nginx edge (/auth). Fetched from /api/stream and renewed before expiry.
+        // ------------------------------------------------------------------
+        let viewerToken = tokenParam || null;
+        let tokenRenewTimer = null;
+
+        function scheduleTokenRenewal(expiresInSec) {
+            if (tokenRenewTimer) clearTimeout(tokenRenewTimer);
+            const delayMs = Math.max(5, expiresInSec - 15) * 1000;
+            tokenRenewTimer = setTimeout(renewViewerToken, delayMs);
+        }
+
+        async function fetchViewerToken(channel) {
+            // credentials: 'include' so the browser stores the stream_auth playlist cookie
+            const res = await fetch(`/api/stream?channel=${encodeURIComponent(channel)}`, {
+                headers: { 'Accept': 'application/json' },
+                credentials: 'include'
+            });
+            if (!res.ok) throw new Error(res.status === 404 ? 'القناة غير موجودة' : `تعذّر الحصول على رمز المشاهدة (HTTP ${res.status})`);
+            const data = await res.json();
+            viewerToken = data.token;
+            scheduleTokenRenewal(data.expiresIn || 60);
+        }
+
+        async function renewViewerToken() {
+            try {
+                const res = await fetch('/api/token', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include', // response refreshes the stream_auth cookie
+                    body: JSON.stringify({ token: viewerToken })
+                });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json();
+                viewerToken = data.token;
+                scheduleTokenRenewal(data.expiresIn || 60);
+            } catch (e) {
+                // Renewal window missed (e.g. tab suspended): request a fresh token
+                try {
+                    await fetchViewerToken(channelParam || 'match1');
+                } catch (err) {
+                    console.warn('[TOKEN] Renewal failed, retrying in 5s', err);
+                    tokenRenewTimer = setTimeout(renewViewerToken, 5000);
+                }
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // UI helpers
+        // ------------------------------------------------------------------
+        function show(el) { el.classList.remove('hidden'); }
+        function hide(el) { el.classList.add('hidden'); }
+
+        function setStatus(text, { spinner = false, playButton = false } = {}) {
+            statusMsg.innerText = text;
+            spinner ? show(loadingSpinner) : hide(loadingSpinner);
+            playButton ? show(btnPlayAction) : hide(btnPlayAction);
+            text ? show(statusMsg) : hide(statusMsg);
+        }
+
+        function clearCenter() {
+            hide(loadingSpinner);
+            hide(btnPlayAction);
+            hide(statusMsg);
+        }
+
+
+        // Volume: iOS ignores programmatic volume, so only the mute button is offered there
+        const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+        if (isIOS) document.querySelector('.volume-slider-wrap').classList.add('hidden');
+
+        function savedVolume() {
+            try {
+                const v = parseFloat(localStorage.getItem('player_volume'));
+                return Number.isFinite(v) ? Math.min(Math.max(v, 0), 1) : 1;
+            } catch { return 1; }
+        }
+
+        function updateVolumeUi() {
+            const level = video.muted ? 0 : video.volume;
+            volumeSlider.value = String(level);
+            volumeSlider.style.setProperty('--pct', `${Math.round(level * 100)}%`);
+            document.getElementById('icon-vol-high').classList.toggle('hidden', !(level > 0.5));
+            document.getElementById('icon-vol-low').classList.toggle('hidden', !(level > 0 && level <= 0.5));
+            document.getElementById('icon-vol-mute').classList.toggle('hidden', level > 0);
+            btnMute.setAttribute('aria-label', level > 0 ? 'كتم الصوت' : 'تشغيل الصوت');
+            if (!video.muted) hide(btnUnmuteHint);
+        }
+
+        function setMuted(muted) {
+            video.muted = muted;
+            if (!muted && video.volume === 0) video.volume = 0.5;
+            updateVolumeUi();
+        }
+
+        function updatePlayUi() {
+            const playing = !video.paused;
+            document.getElementById('icon-play').classList.toggle('hidden', playing);
+            document.getElementById('icon-pause').classList.toggle('hidden', !playing);
+            btnPlay.setAttribute('aria-label', playing ? 'إيقاف مؤقت' : 'تشغيل');
+        }
+
+        function togglePlay() {
+            if (video.paused) {
+                // Resuming a live stream: jump back to the live edge first
+                userPaused = false;
+                goLive();
+                video.play().catch(() => {});
+            } else {
+                userPaused = true;
+                video.pause();
+            }
+        }
+
+        function liveEdge() {
+            if (hlsInstance && Number.isFinite(hlsInstance.liveSyncPosition)) return hlsInstance.liveSyncPosition;
+            if (video.seekable && video.seekable.length) return video.seekable.end(video.seekable.length - 1) - 3;
+            return null;
+        }
+
+        function goLive() {
+            const edge = liveEdge();
+            if (edge !== null && Number.isFinite(edge) && edge > 0) video.currentTime = edge;
+        }
+
+        // Fullscreen on the container so the custom controls stay visible; iPhone only supports the video element
+        function isFullscreen() {
+            return Boolean(document.fullscreenElement || document.webkitFullscreenElement);
+        }
+        function toggleFullscreen() {
+            if (isFullscreen()) {
+                (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+                return;
+            }
+            const req = player.requestFullscreen || player.webkitRequestFullscreen;
+            if (req) {
+                const p = req.call(player);
+                if (p && p.catch) p.catch(() => {});
+            } else if (video.webkitEnterFullscreen) {
+                video.webkitEnterFullscreen();
+            }
+        }
+        function updateFullscreenUi() {
+            const fs = isFullscreen();
+            document.getElementById('icon-fs-enter').classList.toggle('hidden', fs);
+            document.getElementById('icon-fs-exit').classList.toggle('hidden', !fs);
+            btnFullscreen.setAttribute('aria-label', fs ? 'الخروج من ملء الشاشة' : 'ملء الشاشة');
+        }
+
+        // Auto-hide controls while playing
+        let idleTimer = null;
+        function wake() {
+            player.classList.remove('idle', 'hide-cursor');
+            clearTimeout(idleTimer);
+            idleTimer = setTimeout(() => {
+                if (!video.paused && qualityMenu.classList.contains('hidden')) {
+                    player.classList.add('idle', 'hide-cursor');
+                }
+            }, 3000);
+        }
+
+        function updateQualityBadge() {
+            if (!video.videoHeight) return;
+            const text = (qualityMode === 'hd' ? 'HD ' : '') + `${video.videoHeight}p`;
+            if (qualityLabel.textContent !== text) qualityLabel.textContent = text;
+        }
+
+        // ------------------------------------------------------------------
+        // Wiring
+        // ------------------------------------------------------------------
+        btnPlay.addEventListener('click', togglePlay);
+        btnPlayAction.addEventListener('click', () => {
+            userPaused = false;
+            setMuted(false);
+            goLive();
+            video.play().then(clearCenter).catch(() => {});
+        });
+        btnMute.addEventListener('click', () => setMuted(!video.muted && video.volume > 0));
+        btnUnmuteHint.addEventListener('click', () => setMuted(false));
+        volumeSlider.addEventListener('input', () => {
+            video.volume = parseFloat(volumeSlider.value);
+            video.muted = video.volume === 0;
+            try { localStorage.setItem('player_volume', String(video.volume)); } catch { /* storage blocked */ }
+            updateVolumeUi();
+        });
+        btnFullscreen.addEventListener('click', toggleFullscreen);
+        document.addEventListener('fullscreenchange', updateFullscreenUi);
+        document.addEventListener('webkitfullscreenchange', updateFullscreenUi);
+        liveIndicator.addEventListener('click', () => { if (liveIndicator.classList.contains('behind')) { userPaused = false; goLive(); video.play().catch(() => {}); } });
+
+        // Click on the picture toggles play; double click toggles fullscreen
+        video.addEventListener('click', () => { if (started) togglePlay(); });
+        video.addEventListener('dblclick', toggleFullscreen);
+
+        ['mousemove', 'touchstart', 'keydown'].forEach(evt => player.addEventListener(evt, wake, { passive: true }));
+        player.addEventListener('mouseleave', () => { if (!video.paused) player.classList.add('idle'); });
+
+        window.addEventListener('keydown', (e) => {
+            if (e.target === volumeSlider && e.key.startsWith('Arrow')) return;
+            switch (e.key) {
+                case ' ': case 'k': case 'K': e.preventDefault(); togglePlay(); break;
+                case 'm': case 'M': setMuted(!video.muted); break;
+                case 'f': case 'F': toggleFullscreen(); break;
+                case 'l': case 'L': goLive(); break;
+                case 'ArrowUp': e.preventDefault(); video.muted = false; video.volume = Math.min(1, video.volume + 0.1); break;
+                case 'ArrowDown': e.preventDefault(); video.volume = Math.max(0, video.volume - 0.1); break;
+            }
+        });
+
+        video.addEventListener('play', () => { updatePlayUi(); wake(); });
+        video.addEventListener('pause', () => { updatePlayUi(); wake(); });
+        video.addEventListener('volumechange', updateVolumeUi);
+        video.addEventListener('waiting', () => { if (started) setStatus('', { spinner: true }); });
+        video.addEventListener('playing', () => {
+            started = true;
+            clearCenter();
+            if (video.muted) show(btnUnmuteHint);
+        });
+        video.addEventListener('loadedmetadata', updateQualityBadge);
+        video.addEventListener('resize', updateQualityBadge);
+
+        // ------------------------------------------------------------------
+        // Resolve Target Stream URL
+        // ------------------------------------------------------------------
+        async function resolveStream() {
+            // Case 1: Direct src provided
+            if (srcParam) {
+                streamManifestUrl = srcParam;
+                return initHls(streamManifestUrl);
+            }
+
+            // Case 2: Cloudflare R2 Direct Mode (?r2={random_slug})
+            if (r2SlugParam) {
+
+                // Fetch R2 Custom Domain from backend config if accessible
+                let r2Domain = 'r2-custom-domain.shop';
+                try {
+                    const cfgRes = await fetch('/api/config');
+                    if (cfgRes.ok) {
+                        const cfg = await cfgRes.json();
+                        if (cfg.r2CustomDomain) r2Domain = cfg.r2CustomDomain;
+                    }
+                } catch (e) {
+                    // Fallback to configured domain
+                }
+
+                // 480p (default rendition) and the optional HD rendition (source passthrough)
+                sdManifestUrl = `https://${r2Domain}/hd/${r2SlugParam}/index.html`;
+                hdManifestUrl = `https://${r2Domain}/hd/${r2SlugParam}/hd/index.html`;
+                streamManifestUrl = sdManifestUrl;
+                initHls(streamManifestUrl);
+                refreshHdOption();
+                setInterval(refreshHdOption, HD_CHECK_MS);
+                return;
+            }
+
+            // Case 3: Nginx Edge Camouflaged Mode (?channel={channel})
+            const channel = channelParam || 'match1';
+
+            if (!viewerToken) {
+                try {
+                    await fetchViewerToken(channel);
+                } catch (err) {
+                    // Channel missing or API unreachable: keep trying politely, never show the raw error
+                    console.warn('[PLAYER] token request failed:', err.message);
+                    setStatus('البث غير متاح حاليًا. جاري إعادة المحاولة...', { spinner: true });
+                    setTimeout(resolveStream, 5000);
+                    return;
+                }
+            } else {
+                // Token passed via ?token=: renew it once so the stream_auth cookie gets set
+                await renewViewerToken();
+            }
+
+            // Playlist auth: hls.js sends the Bearer header AND the cookie on .css requests (see
+            // xhrSetup). Native Safari HLS uses the plain URL: every playlist reload carries the
+            // stream_auth cookie, which /api/token keeps refreshing, so playback survives token
+            // expiry. Segments (.js) are requested without token, header or cookie.
+            streamManifestUrl = `/live/${encodeURIComponent(channel)}/index.css`;
+            return initHls(streamManifestUrl);
+        }
+
+        // Initialize Hls.js with Camouflage Handlers & Low-Latency Tuning
+        function initHls(url) {
+            setStatus('جاري الاتصال بالبث...', { spinner: true });
+
+            if (Hls.isSupported()) {
+                if (hlsInstance) {
+                    hlsInstance.destroy();
+                }
+
+                hlsInstance = new Hls({
+                    enableWorker: true,
+                    // Stable 5s delay: play 5s behind the live edge with a deeper forward buffer, so
+                    // source jitter / network spikes are absorbed instead of stalling playback.
+                    // lowLatencyMode only enables hls.js' playback-rate drift toward the target
+                    // (our playlists have no LL-HLS parts, so nothing else changes).
+                    lowLatencyMode: false,         // no playback-rate catch-up (bursty source)
+                    liveSyncDuration: 12,         // play 12s (6 segments) behind the edge: absorbs 8-9s ingest bursts
+                    liveMaxLatencyDuration: 18,   // jump forward only when more than 18s behind (playlist window ~20s)
+                    maxLiveSyncPlaybackRate: 1,   // never speed up to chase the edge
+                    maxBufferLength: 30,
+                    maxMaxBufferLength: 60,
+                    backBufferLength: 30,
+                    liveDurationInfinity: true,
+                    // Cross-origin (R2/CDN) playlists: a per-second query value so the browser never reuses a
+                    // playlist it cached (the CDN currently sends max-age=14400). All viewers share the same URL
+                    // within a second, so edge caching is unchanged. Segments are not touched.
+                    pLoader: class extends Hls.DefaultConfig.loader {
+                        load(context, config, callbacks) {
+                            try {
+                                const u = new URL(context.url, window.location.href);
+                                if (u.origin !== window.location.origin) { u.searchParams.set('_t', String(Math.floor(Date.now() / 1000))); context.url = u.toString(); }
+                            } catch (e) { /* keep the original URL */ }
+                            super.load(context, config, callbacks);
+                        }
+                    },
+                    xhrSetup: function(xhr, requestUrl) {
+                        // Token goes ONLY on same-origin .css playlist requests. .js segments stay
+                        // header-free and token-free so every viewer requests the identical,
+                        // CDN-cacheable URL (segments are not auth-checked at the edge).
+                        // withCredentials is limited to same-origin .css as well: R2 (cross-origin,
+                        // wildcard CORS) rejects credentialed requests.
+                        if (!requestUrl.startsWith(window.location.origin + '/')) return;
+                        const pathname = new URL(requestUrl).pathname;
+                        if (pathname.endsWith('.css')) {
+                            xhr.withCredentials = true; // sends the stream_auth cookie
+                            // Bearer header kept: works even where third-party cookies are blocked
+                            // (Safari/Brave inside cross-site iframe embeds)
+                            if (viewerToken) xhr.setRequestHeader('Authorization', `Bearer ${viewerToken}`);
+                        }
+                    }
+                });
+
+                hlsInstance.loadSource(url);
+                hlsInstance.attachMedia(video);
+
+                hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
+                    if (!started) attemptAutoplay();
+                    else if (!userPaused) video.play().catch(() => {});
+                });
+
+
+                hlsInstance.on(Hls.Events.ERROR, (event, data) => {
+                    // Details go to the console only; the viewer sees a polite message
+                    console.warn('[HLS-WARN]', data.type, data.details);
+                    if (!data.fatal) return;
+                    if (qualityMode === 'hd') { hdFailed('hls ' + data.details); return; }
+                    setStatus('جاري إعادة المحاولة...', { spinner: true });
+                    if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                        hlsInstance.recoverMediaError();
+                        return;
+                    }
+                    const code = data.response && data.response.code;
+                    const playlistFailed = /manifest|level/i.test(data.details || '');
+                    setTimeout(async () => {
+                        // 401/403 on the playlist = token expired (e.g. tab slept): get a fresh one
+                        if ((code === 401 || code === 403) && channelParam && !srcParam && !r2SlugParam) {
+                            try { await fetchViewerToken(channelParam); } catch { /* retried below */ }
+                        }
+                        if (playlistFailed) hlsInstance.loadSource(url);
+                        else hlsInstance.startLoad();
+                    }, 3000);
+                });
+
+            } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                // Native Safari HLS
+                video.src = url;
+                video.addEventListener('loadedmetadata', attemptAutoplay, { once: true });
+                // Native player gives up on errors: reload the stream after 3s
+                video.addEventListener('error', () => {
+                    setStatus('جاري إعادة المحاولة...', { spinner: true });
+                    setTimeout(() => {
+                        video.src = url;
+                        video.addEventListener('loadedmetadata', attemptAutoplay, { once: true });
+                    }, 3000);
+                });
+            } else {
+                setStatus('عذرًا، هذا المتصفح لا يدعم تشغيل البث المباشر.');
+            }
+        }
+
+        // Handle Browser Autoplay Policies: start muted (always allowed), then offer unmute
+        function attemptAutoplay() {
+            video.volume = savedVolume();
+            video.muted = true;
+            updateVolumeUi();
+            const playPromise = video.play();
+
+            if (playPromise !== undefined) {
+                playPromise.then(() => {
+                    started = true;
+                    clearCenter();
+                    wake();
+                }).catch((err) => {
+                    // AbortError = play() interrupted by hls.js loading; playback still starts.
+                    // Only a real autoplay block (NotAllowedError) needs the big play button.
+                    if (err && err.name === 'NotAllowedError') {
+                        setStatus('اضغط لبدء المشاهدة', { playButton: true });
+                    }
+                });
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // Self-healing: a live stream must never stay ended / paused / frozen unless the
+        // viewer paused it (e.g. the source restarted behind the scenes)
+        // ------------------------------------------------------------------
+        function reloadStream() {
+            setStatus('جاري إعادة المحاولة...', { spinner: true });
+            lastProgress = { t: video.currentTime, at: Date.now() };
+            if (hlsInstance) {
+                hlsInstance.loadSource(streamManifestUrl);
+            } else if (streamManifestUrl) {
+                video.src = streamManifestUrl;
+                video.play().catch(() => {});
+            }
+        }
+        video.addEventListener('ended', () => {
+            if (!started || userPaused) return;
+            setStatus('جاري إعادة المحاولة...', { spinner: true });
+            setTimeout(reloadStream, 3000);
+        });
+        setInterval(() => {
+            if (!started || userPaused || !streamManifestUrl) return;
+            if (video.currentTime !== lastProgress.t) {
+                lastProgress = { t: video.currentTime, at: Date.now() };
+                return;
+            }
+            if (Date.now() - lastProgress.at > 20000) reloadStream();
+        }, 2000);
+
+        // ------------------------------------------------------------------
+        // Live viewers heartbeat: POST /api/ping/{channel}?sid=... every 15 s while playing.
+        // The channel is the R2 slug of the stream actually played (hd/{slug}/), otherwise the
+        // ?channel= key. Fire-and-forget: a failed ping never affects playback.
+        // ------------------------------------------------------------------
+        const viewerSid = (window.crypto && crypto.randomUUID)
+            ? crypto.randomUUID()
+            : 'v' + Date.now().toString(36) + Math.random().toString(36).slice(2, 12);
+        function viewerKey() {
+            const m = /\/hd\/([a-z0-9]+)\//i.exec(streamManifestUrl || '');
+            return m ? m[1] : (channelParam || 'match1');
+        }
+        function sendViewerPing() {
+            if (!started || video.paused) return;
+            const url = `/api/ping/${encodeURIComponent(viewerKey())}?sid=${encodeURIComponent(viewerSid)}`;
+            try {
+                if (navigator.sendBeacon && navigator.sendBeacon(url)) return;
+            } catch (e) { /* fall back to fetch */ }
+            fetch(url, { method: 'POST', keepalive: true, credentials: 'omit' }).catch(() => {});
+        }
+        video.addEventListener('playing', function firstPing() {
+            video.removeEventListener('playing', firstPing);
+            sendViewerPing();                                   // count the viewer as soon as video plays
+        });
+        setInterval(sendViewerPing, 15000);
+
+        // ------------------------------------------------------------------
+        // Live-edge state + quality badge
+        // ------------------------------------------------------------------
+        setInterval(() => {
+            const edge = liveEdge();
+            const behind = edge !== null && Number.isFinite(edge) && (edge - video.currentTime) > 20;
+            const notLive = behind || (started && video.paused);
+            liveIndicator.classList.toggle('behind', notLive);
+            liveIndicatorText.innerText = notLive ? 'العودة للمباشر' : 'مباشر';
+            updateQualityBadge();
+        }, 1000);
+
+        // ------------------------------------------------------------------
+        // Quality selector (R2 mode only)
+        //   480p = hd/{slug}/index.html     the transcoded rendition, ALWAYS the start quality
+        //   HD   = hd/{slug}/hd/index.html  H.264 720p (backend RESTREAM_HD_MODE=encode)
+        // HD is offered only while its playlist exists (the backend removes it ~45 s after the HD
+        // leg stops) and is re-checked every minute. Switching loads the other playlist, so it works
+        // the same with hls.js and native Safari HLS. Any fatal error while on HD (stream gone,
+        // codec the browser cannot play, e.g. HEVC) switches back to 480p and hides HD for this visit.
+        // ------------------------------------------------------------------
+        function updateQualityMenu() {
+            qualityMenu.querySelectorAll('[data-quality]').forEach(b => {
+                b.setAttribute('aria-checked', b.dataset.quality === qualityMode ? 'true' : 'false');
+            });
+            if (!video.videoHeight) qualityLabel.textContent = qualityMode === 'hd' ? 'HD' : '480p';
+        }
+        function openQualityMenu(open) {
+            const show = open && qualityWrap.classList.contains('has-menu');
+            qualityMenu.classList.toggle('hidden', !show);
+            qualityBadge.setAttribute('aria-expanded', show ? 'true' : 'false');
+            if (show) (qualityMenu.querySelector('[aria-checked="true"]') || qualityMenu.querySelector('button')).focus();
+        }
+        async function hdPlaylistAvailable() {
+            if (!hdManifestUrl || hdBroken) return false;
+            try {
+                const res = await fetch(`${hdManifestUrl}?_t=${Math.floor(Date.now() / 1000)}`, { cache: 'no-store', credentials: 'omit' });
+                if (!res.ok) return false;
+                const text = await res.text();
+                return text.includes('#EXTM3U') && /^[^#\s].*\.(js|ts)\s*$/m.test(text);
+            } catch (e) {
+                return false;
+            }
+        }
+        async function refreshHdOption() {
+            const ok = await hdPlaylistAvailable();
+            qualityWrap.classList.toggle('has-menu', ok);
+            qualityBadge.disabled = !ok;
+            qualityBadge.title = ok ? 'جودة البث' : 'دقة البث';
+            if (!ok) {
+                openQualityMenu(false);
+                if (qualityMode === 'hd') switchQuality('sd');
+            }
+        }
+        function switchQuality(mode) {
+            const url = mode === 'hd' ? hdManifestUrl : sdManifestUrl;
+            if (!url || mode === qualityMode) return;
+            qualityMode = mode;
+            hdSwitchedAt = Date.now();
+            streamManifestUrl = url;
+            updateQualityMenu();
+            setStatus('', { spinner: true });
+            lastProgress = { t: video.currentTime, at: Date.now() };
+            if (hlsInstance) {
+                hlsInstance.loadSource(url);
+            } else {
+                video.src = url;
+                video.play().catch(() => {});
+            }
+        }
+        function hdFailed(reason) {
+            console.warn('[PLAYER] HD rendition failed, back to 480p:', reason);
+            // Failing right after switching = this browser cannot play it: hide HD for this visit
+            if (Date.now() - hdSwitchedAt < 20000) hdBroken = true;
+            switchQuality('sd');
+            refreshHdOption();
+        }
+        qualityBadge.addEventListener('click', (e) => {
+            e.stopPropagation();
+            openQualityMenu(qualityMenu.classList.contains('hidden'));
+        });
+        qualityMenu.addEventListener('click', (e) => {
+            const item = e.target.closest('[data-quality]');
+            if (!item) return;
+            e.stopPropagation();
+            openQualityMenu(false);
+            switchQuality(item.dataset.quality);
+            qualityBadge.focus();
+        });
+        qualityMenu.addEventListener('keydown', (e) => {
+            const items = [...qualityMenu.querySelectorAll('[data-quality]')];
+            const i = items.indexOf(document.activeElement);
+            if (e.key === 'Escape') { e.preventDefault(); openQualityMenu(false); qualityBadge.focus(); }
+            else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                e.preventDefault();
+                items[(i + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length].focus();
+            }
+        });
+        document.addEventListener('click', (e) => { if (!qualityWrap.contains(e.target)) openQualityMenu(false); });
+        // Native Safari: an error while on HD also falls back to 480p
+        video.addEventListener('error', () => { if (!hlsInstance && qualityMode === 'hd') hdFailed('native error'); });
+
+        // Start
+        updatePlayUi();
+        updateVolumeUi();
+        updateFullscreenUi();
+        window.addEventListener('DOMContentLoaded', resolveStream);
+    </script>
+</body>
+</html>

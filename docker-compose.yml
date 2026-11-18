@@ -67,6 +67,9 @@ services:
       - HLS_DIR=/hls
       - DATA_FILE=/app/data/channels.json
       - MAX_SEGMENT_AGE_SECONDS=${MAX_SEGMENT_AGE_SECONDS:-120}
+      # R2 playlist edge cache in seconds (0 = old no-store) and uploaded playlist copies (html,css)
+      - R2_PLAYLIST_MAX_AGE=${R2_PLAYLIST_MAX_AGE:-1}
+      - R2_PLAYLIST_FILES=${R2_PLAYLIST_FILES:-html}
       - ENABLE_AUTH_ON_PLAYLISTS=${ENABLE_AUTH_ON_PLAYLISTS:-true}
       - TOKEN_EXPIRATION_SECONDS=${TOKEN_EXPIRATION_SECONDS:-60}
       - TOKEN_RENEW_GRACE_SECONDS=${TOKEN_RENEW_GRACE_SECONDS:-15}
@@ -75,8 +78,23 @@ services:
       - RESTREAM_MAX_RETRIES=${RESTREAM_MAX_RETRIES:-0}
       - RESTREAM_COPY_AUDIO=${RESTREAM_COPY_AUDIO:-false}
       - RESTREAM_PROFILE=${RESTREAM_PROFILE:-480p}
-      - RESTREAM_VIDEO_KBPS=${RESTREAM_VIDEO_KBPS:-900}
-      - RESTREAM_X264_PRESET=${RESTREAM_X264_PRESET:-veryfast}
+      # empty = profile default (480p: 1000k, 720p: 2500k)
+      - RESTREAM_VIDEO_KBPS=${RESTREAM_VIDEO_KBPS:-}
+      # Selectable "HD" rendition (live/{key}-hd -> R2 hd/{slug}/hd/index.html); the player starts
+      # on the profile above. encode = H.264 720p25 ultrafast (works in every browser),
+      # copy = source passthrough (H.264 sources only; HEVC plays black in Chrome), off = none.
+      # Fallback if the server overloads (robotic audio): RESTREAM_HD_MODE=off + RESTREAM_PROFILE=720p
+      - RESTREAM_HD_MODE=${RESTREAM_HD_MODE:-encode}
+      # Core protection: HD is switched on per channel in the admin panel; at most this many
+      # channels encode HD at once (4 vCPU: 2). 0 = no HD encodes.
+      - MAX_HD_ENCODES=${MAX_HD_ENCODES:-2}
+      - RESTREAM_HD_PRESET=${RESTREAM_HD_PRESET:-ultrafast}
+      - RESTREAM_HD_KBPS=${RESTREAM_HD_KBPS:-2500}
+      # empty = superfast while the HD encode runs, else veryfast
+      - RESTREAM_X264_PRESET=${RESTREAM_X264_PRESET:-}
+      - RESTREAM_FPS=${RESTREAM_FPS:-25}
+      - RESTREAM_ENHANCE=${RESTREAM_ENHANCE:-true}
+      - RESTREAM_SHARPEN=${RESTREAM_SHARPEN:-none}
     volumes:
       # read-write: the backend prunes stale local HLS files (> 5 min old)
       - hls_data:/hls

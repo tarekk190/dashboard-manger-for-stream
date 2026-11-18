@@ -248,6 +248,10 @@ class ChannelManager {
 
     create({ name, streamKey, r2_slug, sourceUrl = '' }) {
         const cleanKey = (streamKey || name).trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+        // "{key}-hd" is the HD rendition path of channel {key} (RESTREAM_HD_MODE)
+        if (cleanKey.endsWith(HD_VARIANT_SUFFIX)) {
+            throw new Error(`Stream keys ending in '${HD_VARIANT_SUFFIX}' are reserved for HD renditions.`);
+        }
         if (this.getByStreamKey(cleanKey)) {
             throw new Error(`Stream key '${cleanKey}' is already in use.`);
         }
@@ -277,6 +281,8 @@ class ChannelManager {
         if (updates.r2_slug) channel.r2_slug = updates.r2_slug.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
         // Desired restream state ('running' | 'stopped'), resumed on backend start
         if (updates.desiredState) channel.desiredState = updates.desiredState;
+        // Per-channel HD rendition (applies from the next FFmpeg start; see MAX_HD_ENCODES)
+        if (typeof updates.hdEnabled === 'boolean') channel.hdEnabled = updates.hdEnabled;
 
         this.channels.set(id, channel);
         this.save();
@@ -382,16 +388,66 @@ const RESTREAM_STABLE_RUN_MS = 60000;
 const RESTREAM_MAX_RETRIES = parseInt(process.env.RESTREAM_MAX_RETRIES || '0', 10);
 // A source that sends nothing for this long makes FFmpeg exit, so the supervisor reconnects it
 const RESTREAM_RW_TIMEOUT_US = 15 * 1000 * 1000;
-// Output profile: '480p' (default) transcodes every restream to 854x480 H.264 + AAC,
-// 'copy' relays the source untouched (video copy, audio AAC unless RESTREAM_COPY_AUDIO=true).
+// Output profile: '480p' (default) / '720p' transcode every restream to H.264 + AAC at that
+// height, 'copy' relays the source untouched (video copy, audio AAC unless RESTREAM_COPY_AUDIO=true).
 const RESTREAM_PROFILE = String(process.env.RESTREAM_PROFILE || '480p').toLowerCase();
-if (!['480p', 'copy'].includes(RESTREAM_PROFILE)) {
-    fatal(`RESTREAM_PROFILE must be "480p" or "copy" (got "${RESTREAM_PROFILE}").`);
+if (!['480p', '720p', 'copy'].includes(RESTREAM_PROFILE)) {
+    fatal(`RESTREAM_PROFILE must be "480p", "720p" or "copy" (got "${RESTREAM_PROFILE}").`);
 }
-const RESTREAM_TARGET_HEIGHT = 480;
-const RESTREAM_VIDEO_KBPS = Math.min(Math.max(parseInt(process.env.RESTREAM_VIDEO_KBPS || '900', 10) || 900, 300), 4000);
+const RESTREAM_TARGET_HEIGHT = RESTREAM_PROFILE === '720p' ? 720 : 480;
+const RESTREAM_DEFAULT_KBPS = RESTREAM_PROFILE === '720p' ? 2500 : 1000;
+const RESTREAM_VIDEO_KBPS = Math.min(Math.max(parseInt(process.env.RESTREAM_VIDEO_KBPS || String(RESTREAM_DEFAULT_KBPS), 10) || RESTREAM_DEFAULT_KBPS, 300), 6000);
 const X264_PRESETS = ['ultrafast', 'superfast', 'veryfast', 'faster', 'fast', 'medium'];
-const RESTREAM_X264_PRESET = X264_PRESETS.includes(process.env.RESTREAM_X264_PRESET) ? process.env.RESTREAM_X264_PRESET : 'veryfast';
+// Second, selectable "HD" rendition next to the default profile (viewers always start on the default):
+//   encode (recommended): H.264 720p25 encoded from the same decode. Works in every browser.
+//   copy: the source passed through untouched. Zero encode cost, but an HEVC source (B4: HEVC
+//         1080p50) gives Chrome/hls.js a black picture with sound, so only for H.264 sources.
+//   off:  no HD rendition.
+// Published to live/{key}-hd, packaged by MediaMTX like any path, uploaded to R2 hd/{slug}/hd/.
+// Not available with RESTREAM_PROFILE=copy (that already is the source).
+// (RESTREAM_HD_COPY=true from the first version still means 'copy' when RESTREAM_HD_MODE is unset.)
+const RESTREAM_HD_MODE = (() => {
+    if (RESTREAM_PROFILE === 'copy') return 'off';
+    const mode = String(process.env.RESTREAM_HD_MODE || '').toLowerCase();
+    if (['encode', 'copy', 'off'].includes(mode)) return mode;
+    return String(process.env.RESTREAM_HD_COPY || 'false').toLowerCase() === 'true' ? 'copy' : 'off';
+})();
+const RESTREAM_HD_ENABLED = RESTREAM_HD_MODE !== 'off';
+// Core protection. HD is chosen PER CHANNEL (channel.hdEnabled, admin panel switch, default off)
+// and at most MAX_HD_ENCODES channels run the 720p encode at the same time; a channel over the
+// limit runs its default rendition only (logged, shown in the panel). 0 = no HD encodes at all.
+// HD copy (RESTREAM_HD_MODE=copy) costs no encode, so the limit does not apply to it.
+// Budget on this 4-vCPU server (HEVC 1080p50 source): 1.37 cores per channel with HD.
+const MAX_HD_ENCODES = (() => {
+    const n = parseInt(process.env.MAX_HD_ENCODES ?? '2', 10);
+    return Number.isFinite(n) ? Math.min(Math.max(n, 0), 16) : 2;
+})();
+// Default rendition preset: superfast while a second encode runs (CPU headroom), else veryfast
+const RESTREAM_X264_PRESET = X264_PRESETS.includes(process.env.RESTREAM_X264_PRESET)
+    ? process.env.RESTREAM_X264_PRESET
+    : (RESTREAM_HD_MODE === 'encode' ? 'superfast' : 'veryfast');
+// HD encode: 720p (never upscaled), ultrafast x264, constant RESTREAM_FPS, own bitrate.
+// Measured on this server with an HEVC 1080p50 source (20 s): 480p veryfast alone 1.17 cores;
+// 480p superfast + 720p ultrafast sharing one decode + deinterlace 1.37 cores (+17%).
+const RESTREAM_HD_HEIGHT = 720;
+const RESTREAM_HD_PRESET = X264_PRESETS.includes(process.env.RESTREAM_HD_PRESET) ? process.env.RESTREAM_HD_PRESET : 'ultrafast';
+const RESTREAM_HD_KBPS = Math.min(Math.max(parseInt(process.env.RESTREAM_HD_KBPS || '2500', 10) || 2500, 500), 8000);
+// Constant output frame rate. 25 suits 50 Hz broadcasts: 50p/50i sources are halved evenly
+// (every other frame) instead of the uneven 50 -> 30 cadence of a 30 fps cap, which judders.
+const RESTREAM_FPS = Math.min(Math.max(parseInt(process.env.RESTREAM_FPS || '25', 10) || 25, 10), 60);
+// Picture tuning: 'eq' = slight brightness/gamma/saturation lift (measured ~0.05 core at 720p).
+// RESTREAM_SHARPEN=cas adds Contrast Adaptive Sharpening (measured +0.9..2 cores at 720p on this
+// 4-vCPU server: not real-time together with the decode, so off by default; the scaler already
+// uses a sharper bicubic kernel at no extra cost).
+const RESTREAM_ENHANCE = String(process.env.RESTREAM_ENHANCE || 'true').toLowerCase() !== 'false';
+// Colour lift used by BOTH renditions (480p and HD 720p), applied after scaling (fewer pixels).
+const EQ_FILTER = 'eq=brightness=0.02:contrast=1.05:saturation=1.2';
+const RESTREAM_SHARPEN = String(process.env.RESTREAM_SHARPEN || 'none').toLowerCase() === 'cas' ? 'cas' : 'none';
+const HD_VARIANT_SUFFIX = '-hd';
+// HD copy mode only - FLV codec tags for the copied video. The tee muxer keeps the input's MPEG-TS tag (27), which
+// FLV rejects, so the tag is forced: 7 = H.264, '1cvh' = HEVC in Enhanced FLV (MKBETAG 'hvc1').
+// Any other codec (MPEG-2...) cannot go into FLV: no HD rendition for that source.
+const HD_FLV_TAGS = { h264: '7', hevc: '1cvh' };
 // true = pure `-c copy` in 'copy' profile (source audio must already be AAC/MP3)
 const RESTREAM_COPY_AUDIO = String(process.env.RESTREAM_COPY_AUDIO || 'false').toLowerCase() === 'true';
 // ONLINE only while the frame counter advances; FFmpeg keeps printing progress lines while stalled
@@ -500,7 +556,8 @@ function fallbackSourceKind(url) {
     return /\.m3u8?(\?|$)/i.test(new URL(url).pathname) ? 'hls-live' : 'stream';
 }
 
-async function probeSource(sourceUrl) {
+// hdMode: the HD rendition of this run ('encode' needs a >= 720p source variant)
+async function probeSource(sourceUrl, hdMode = RESTREAM_HD_MODE) {
     if (!/^https?:/i.test(sourceUrl)) return { kind: 'live', inputUrl: sourceUrl, note: '' };
 
     let res = await fetchLimited(sourceUrl);
@@ -536,9 +593,11 @@ async function probeSource(sourceUrl) {
         if (variants.length === 0) throw new Error('master playlist has no variants');
         const known = variants.filter(v => v.height > 0);
         let pick;
-        if (RESTREAM_PROFILE === '480p' && known.length) {
-            // Smallest variant that is still >= 480p (less download + decode), else the largest
-            pick = known.filter(v => v.height >= RESTREAM_TARGET_HEIGHT).sort((a, b) => a.height - b.height || a.bandwidth - b.bandwidth)[0]
+        if (RESTREAM_PROFILE !== 'copy' && hdMode !== 'copy' && known.length) {
+            // Smallest variant that is still >= the needed height (less download + decode), else the largest.
+            // HD encode needs 720p; HD copy takes the best variant (it IS the HD rendition).
+            const needHeight = hdMode === 'encode' ? Math.max(RESTREAM_TARGET_HEIGHT, RESTREAM_HD_HEIGHT) : RESTREAM_TARGET_HEIGHT;
+            pick = known.filter(v => v.height >= needHeight).sort((a, b) => a.height - b.height || a.bandwidth - b.bandwidth)[0]
                 || known.sort((a, b) => b.height - a.height)[0];
         } else {
             pick = variants.slice().sort((a, b) => b.bandwidth - a.bandwidth)[0];
@@ -658,7 +717,10 @@ class FFmpegRestreamManager {
             exitPromise: Promise.resolve(),
             stopRequested: false,
             retries: 0,
-            restartTimer: null
+            restartTimer: null,
+            // Source video codec for the HD passthrough tag (assumed H.264 until FFmpeg reports it)
+            hdCodec: previous && previous.sourceUrl === sourceUrl.trim() && previous.hdCodec ? previous.hdCodec : 'h264',
+            codecScan: 'done'
         };
         this.jobs.set(channelId, job);
 
@@ -677,10 +739,12 @@ class FFmpegRestreamManager {
         });
     }
 
-    buildArgs(channel, probe, inputPath) {
+    buildArgs(channel, probe, inputPath, job) {
         // Publish with the channel's secret key; MediaMTX validates it via POST /internal/mediamtx-auth
         const rtmpTarget = `rtmp://${MEDIAMTX_RTMP_HOST}:${MEDIAMTX_RTMP_PORT}/live/${channel.streamKey}` +
             `?user=publish&pass=${channel.publishKey}`;
+        // HD passthrough tag for this source's codec (null = no HD rendition)
+        const hdTag = job && job.hdMode === 'copy' ? (HD_FLV_TAGS[job.hdCodec] || null) : null;
 
         // Input side (depends on what probeSource found):
         // - -rw_timeout (microseconds, any protocol): a source that sends nothing for 15s makes
@@ -722,37 +786,136 @@ class FFmpegRestreamManager {
         }
 
         // Output side:
-        // - 480p profile: scale to 480 lines (width keeps aspect, even), max 30 fps, H.264 main,
-        //   ~RESTREAM_VIDEO_KBPS, keyframe every 2s (clean 2s HLS segments), AAC 128k stereo.
+        // - 480p / 720p profiles (video filter chain, in order):
+        //   bwdif   deinterlace ONLY frames flagged interlaced, one frame per frame (send_frame):
+        //           removes combing on 50i/60i sports feeds; progressive sources pass untouched.
+        //           (yadif=1 / send_field doubles the frame rate: 25i -> 50, 50p -> 100 fps; measured
+        //           4-7 cores at 720p on this 4-vCPU server = slower than real time.)
+        //   scale   to the target height (never upscaling SD), width keeps aspect; bicubic with
+        //           C=0.75 is a little sharper than the default 0.6 at the same cost.
+        //   eq      brightness +0.02, contrast 1.05, saturation 1.2 (RESTREAM_ENHANCE), optional cas (RESTREAM_SHARPEN)
+        //   fps     constant RESTREAM_FPS (25: 50p/50i halve evenly; no 50 -> 30 judder)
+        //   H.264 main ~RESTREAM_VIDEO_KBPS (maxrate 1.2x, VBV 2.4x), keyframe every 2 s (clean
+        //   2 s HLS segments), AAC 96k stereo 44.1 kHz.
         // - copy profile: video copied; audio AAC unless RESTREAM_COPY_AUDIO (FLV only carries AAC/MP3).
+        // Audio clock-drift guard: many IPTV sources deliver slightly more (or fewer) audio samples
+        // than their timestamps say. Without correction those samples become overlapping AAC packets
+        // that pile up over hours and play as "robotic/metallic" audio until a restart. aresample
+        // async=1000 stretches/squeezes up to 1000 samples/s (~2%) to follow the timestamps, and
+        // pads or trims hard only beyond 100 ms. Tested with FFmpeg 8.0.1 on a 1% fast-clock source:
+        // 232 overlapping packets per minute without the guard, 0 with it.
+        // Note: a CPU that cannot keep up (FFmpeg speed < 1.0x) also produces robotic audio; keep
+        // the filter chain within the server's budget (see RESTREAM_SHARPEN above).
+        const audioSync = ['-af', 'aresample=async=1000:min_hard_comp=0.100:first_pts=0'];
         let codecs;
+        let vfList = [];
         if (RESTREAM_PROFILE === 'copy') {
             codecs = RESTREAM_COPY_AUDIO
                 ? ['-c', 'copy']
-                : ['-c:v', 'copy', '-c:a', 'aac', '-b:a', '128k', '-ar', '44100'];
+                : ['-c:v', 'copy', ...audioSync, '-c:a', 'aac', '-b:a', '96k', '-ar', '44100'];
         } else {
+            vfList = [
+                'bwdif=mode=send_frame:parity=auto:deint=interlaced',
+                `scale=w=-2:h=min(${RESTREAM_TARGET_HEIGHT}\\,ih):flags=bicubic:param0=0:param1=0.75`,
+                ...(RESTREAM_SHARPEN === 'cas' ? ['cas=strength=0.6'] : []),
+                // Brighter, punchier picture. (Earlier note: contrast=1.03 crushed the shadows /
+                // pitch on dark broadcasts; if that returns, drop contrast and use gamma=1.05.)
+                ...(RESTREAM_ENHANCE ? [EQ_FILTER] : []),
+                `fps=${RESTREAM_FPS}`,
+                'format=yuv420p'
+            ];
+            const vf = vfList.join(',');
+            // ':v' = every video output; ':v:0' = only the transcoded one when the HD copy is the
+            // second video output (filters and encoder options must not touch the copied stream)
+            const v = hdTag ? ':v:0' : ':v';
             codecs = [
-                '-vf', `scale=-2:${RESTREAM_TARGET_HEIGHT}:flags=bicubic,format=yuv420p`,
-                '-fpsmax', '30',
-                '-c:v', 'libx264', '-preset', RESTREAM_X264_PRESET, '-tune', 'zerolatency', '-profile:v', 'main',
-                '-b:v', `${RESTREAM_VIDEO_KBPS}k`,
-                '-maxrate', `${Math.round(RESTREAM_VIDEO_KBPS * 1.1)}k`,
-                '-bufsize', `${RESTREAM_VIDEO_KBPS * 2}k`,
-                '-force_key_frames', 'expr:gte(t,n_forced*2)', '-sc_threshold', '0',
-                '-c:a', 'aac', '-b:a', '128k', '-ar', '44100', '-ac', '2'
+                `-filter${v}`, vf,
+                `-c${v}`, 'libx264', `-preset${v}`, RESTREAM_X264_PRESET, `-tune${v}`, 'zerolatency', `-profile${v}`, 'main',
+                `-b${v}`, `${RESTREAM_VIDEO_KBPS}k`,
+                `-maxrate${v}`, `${Math.round(RESTREAM_VIDEO_KBPS * 1.2)}k`,
+                `-bufsize${v}`, `${Math.round(RESTREAM_VIDEO_KBPS * 2.4)}k`,
+                `-force_key_frames${v}`, 'expr:gte(t,n_forced*2)', `-sc_threshold${v}`, '0',
+                ...audioSync,
+                '-c:a', 'aac', '-b:a', '96k', '-ar', '44100', '-ac', '2'
             ];
         }
 
-        return [
+        const head = [
             '-nostdin', '-hide_banner', '-loglevel', 'info',
             '-rw_timeout', String(RESTREAM_RW_TIMEOUT_US),
             ...input,
             // nobuffer: no extra input buffering for live sources (looped ones are paced by -readrate)
             '-fflags', probe.loopPlaylist || probe.kind === 'file' ? '+genpts+discardcorrupt' : '+genpts+discardcorrupt+nobuffer',
-            '-i', inputPath,
-            '-map', '0:v:0?', '-map', '0:a:0?',
+            // Larger demux queue: a short CPU or network hiccup no longer drops input packets
+            '-thread_queue_size', '10240',
+            '-i', inputPath
+        ];
+
+        // Two renditions are sent with the tee muxer (one FFmpeg, one input, decoded once):
+        //   output streams: v:0 = default rendition (480p), a = AAC (shared), v:1 = HD
+        //   slave 1 -> live/{key}      [v:0 + a]   the default rendition, unchanged URLs for viewers
+        //   slave 2 -> live/{key}-hd   [v:1 + a]   onfail=ignore: if the HD leg fails (codec, network,
+        //              MediaMTX) FFmpeg logs it and keeps the default rendition running.
+        // tee does not set global headers for the encoders, so +global_header is explicit (FLV
+        // needs the codec config in the stream header). Tested with FFmpeg 8.0.1.
+        const hdTarget = `rtmp://${MEDIAMTX_RTMP_HOST}:${MEDIAMTX_RTMP_PORT}/live/${channel.streamKey}${HD_VARIANT_SUFFIX}` +
+            `?user=publish&pass=${channel.publishKey}`;
+        const teeOutputs = `[f=flv:select=\\'v:0,a\\']${rtmpTarget}|[f=flv:onfail=ignore:select=\\'v:1,a\\']${hdTarget}`;
+
+        if (job && job.hdMode === 'encode' && vfList.length) {
+            // HD encode: ONE decode + ONE deinterlace, then split into
+            //   [vsd] the default chain (scale 480, eq colour lift, fps) -> x264 RESTREAM_X264_PRESET
+            //   [vhd] scale to 720 (bilinear), the same eq colour lift, fps -> x264 ultrafast
+            // Measured on HEVC 1080p50: 1.37 cores, vs 1.54 for two independent chains (deinterlace
+            // only in the default chain). Sharing is cheaper AND keeps HD free of combing.
+            // Both outputs force a keyframe every 2 s, so their HLS segments line up.
+            const [deinterlace, ...defaultChain] = vfList;
+            const keyframes = 'expr:gte(t,n_forced*2)';
+            const graph = `[0:v:0]${deinterlace},split=2[sdin][hdin];` +
+                `[sdin]${defaultChain.join(',')}[vsd];` +
+                `[hdin]scale=w=-2:h=min(${RESTREAM_HD_HEIGHT}\\,ih):flags=bilinear,` +
+                `${RESTREAM_ENHANCE ? EQ_FILTER + ',' : ''}fps=${RESTREAM_FPS},format=yuv420p[vhd]`;
+            return [
+                ...head,
+                '-filter_complex', graph,
+                '-map', '[vsd]', '-map', '0:a:0?', '-map', '[vhd]',
+                '-c:v:0', 'libx264', '-preset:v:0', RESTREAM_X264_PRESET, '-tune:v:0', 'zerolatency', '-profile:v:0', 'main',
+                '-b:v:0', `${RESTREAM_VIDEO_KBPS}k`,
+                '-maxrate:v:0', `${Math.round(RESTREAM_VIDEO_KBPS * 1.2)}k`,
+                '-bufsize:v:0', `${Math.round(RESTREAM_VIDEO_KBPS * 2.4)}k`,
+                '-force_key_frames:v:0', keyframes, '-sc_threshold:v:0', '0',
+                '-c:v:1', 'libx264', '-preset:v:1', RESTREAM_HD_PRESET, '-tune:v:1', 'zerolatency', '-profile:v:1', 'main',
+                '-b:v:1', `${RESTREAM_HD_KBPS}k`,
+                '-maxrate:v:1', `${Math.round(RESTREAM_HD_KBPS * 1.2)}k`,
+                '-bufsize:v:1', `${Math.round(RESTREAM_HD_KBPS * 2.4)}k`,
+                '-force_key_frames:v:1', keyframes, '-sc_threshold:v:1', '0',
+                ...audioSync,
+                '-c:a', 'aac', '-b:a', '96k', '-ar', '44100', '-ac', '2',
+                '-flags:v', '+global_header', '-flags:a', '+global_header',
+                '-max_muxing_queue_size', '9999',
+                '-f', 'tee', teeOutputs
+            ];
+        }
+
+        if (!hdTag) {
+            return [
+                ...head,
+                '-map', '0:v:0?', '-map', '0:a:0?',
+                ...codecs,
+                '-max_muxing_queue_size', '9999',
+                '-f', 'flv', rtmpTarget
+            ];
+        }
+
+        // HD copy: v:1 = the source video untouched, with the FLV tag of its codec (see HD_FLV_TAGS)
+        return [
+            ...head,
+            '-map', '0:v:0?', '-map', '0:a:0?', '-map', '0:v:0?',
             ...codecs,
-            '-f', 'flv', rtmpTarget
+            '-c:v:1', 'copy', '-tag:v:1', hdTag,
+            '-flags:v:0', '+global_header', '-flags:a', '+global_header',
+            '-max_muxing_queue_size', '9999',
+            '-f', 'tee', teeOutputs
         ];
     }
 
@@ -764,9 +927,14 @@ class FFmpegRestreamManager {
         }
 
         // Probe the source on every (re)start: a live source may have frozen or resumed meanwhile
+        // HD slot is taken synchronously (before any await), so two channels starting at the
+        // same moment can never both pass the MAX_HD_ENCODES check.
+        job.hdMode = this.hdModeFor(job, channel);
+        if (job.hdBlocked) this.appendLog(job, `[HD] ${job.hdBlocked}: this run publishes the default rendition only.`);
+
         let probe;
         try {
-            probe = await probeSource(job.sourceUrl);
+            probe = await probeSource(job.sourceUrl, job.hdMode);
         } catch (err) {
             if (err instanceof ValidationError) {
                 // e.g. a redirect or segment host pointing into a private network: never start
@@ -791,8 +959,12 @@ class FFmpegRestreamManager {
         }
         if (job.stopRequested || this.jobs.get(job.channelId) !== job) return;
 
-        const args = this.buildArgs(channel, probe, inputPath);
-        console.log(`[RESTREAMER] Starting FFmpeg restream: ${channel.name} (${job.sourceUrl} -> live/${channel.streamKey}, ${probe.kind}, profile ${RESTREAM_PROFILE})`);
+        const args = this.buildArgs(channel, probe, inputPath, job);
+        const hdNote = job.hdMode === 'encode' ? ` + HD ${RESTREAM_HD_HEIGHT}p encode`
+            : job.hdMode === 'copy' ? (HD_FLV_TAGS[job.hdCodec] ? ` + HD copy (${job.hdCodec})` : ' (no HD: source codec)')
+            : job.hdBlocked ? ' (no HD: limit reached)' : '';
+        console.log(`[RESTREAMER] Starting FFmpeg restream: ${channel.name} (${job.sourceUrl} -> live/${channel.streamKey}, ${probe.kind}, profile ${RESTREAM_PROFILE}${hdNote})`);
+        job.codecScan = job.hdMode === 'copy' ? 'pending' : 'done';   // copy mode: read the source codec from FFmpeg's input report
 
         const proc = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
         const spawnedAt = Date.now();
@@ -929,7 +1101,7 @@ class FFmpegRestreamManager {
             if (job.sourceKind === 'hls-frozen' && !job.reprobing && now - (job.probedAt || now) > RESTREAM_FROZEN_RECHECK_MS) {
                 job.reprobing = true;
                 const proc = job.process;
-                probeSource(job.sourceUrl)
+                probeSource(job.sourceUrl, job.hdMode)
                     .then(result => {
                         if (result.kind === 'hls-live' && job.process === proc && !job.exited) {
                             this.appendLog(job, '[SOURCE] Source is live again: switching from loop to live.');
@@ -940,6 +1112,28 @@ class FFmpegRestreamManager {
                     .finally(() => { job.probedAt = Date.now(); job.reprobing = false; });
             }
         }
+    }
+
+    // Jobs that currently hold an HD encode slot. A job between automatic restarts keeps its
+    // slot (it comes back with HD); a stopped or failed one releases it.
+    hdEncodeJobs(except = null) {
+        return [...this.jobs.values()].filter(j => j !== except && j.hdMode === 'encode'
+            && !j.stopRequested && j.status !== 'stopped' && j.status !== 'failed');
+    }
+
+    // HD rendition for this run of a job: 'encode' | 'copy' | 'off' (sets job.hdBlocked when the
+    // channel wants HD but the MAX_HD_ENCODES limit is reached)
+    hdModeFor(job, channel) {
+        job.hdBlocked = null;
+        if (!RESTREAM_HD_ENABLED || !channel.hdEnabled) return 'off';
+        if (RESTREAM_HD_MODE !== 'encode') return RESTREAM_HD_MODE;
+        const holders = this.hdEncodeJobs(job);
+        if (holders.length >= MAX_HD_ENCODES) {
+            const names = holders.map(j => channelManager.getById(j.channelId)?.name || j.streamKey).join(', ');
+            job.hdBlocked = `HD limit reached (${MAX_HD_ENCODES} of ${MAX_HD_ENCODES}${names ? ': ' + names : ''})`;
+            return 'off';
+        }
+        return 'encode';
     }
 
     // Resume every channel whose persisted desired state is 'running'
@@ -982,6 +1176,8 @@ class FFmpegRestreamManager {
             desiredState: channel?.desiredState || 'stopped',
             sourceKind: job.sourceKind || null,
             profile: RESTREAM_PROFILE,
+            hd: job.hdMode || 'off',            // what this run actually publishes
+            hdBlocked: job.hdBlocked || null,   // why HD is off although the channel wants it
             state: FFmpegRestreamManager.panelState(job)
         };
     }
@@ -1010,6 +1206,7 @@ class FFmpegRestreamManager {
         for (const line of lines) {
             if (!line.trim()) continue;
             this.appendLog(job, line);
+            if (job.codecScan !== 'done') this.scanSourceCodec(job, line);
 
             // Parse live FFmpeg metrics:
             // frame= 1240 fps= 60 q=-1.0 size= 1234kB time=00:00:20.40 bitrate=2450.1kbits/s speed=1.00x
@@ -1035,6 +1232,34 @@ class FFmpegRestreamManager {
                     }
                 }
             }
+        }
+    }
+
+    // HD passthrough: the copied video needs the FLV tag of the source's codec, which is only known
+    // once FFmpeg prints its input report ("Input #0 ... Stream #0:0...: Video: hevc ...").
+    // Started with the assumed codec; on a mismatch FFmpeg is restarted ONCE with the right tag
+    // (H.264 <-> HEVC), or the HD leg is dropped for codecs FLV cannot carry (no restart needed:
+    // the HD slave already failed on its own while the default rendition kept running).
+    scanSourceCodec(job, line) {
+        if (/^Input #0\b/.test(line)) { job.codecScan = 'input'; return; }
+        if (job.codecScan !== 'input') return;
+        if (/^(Output #|Stream mapping:)/.test(line)) { job.codecScan = 'done'; return; }
+        const m = /Stream #0:\d+.*?: Video: (\w+)/.exec(line);
+        if (!m) return;
+        job.codecScan = 'done';
+        const codec = m[1].toLowerCase();
+        const want = HD_FLV_TAGS[codec] ? codec : 'none';
+        if (want === job.hdCodec) return;
+        const running = HD_FLV_TAGS[job.hdCodec];
+        job.hdCodec = want;
+        if (want === 'none') {
+            this.appendLog(job, `[HD] Source video is ${codec}: FLV cannot carry it, no HD rendition for this source.`);
+            return;
+        }
+        this.appendLog(job, `[HD] Source video is ${codec}: restarting once to publish the HD rendition with the matching tag.`);
+        console.log(`[RESTREAMER] Channel ${job.streamKey}: source is ${codec}, restarting once for the HD rendition (was ${running ? 'tag ' + running : 'no HD'})`);
+        if (job.process && !job.exited) {
+            try { job.process.kill('SIGINT'); } catch { /* already gone */ }
         }
     }
 
@@ -1065,7 +1290,38 @@ const restreamManager = new FFmpegRestreamManager();
 const R2_UPLOAD_CONCURRENCY = 4;
 const R2_UPLOAD_RETRIES = 3;          // retries after the first attempt
 const R2_DELETE_BATCH_SIZE = 1000;    // S3 DeleteObjects hard limit
-const PLAYLIST_CACHE_CONTROL = 'no-store, no-cache, must-revalidate, max-age=0';
+
+// Playlist edge cache (seconds). With N > 0 Cloudflare serves each playlist from cache for N s, so R2
+// sees ~1 read per cache location per N s instead of one per viewer reload (~25,000/s at 50k viewers).
+// Requires the Cloudflare cache rule for /hd/*/index.* to RESPECT origin Cache-Control (README §5).
+// 0 restores the old no-store behaviour (instant rollback without a code change).
+const R2_PLAYLIST_MAX_AGE = Math.min(Math.max(parseInt(process.env.R2_PLAYLIST_MAX_AGE ?? '1', 10) || 0, 0), 10);
+const PLAYLIST_CACHE_CONTROL = R2_PLAYLIST_MAX_AGE > 0
+    ? `public, max-age=${R2_PLAYLIST_MAX_AGE}, s-maxage=${R2_PLAYLIST_MAX_AGE}`
+    : 'no-store, no-cache, must-revalidate, max-age=0';
+
+// Playlist copies uploaded per update. Each name costs one Class A PUT per playlist change (every 2 s
+// per stream). The player's R2 mode reads index.html only; add "css" only if something external still
+// loads index.css. Example: R2_PLAYLIST_FILES=html,css restores the old double upload.
+const R2_PLAYLIST_FORMATS = {
+    html: { name: 'index.html', type: 'text/html; charset=utf-8' },
+    css: { name: 'index.css', type: 'text/css; charset=utf-8' }
+};
+const R2_PLAYLIST_FILES = [...new Set(String(process.env.R2_PLAYLIST_FILES || 'html')
+    .split(',').map(s => s.trim().toLowerCase()).filter(Boolean))];
+if (!R2_PLAYLIST_FILES.length || R2_PLAYLIST_FILES.some(f => !R2_PLAYLIST_FORMATS[f])) {
+    fatal(`R2_PLAYLIST_FILES must be a comma list of "html" and/or "css" (got "${process.env.R2_PLAYLIST_FILES}").`);
+}
+
+// Newest playlist versions kept per stream while their segments are still uploading. 5 versions =
+// 10 s of 2 s segments; older versions are superseded anyway.
+const R2_PENDING_PLAYLIST_VERSIONS = 5;
+const R2_PRUNE_INTERVAL_MS = 20000;
+// An HD rendition playlist not updated for this long is removed from R2 (playlists update every 2 s)
+const HD_PLAYLIST_IDLE_MS = 45 * 1000;
+// Pruning (a Class A LIST) runs only while segments are being uploaded, plus long enough afterwards
+// for the last segments to pass MAX_SEGMENT_AGE_SECONDS and be deleted (2 extra prune rounds).
+const R2_PRUNE_IDLE_GRACE_MS = MAX_SEGMENT_AGE_SECONDS * 1000 + 2 * R2_PRUNE_INTERVAL_MS;
 // Long-lived segment caching is only safe because segment names are never reused
 // (mediamtx.yml: -hls_start_number_source epoch).
 const SEGMENT_CACHE_CONTROL = 'public, max-age=3600, immutable';
@@ -1083,9 +1339,18 @@ class R2PipelineManager {
         };
         // R2 keys of segments uploaded successfully (dropped once the local file is deleted)
         this.uploadedSegments = new Set();
-        // Latest not-yet-uploaded playlist per R2 prefix, waiting for its segments
+        // Per R2 prefix: newest not-yet-published playlist versions, oldest first:
+        // [{ version, body, segmentKeys }]. See flushPlaylist.
         this.pendingPlaylists = new Map();
         this.flushingPlaylists = new Set();
+        this.playlistVersion = 0;                 // increases with every playlist read from disk
+        this.publishedVersion = new Map();        // prefix -> version last published (never go back)
+        this.lastPlaylistAt = new Map();          // prefix -> time of the last published playlist
+        this.hdExpiryInterval = null;
+        // Last successful segment upload; pruning sleeps when nothing was uploaded recently.
+        // Starts "now" so leftovers from before a backend restart are still cleaned up.
+        this.lastSegmentUploadAt = Date.now();
+        this.pruning = false;
         // Upload concurrency limiter
         this.activeUploads = 0;
         this.uploadWaiters = [];
@@ -1118,8 +1383,32 @@ class R2PipelineManager {
         this.watcher.on('unlink', (filePath) => this.forgetFile(filePath));
         this.watcher.on('error', (err) => console.error('[R2-WATCHER-ERROR]', err));
 
-        // Start pruning loop for R2 bucket
-        this.pruneInterval = setInterval(() => this.pruneOldSegments(), 20000);
+        // Start pruning loop for R2 bucket (no-op while no stream is uploading)
+        this.pruneInterval = setInterval(() => this.pruneOldSegments(), R2_PRUNE_INTERVAL_MS);
+        // A stopped HD rendition must not leave a stale playlist that players would offer as "HD"
+        this.hdExpiryInterval = setInterval(() => this.expireIdleHdPlaylists(), 15 * 1000);
+    }
+
+    // Deletes the R2 playlist of an HD rendition (hd/{slug}/hd/) that has not been updated for
+    // HD_PLAYLIST_IDLE_MS: the HD leg failed or the restream stopped. Players then see 404 for
+    // hd/index.html and offer only the default quality. (Segments expire through pruneOldSegments.)
+    async expireIdleHdPlaylists() {
+        if (!s3Client) return;
+        const now = Date.now();
+        for (const [prefix, at] of this.lastPlaylistAt) {
+            if (!prefix.endsWith('/hd') || now - at < HD_PLAYLIST_IDLE_MS) continue;
+            this.lastPlaylistAt.delete(prefix);
+            this.publishedVersion.delete(prefix);
+            try {
+                await s3Client.send(new DeleteObjectsCommand({
+                    Bucket: R2_BUCKET_NAME,
+                    Delete: { Objects: R2_PLAYLIST_FILES.map(f => ({ Key: `${prefix}/${R2_PLAYLIST_FORMATS[f].name}` })), Quiet: true }
+                }));
+                console.log(`[R2-PIPELINE] HD rendition idle: removed playlist ${prefix}/`);
+            } catch (err) {
+                console.error(`[R2-PIPELINE-ERROR] Could not remove idle HD playlist ${prefix}/:`, err.message);
+            }
+        }
     }
 
     // Maps /hls/live/{streamKey}/{file} (or /hls/{streamKey}/{file}) to { r2Prefix, fileName }
@@ -1139,10 +1428,16 @@ class R2PipelineManager {
             return null;
         }
 
-        // Map stream key to randomized R2 folder slug
-        const channel = channelManager.getByStreamKey(streamKey);
+        // Map stream key to randomized R2 folder slug. The HD rendition (live/{key}-hd) goes into
+        // the channel's folder as hd/{slug}/hd/ (never under its stream key: that is not public).
+        let channel = channelManager.getByStreamKey(streamKey);
+        let variant = '';
+        if (!channel && streamKey.endsWith(HD_VARIANT_SUFFIX)) {
+            channel = channelManager.getByStreamKey(streamKey.slice(0, -HD_VARIANT_SUFFIX.length));
+            if (channel) variant = '/hd';
+        }
         const folderSlug = channel ? channel.r2_slug : streamKey;
-        return { r2Prefix: `hd/${folderSlug}`, fileName };
+        return { r2Prefix: `hd/${folderSlug}${variant}`, fileName };
     }
 
     segmentKey(r2Prefix, fileName) {
@@ -1186,6 +1481,7 @@ class R2PipelineManager {
             );
             this.uploadedSegments.add(r2Key);
             this.stats.uploadedSegments++;
+            this.lastSegmentUploadAt = Date.now();
             // A playlist may have been waiting for exactly this segment
             this.flushPlaylist(r2Prefix);
         } catch (err) {
@@ -1211,37 +1507,53 @@ class R2PipelineManager {
         // Rewrite manifest internal segment links: .ts -> .js
         const rewritten = content.replace(/([a-zA-Z0-9_\-]+)\.ts/g, '$1.js');
 
-        // Newest playlist wins; older pending versions are superseded
-        this.pendingPlaylists.set(r2Prefix, { body: Buffer.from(rewritten, 'utf8'), segmentKeys });
+        // Keep the newest few versions: when uploads are slower than the segment rate, the newest
+        // version always lists a segment still in flight, but a slightly older one is complete.
+        const versions = this.pendingPlaylists.get(r2Prefix) || [];
+        versions.push({ version: ++this.playlistVersion, body: Buffer.from(rewritten, 'utf8'), segmentKeys });
+        if (versions.length > R2_PENDING_PLAYLIST_VERSIONS) versions.splice(0, versions.length - R2_PENDING_PLAYLIST_VERSIONS);
+        this.pendingPlaylists.set(r2Prefix, versions);
         await this.flushPlaylist(r2Prefix);
     }
 
     /**
-     * Uploads the pending playlist for a prefix once every segment it lists is in R2.
-     * Otherwise it stays pending and is retried after each successful segment upload.
+     * Publishes the NEWEST pending playlist version whose referenced segments are ALL in R2, and drops
+     * that version and every older one. A playlist is therefore never published before its segments,
+     * and slow uploads (round-trip > segment duration) no longer starve the playlist: the old code kept
+     * only the very newest version, which always referenced a segment still uploading.
+     * Versions not yet ready stay pending and are re-checked after each successful segment upload.
      */
     async flushPlaylist(r2Prefix) {
         if (this.flushingPlaylists.has(r2Prefix)) return; // re-checked when the current flush ends
-        const pending = this.pendingPlaylists.get(r2Prefix);
-        if (!pending || !pending.segmentKeys.every(k => this.uploadedSegments.has(k))) return;
+        const versions = this.pendingPlaylists.get(r2Prefix);
+        if (!versions || !versions.length) return;
 
-        this.pendingPlaylists.delete(r2Prefix);
+        let readyIndex = -1;
+        for (let i = versions.length - 1; i >= 0; i--) {
+            if (versions[i].segmentKeys.every(k => this.uploadedSegments.has(k))) { readyIndex = i; break; }
+        }
+        if (readyIndex === -1) return;
+
+        const ready = versions[readyIndex];
+        versions.splice(0, readyIndex + 1);           // the ready version and everything older
+        if (!versions.length) this.pendingPlaylists.delete(r2Prefix);
+        if (ready.version <= (this.publishedVersion.get(r2Prefix) || 0)) return; // never publish backwards
+
         this.flushingPlaylists.add(r2Prefix);
         try {
-            const size = pending.body.length;
-            // 1. Upload as index.html (Direct browser and player friendly)
-            // 2. Upload as index.css (Camouflaged stylesheet delivery)
-            await Promise.all([
-                this.uploadObject(`${r2Prefix}/index.html`, () => pending.body, size, 'text/html; charset=utf-8', PLAYLIST_CACHE_CONTROL),
-                this.uploadObject(`${r2Prefix}/index.css`, () => pending.body, size, 'text/css; charset=utf-8', PLAYLIST_CACHE_CONTROL)
-            ]);
+            const size = ready.body.length;
+            await Promise.all(R2_PLAYLIST_FILES.map(f => this.uploadObject(
+                `${r2Prefix}/${R2_PLAYLIST_FORMATS[f].name}`, () => ready.body, size,
+                R2_PLAYLIST_FORMATS[f].type, PLAYLIST_CACHE_CONTROL)));
+            this.publishedVersion.set(r2Prefix, ready.version);
+            this.lastPlaylistAt.set(r2Prefix, Date.now());
             this.stats.uploadedPlaylists++;
         } catch (err) {
             console.error(`[R2-PLAYLIST-ERROR] Failed to upload playlist for ${r2Prefix}:`, err.message);
         } finally {
             this.flushingPlaylists.delete(r2Prefix);
         }
-        // A newer playlist may have arrived while uploading
+        // Newer versions may have arrived (or become ready) while uploading
         if (this.pendingPlaylists.has(r2Prefix)) await this.flushPlaylist(r2Prefix);
     }
 
@@ -1298,6 +1610,10 @@ class R2PipelineManager {
 
     async pruneOldSegments() {
         if (!s3Client) return;
+        // No segment uploaded recently: nothing new can have expired, skip the Class A LIST.
+        if (Date.now() - this.lastSegmentUploadAt > R2_PRUNE_IDLE_GRACE_MS) return;
+        if (this.pruning) return;                     // a slow LIST must not overlap the next tick
+        this.pruning = true;
 
         try {
             const now = Date.now();
@@ -1347,12 +1663,15 @@ class R2PipelineManager {
             }
         } catch (err) {
             console.error('[R2-PRUNE-ERROR] Error while pruning old segments:', err.message);
+        } finally {
+            this.pruning = false;
         }
     }
 
     stop() {
         if (this.watcher) this.watcher.close();
         if (this.pruneInterval) clearInterval(this.pruneInterval);
+        if (this.hdExpiryInterval) clearInterval(this.hdExpiryInterval);
     }
 }
 
@@ -1411,6 +1730,56 @@ const app = express();
 
 // Nginx is the single trusted hop in front of the backend; req.ip = the client address nginx saw.
 app.set('trust proxy', 1);
+
+// ------------------------------------------------------------------------------
+// Live viewer counter (player heartbeat)
+// The player POSTs /api/ping/{streamKey or r2 slug}?sid={session id} every 15 s while the
+// video plays. Registered BEFORE helmet and the body parsers: no body is read and the reply
+// is an empty 204, so a big match costs one Map write per ping. Unknown channels and
+// malformed ids are ignored (no entry is created); each channel is capped in memory.
+// The count is an estimate: anyone can send pings, it is not an access control.
+// ------------------------------------------------------------------------------
+const VIEWER_TTL_MS = 35 * 1000;              // a viewer counts until 35 s after the last ping
+const VIEWER_SWEEP_MS = 5 * 1000;
+const VIEWER_MAX_PER_CHANNEL = 200000;        // memory bound per channel
+const VIEWER_SID_RE = /^[A-Za-z0-9_-]{8,64}$/;
+const viewerSessions = new Map();             // channel.id -> Map(sid -> lastSeen ms)
+
+function resolveViewerChannel(key) {
+    if (typeof key !== 'string' || !key || key.length > 64) return null;
+    return channelManager.getByStreamKey(key) || channelManager.getByR2Slug(key);
+}
+
+app.post('/api/ping/:channel', (req, res) => {
+    const sid = typeof req.query.sid === 'string' ? req.query.sid : '';
+    const channel = VIEWER_SID_RE.test(sid) ? resolveViewerChannel(req.params.channel) : null;
+    if (channel) {
+        let sessions = viewerSessions.get(channel.id);
+        if (!sessions) {
+            sessions = new Map();
+            viewerSessions.set(channel.id, sessions);
+        }
+        if (sessions.has(sid) || sessions.size < VIEWER_MAX_PER_CHANNEL) sessions.set(sid, Date.now());
+    }
+    res.set('Cache-Control', 'no-store');
+    res.status(204).end();
+});
+
+function countViewers(channelId, cutoff) {
+    const sessions = viewerSessions.get(channelId);
+    if (!sessions) return 0;
+    let n = 0;
+    for (const seen of sessions.values()) if (seen >= cutoff) n++;
+    return n;
+}
+
+setInterval(() => {
+    const cutoff = Date.now() - VIEWER_TTL_MS;
+    for (const [channelId, sessions] of viewerSessions) {
+        for (const [sid, seen] of sessions) if (seen < cutoff) sessions.delete(sid);
+        if (sessions.size === 0) viewerSessions.delete(channelId);
+    }
+}, VIEWER_SWEEP_MS).unref();
 
 // Security Middlewares
 app.use(helmet({
@@ -1480,7 +1849,7 @@ function sameOriginOnly(req, res, next) {
     if (isAdminOriginAllowed(origin)) return next();
     return res.status(403).json({ success: false, error: 'Forbidden: cross-origin admin request' });
 }
-app.use(['/api/admin', '/api/channels', '/api/stats', '/api/config'], adminCors, sameOriginOnly);
+app.use(['/api/admin', '/api/channels', '/api/stats', '/api/viewers', '/api/config'], adminCors, sameOriginOnly);
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -1575,18 +1944,21 @@ app.get('/api/health', (req, res) => {
     });
 });
 
-// System Public Configuration for Dashboard Links
+// Public configuration (unauthenticated: read by the player and the admin dashboard).
+// Never put the origin/ingest IP or bucket name here: SERVER_IP is the VPS address behind Cloudflare,
+// and publishing it lets anyone bypass the CDN. Admins get the RTMP URL from the authenticated
+// /api/channels links (obsRtmpUrl).
 app.get('/api/config', (req, res) => {
     const hostHeader = req.headers.host || '';
     const currentDomain = hostHeader.split(':')[0] || EDGE_DOMAIN;
 
+    // Identical for every caller and rarely changes: browsers may reuse it for 5 minutes
+    res.set('Cache-Control', 'public, max-age=300');
     res.json({
-        serverIp: SERVER_IP,
         edgeDomain: EDGE_DOMAIN || currentDomain,
         r2CustomDomain: R2_CUSTOM_DOMAIN,
-        rtmpPort: 1935,
+        rtmpPort: MEDIAMTX_RTMP_PORT,
         r2Configured: isR2Configured,
-        r2Bucket: R2_BUCKET_NAME,
         enableAuthOnPlaylists: ENABLE_AUTH_ON_PLAYLISTS,
         maxSegmentAgeSeconds: MAX_SEGMENT_AGE_SECONDS
     });
@@ -1634,8 +2006,11 @@ function buildChannelLinks(channel) {
         obsRtmpUrl: `rtmp://${SERVER_IP}:${MEDIAMTX_RTMP_PORT}/live`,
         obsStreamKey: `${channel.streamKey}?user=publish&pass=${channel.publishKey}`,
         edgeCamouflagedUrl: `https://${EDGE_DOMAIN}/live/${channel.streamKey}/index.css`,
-        r2DirectHtmlUrl: `https://${R2_CUSTOM_DOMAIN}/hd/${channel.r2_slug}/index.html`,
-        r2DirectCssUrl: `https://${R2_CUSTOM_DOMAIN}/hd/${channel.r2_slug}/index.css`,
+        r2DirectHtmlUrl: R2_PLAYLIST_FILES.includes('html') ? `https://${R2_CUSTOM_DOMAIN}/hd/${channel.r2_slug}/index.html` : null,
+        // Only advertised when uploaded (R2_PLAYLIST_FILES); a stale index.css would never update
+        r2DirectCssUrl: R2_PLAYLIST_FILES.includes('css') ? `https://${R2_CUSTOM_DOMAIN}/hd/${channel.r2_slug}/index.css` : null,
+        // HD rendition (RESTREAM_HD_MODE encode/copy), only while the HD leg is live
+        r2DirectHdUrl: RESTREAM_HD_ENABLED && channel.hdEnabled && R2_PLAYLIST_FILES.includes('html') ? `https://${R2_CUSTOM_DOMAIN}/hd/${channel.r2_slug}/hd/index.html` : null,
         iframeEmbedUrl: `https://${EDGE_DOMAIN}/player/?channel=${channel.streamKey}`,
         iframeR2EmbedUrl: `https://${EDGE_DOMAIN}/player/?r2=${channel.r2_slug}`
     };
@@ -1653,7 +2028,12 @@ app.get('/api/channels', verifyAdminAuth, (req, res) => {
         };
     });
 
-    res.json({ success: true, channels: enriched });
+    // HD budget for the panel: mode 'encode' is limited, 'copy' is free, 'off' has no HD
+    res.json({
+        success: true,
+        channels: enriched,
+        hd: { mode: RESTREAM_HD_MODE, limit: MAX_HD_ENCODES, active: restreamManager.hdEncodeJobs().length }
+    });
 });
 
 // Create New Channel
@@ -1762,9 +2142,12 @@ app.get('/api/channels/status', verifyAdminAuth, (req, res) => {
 // Update Channel
 app.put('/api/channels/:id', verifyAdminAuth, async (req, res) => {
     const { id } = req.params;
-    const { name, r2_slug } = req.body;
+    const { name, r2_slug, hdEnabled } = req.body;
     let { sourceUrl } = req.body;
 
+    if (hdEnabled !== undefined && typeof hdEnabled !== 'boolean') {
+        return res.status(400).json({ success: false, error: 'hdEnabled must be true or false' });
+    }
     try {
         if (sourceUrl !== undefined) {
             sourceUrl = String(sourceUrl).trim() ? await validateSourceUrl(sourceUrl) : '';
@@ -1773,12 +2156,27 @@ app.put('/api/channels/:id', verifyAdminAuth, async (req, res) => {
         return res.status(err.status || 400).json({ success: false, error: err.message });
     }
 
-    const channel = channelManager.update(id, { name, sourceUrl, r2_slug });
+    const before = channelManager.getById(id);
+    const hdChanged = !!before && hdEnabled !== undefined && !!before.hdEnabled !== hdEnabled;
+    const channel = channelManager.update(id, { name, sourceUrl, r2_slug, hdEnabled });
     if (!channel) {
         return res.status(404).json({ success: false, error: 'Channel not found' });
     }
 
-    res.json({ success: true, channel });
+    // HD is decided when FFmpeg starts: restart a running restream so the switch applies now
+    // (viewers see a short reconnect). Turning HD on can still be refused by MAX_HD_ENCODES.
+    let restarted = false;
+    const job = restreamManager.jobs.get(id);
+    if (hdChanged && job && !job.stopRequested && ['running', 'starting', 'restarting'].includes(job.status)) {
+        try {
+            await restreamManager.restart(id);
+            restarted = true;
+        } catch (err) {
+            return res.status(500).json({ success: false, error: `Saved, but restart failed: ${err.message}`, channel });
+        }
+    }
+
+    res.json({ success: true, channel, restarted, restream: restreamManager.getStatus(id) });
 });
 
 // Delete Channel
@@ -1881,6 +2279,19 @@ app.get('/api/stats', verifyAdminAuth, (req, res) => {
             totalChannels: channelManager.getAll().length
         }
     });
+});
+
+// Current viewers per channel (from the player heartbeat above). Admin only, like /api/stats.
+app.get('/api/viewers', verifyAdminAuth, (req, res) => {
+    const cutoff = Date.now() - VIEWER_TTL_MS;
+    let total = 0;
+    const channels = channelManager.getAll().map(ch => {
+        const viewers = countViewers(ch.id, cutoff);
+        total += viewers;
+        return { id: ch.id, name: ch.name, viewers };
+    });
+    res.set('Cache-Control', 'no-store');
+    res.json({ success: true, total, channels, ttlSeconds: VIEWER_TTL_MS / 1000 });
 });
 
 // ------------------------------------------------------------------------------
@@ -2049,7 +2460,11 @@ app.post('/internal/mediamtx-auth', (req, res) => {
 
     if (action === 'publish') {
         const match = /^live\/([a-z0-9_-]+)$/.exec(String(mtxPath || ''));
-        const channel = match && channelManager.getByStreamKey(match[1]);
+        let channel = match && channelManager.getByStreamKey(match[1]);
+        // HD rendition path live/{key}-hd: same channel, same publish secret
+        if (!channel && match && RESTREAM_HD_ENABLED && match[1].endsWith(HD_VARIANT_SUFFIX)) {
+            channel = channelManager.getByStreamKey(match[1].slice(0, -HD_VARIANT_SUFFIX.length));
+        }
         if (channel && password && safeEqual(password, channel.publishKey)) {
             return res.sendStatus(200);
         }
@@ -2088,7 +2503,11 @@ app.listen(PORT, '0.0.0.0', () => {
     console.log(`[BACKEND] Port: ${PORT} | Mode: ${NODE_ENV}`);
     console.log(`[BACKEND] Server IP: ${SERVER_IP} | Edge Domain: ${EDGE_DOMAIN}`);
     console.log(`[BACKEND] R2 Custom Domain: ${R2_CUSTOM_DOMAIN}`);
-    console.log(`[BACKEND] Restream profile: ${RESTREAM_PROFILE}${RESTREAM_PROFILE === '480p' ? ` (libx264 ${RESTREAM_X264_PRESET}, ${RESTREAM_VIDEO_KBPS}k video, 128k AAC)` : ''}`);
+    console.log(`[BACKEND] R2 playlists: ${R2_PLAYLIST_FILES.map(f => R2_PLAYLIST_FORMATS[f].name).join(' + ')} | Cache-Control: ${PLAYLIST_CACHE_CONTROL}`);
+    console.log(`[BACKEND] Restream profile: ${RESTREAM_PROFILE}${RESTREAM_PROFILE !== 'copy' ? ` (${RESTREAM_TARGET_HEIGHT}p@${RESTREAM_FPS}, libx264 ${RESTREAM_X264_PRESET}, ${RESTREAM_VIDEO_KBPS}k video, bwdif${RESTREAM_ENHANCE ? '+eq' : ''}${RESTREAM_SHARPEN === 'cas' ? '+cas' : ''}, 96k AAC 44.1 kHz)` : ''}${RESTREAM_HD_MODE === 'encode' ? ` + HD ${RESTREAM_HD_HEIGHT}p@${RESTREAM_FPS} encode (libx264 ${RESTREAM_HD_PRESET}, ${RESTREAM_HD_KBPS}k; live/{key}-hd -> hd/{slug}/hd/)` : RESTREAM_HD_MODE === 'copy' ? ' + HD source passthrough (live/{key}-hd -> hd/{slug}/hd/)' : ''}`);
+    if (RESTREAM_HD_MODE === 'encode') {
+        console.log(`[BACKEND] HD per channel (admin panel switch), at most ${MAX_HD_ENCODES} HD encode(s) at once (MAX_HD_ENCODES)`);
+    }
     console.log(`[BACKEND] Admin Dashboard: http://localhost:${PORT}/admin`);
     console.log('==============================================================');
 

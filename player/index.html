@@ -188,6 +188,10 @@
             transition: background .15s ease, color .15s ease, box-shadow .15s ease;
         }
         .ctrl:hover { background: rgba(255, 255, 255, .08); color: var(--lime); }
+        /* Larger touch area without making the bar wider. Vertical only by default: the volume
+           slider sits directly beside the mute button, so a sideways extension would cover it. */
+        .ctrl { position: relative; touch-action: manipulation; }
+        .ctrl::after { content: ''; position: absolute; inset: -4px 0; }
         .ctrl svg { width: 22px; height: 22px; }
         .ctrl.primary { color: var(--lime); }
         .ctrl.primary:hover { box-shadow: var(--glow-lime); }
@@ -261,6 +265,8 @@
         @media (max-width: 520px) {
             .controls { inset-inline: 8px; bottom: 8px; height: 46px; padding: 0 6px; }
             .ctrl { width: 36px; height: 36px; }
+            /* Slider is hidden here: 44x44 targets; the 4px side extension stays inside the 4px group gap */
+            .ctrl::after { inset: -4px; }
             .ctrl svg { width: 20px; height: 20px; }
             .volume-slider-wrap { display: none; }
             .big-play { width: 72px; height: 72px; }
@@ -519,7 +525,8 @@
         }
 
         function updateQualityBadge() {
-            if (video.videoHeight) qualityBadge.textContent = `${video.videoHeight}p`;
+            const q = video.videoHeight ? `${video.videoHeight}p` : '';
+            if (q && qualityBadge.textContent !== q) qualityBadge.textContent = q;
         }
 
         // ------------------------------------------------------------------
@@ -759,8 +766,13 @@
             setStatus('جاري إعادة المحاولة...', { spinner: true });
             setTimeout(reloadStream, 3000);
         });
+        // Background tabs: mobile browsers pause/throttle media, so currentTime freezes and the
+        // watchdog used to reload the stream every 12 s in the background (data + battery drain).
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) lastProgress = { t: video.currentTime, at: Date.now() };
+        });
         setInterval(() => {
-            if (!started || userPaused || !streamManifestUrl) return;
+            if (document.hidden || !started || userPaused || !streamManifestUrl) return;
             if (video.currentTime !== lastProgress.t) {
                 lastProgress = { t: video.currentTime, at: Date.now() };
                 return;
@@ -771,12 +783,17 @@
         // ------------------------------------------------------------------
         // Live-edge state + quality badge
         // ------------------------------------------------------------------
+        let lastNotLive = null;
         setInterval(() => {
+            if (document.hidden) return;
             const edge = liveEdge();
             const behind = edge !== null && Number.isFinite(edge) && (edge - video.currentTime) > 8;
             const notLive = behind || (started && video.paused);
-            liveIndicator.classList.toggle('behind', notLive);
-            liveIndicatorText.innerText = notLive ? 'العودة للمباشر' : 'مباشر';
+            if (notLive !== lastNotLive) {                      // touch the DOM only on change
+                lastNotLive = notLive;
+                liveIndicator.classList.toggle('behind', notLive);
+                liveIndicatorText.textContent = notLive ? 'العودة للمباشر' : 'مباشر';
+            }
             updateQualityBadge();
         }, 1000);
 

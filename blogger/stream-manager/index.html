@@ -1,0 +1,452 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>PX League · Match Controller</title>
+  <script src="https://cdn.tailwindcss.com/3.4.16"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = { theme: { extend: {
+      fontFamily: { sans: ['Cairo', 'Tahoma', 'sans-serif'] },
+      colors: { brand: { DEFAULT: '#32cd32', strong: '#22a822', ink: '#04120a' }, ink: { 950: '#07090c', 900: '#0d1117', 850: '#11161e', 800: '#161c26', 700: '#232b38' } }
+    } } };
+  </script>
+  <style>
+    body { background: radial-gradient(70% 50% at 100% 0%, rgba(50,205,50,.10), transparent 60%), radial-gradient(50% 40% at 0% 100%, rgba(239,68,68,.06), transparent 60%), #07090c; }
+    input:focus, button:focus { outline: none; }
+    button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid #32cd32; outline-offset: 2px; }
+    .scroll-thin { scrollbar-width: thin; scrollbar-color: #232b38 transparent; }
+    input[type=date]::-webkit-calendar-picker-indicator { filter: invert(1) opacity(.6); cursor: pointer; }
+    .switch { position: relative; width: 52px; height: 30px; border-radius: 999px; background: #232b38; transition: background .2s; flex-shrink: 0; }
+    .switch::after { content: ''; position: absolute; top: 3px; inset-inline-start: 3px; width: 24px; height: 24px; border-radius: 50%; background: #e5e7eb; transition: transform .2s; }
+    .switch[aria-checked="true"] { background: #32cd32; }
+    .switch[aria-checked="true"]::after { transform: translateX(-22px); background: #04120a; }
+    @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+    .rise { animation: rise .25s ease both; }
+  </style>
+</head>
+<body class="min-h-screen font-sans text-slate-100 antialiased">
+
+<!-- =============================================================================
+     PX League - Master Match Controller (private dashboard; host it on Vercel / Pages)
+     - Lists ALL matches of a day from the Worker (?raw=1: unfiltered, dashboard origin only)
+     - Per match: show/hide on the site + optional stream (channel / r2_slug)
+     - Saves to Supabase "match_settings"; the Worker merges it into the site's match data.
+     Fill CONFIG. Leave SUPABASE_URL empty to try it in MOCK mode (settings in localStorage).
+     ============================================================================= -->
+<script>
+  const CONFIG = {
+    WORKER_URL: 'https://px-league-proxy.pxleague.workers.dev',   // add this page's origin to DASHBOARD_ORIGINS
+    SUPABASE_URL: '',                                          // e.g. 'https://abcd1234.supabase.co'
+    SUPABASE_ANON_KEY: '',                                     // anon JWT or 'sb_publishable_...'
+    PLAYER_BASE: 'https://live.smarterwho.site/player/',
+    BLOG_MATCH_PAGE: 'https://powerdoflearn.blogspot.com/p/match.html?id=',
+    MATCH_FILTERS: '[]/[]/["8634"]',                           // same feed as the site
+  };
+</script>
+
+<div class="mx-auto max-w-7xl px-4 py-6">
+  <!-- Header -->
+  <header class="mb-6 flex flex-wrap items-center justify-between gap-4">
+    <div class="flex items-center gap-3">
+      <span class="grid h-12 w-12 place-items-center rounded-2xl bg-gradient-to-br from-brand to-brand-strong text-lg font-extrabold text-brand-ink shadow-[0_0_30px_rgba(50,205,50,.35)]">PX</span>
+      <div>
+        <h1 class="text-xl font-extrabold tracking-tight">Master Match Controller</h1>
+        <p class="text-sm text-slate-400">تحكّم في ظهور المباريات والبث على الموقع مباشرة</p>
+      </div>
+    </div>
+    <div class="flex items-center gap-2 text-sm">
+      <span id="mode-badge" class="rounded-full border border-ink-700 bg-ink-900 px-3 py-1"></span>
+      <button id="logout" class="hidden rounded-full border border-ink-700 px-3 py-1 text-slate-300 transition hover:border-red-400 hover:text-red-300">خروج</button>
+    </div>
+  </header>
+
+  <!-- Login -->
+  <section id="login-view" class="mx-auto mt-16 hidden max-w-sm rounded-3xl border border-ink-700 bg-ink-900/80 p-7 shadow-2xl backdrop-blur">
+    <h2 class="mb-1 text-lg font-bold">تسجيل دخول المشرف</h2>
+    <p class="mb-5 text-sm text-slate-400">حساب Supabase المضاف في stream_admins</p>
+    <form id="login-form" class="grid gap-3">
+      <input name="email" type="email" required placeholder="البريد الإلكتروني" dir="ltr" class="rounded-xl border border-ink-700 bg-ink-950 px-4 py-3 transition focus:border-brand">
+      <input name="password" type="password" required placeholder="كلمة المرور" dir="ltr" class="rounded-xl border border-ink-700 bg-ink-950 px-4 py-3 transition focus:border-brand">
+      <p id="login-error" class="hidden text-sm text-red-400"></p>
+      <button class="rounded-xl bg-brand py-3 font-extrabold text-brand-ink transition hover:brightness-110">دخول</button>
+    </form>
+  </section>
+
+  <div id="app-view" class="hidden">
+    <!-- Toolbar -->
+    <div class="mb-5 grid gap-3 rounded-3xl border border-ink-700 bg-ink-900/70 p-4 shadow-xl backdrop-blur lg:grid-cols-[auto_1fr_auto] lg:items-center">
+      <div class="flex items-center gap-2">
+        <button id="prev-day" title="اليوم السابق" class="grid h-11 w-11 place-items-center rounded-xl border border-ink-700 bg-ink-950 transition hover:border-brand"><svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg></button>
+        <input id="date" type="date" class="h-11 rounded-xl border border-ink-700 bg-ink-950 px-3 font-bold transition focus:border-brand" dir="ltr">
+        <button id="next-day" title="اليوم التالي" class="grid h-11 w-11 place-items-center rounded-xl border border-ink-700 bg-ink-950 transition hover:border-brand"><svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="m15 6-6 6 6 6"/></svg></button>
+        <button id="today" class="h-11 rounded-xl border border-ink-700 bg-ink-950 px-4 text-sm font-bold transition hover:border-brand hover:text-brand">اليوم</button>
+      </div>
+      <label class="flex h-11 items-center gap-2 rounded-xl border border-ink-700 bg-ink-950 px-3 transition focus-within:border-brand">
+        <svg class="h-4 w-4 text-slate-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input id="search" type="search" placeholder="ابحث عن فريق أو بطولة..." class="h-full flex-1 bg-transparent text-sm">
+      </label>
+      <div id="filters" class="flex gap-1 rounded-xl border border-ink-700 bg-ink-950 p-1 text-sm">
+        <button data-filter="all" class="rounded-lg px-3 py-1.5 font-bold">الكل <span data-count="all" class="text-slate-500"></span></button>
+        <button data-filter="visible" class="rounded-lg px-3 py-1.5 font-bold">ظاهرة <span data-count="visible" class="text-slate-500"></span></button>
+        <button data-filter="hidden" class="rounded-lg px-3 py-1.5 font-bold">مخفية <span data-count="hidden" class="text-slate-500"></span></button>
+        <button data-filter="stream" class="rounded-lg px-3 py-1.5 font-bold">ببث <span data-count="stream" class="text-slate-500"></span></button>
+      </div>
+    </div>
+
+    <!-- RTL grid: first track = right (panel, 400px), second = left (match list) -->
+    <div class="grid items-start gap-5 lg:grid-cols-[400px_minmax(0,1fr)]">
+      <!-- Match list (left on desktop) -->
+      <section class="min-w-0 lg:order-2">
+        <div id="list" class="grid gap-4"></div>
+      </section>
+
+      <!-- Control panel (right on desktop) -->
+      <aside id="panel" class="rounded-3xl border border-ink-700 bg-ink-900/80 p-5 shadow-2xl backdrop-blur lg:sticky lg:top-6 lg:order-1">
+        <div id="panel-empty" class="grid place-items-center gap-3 py-16 text-center text-slate-500">
+          <span class="grid h-14 w-14 place-items-center rounded-2xl border border-dashed border-ink-700 text-2xl">⚽</span>
+          <p>اختر مباراة من القائمة للتحكم بها</p>
+        </div>
+        <form id="panel-form" class="hidden gap-5" novalidate>
+          <div id="sel-head"></div>
+
+          <div class="flex items-center justify-between gap-4 rounded-2xl border border-ink-700 bg-ink-950 p-4">
+            <div>
+              <p class="font-bold">إظهار على الموقع</p>
+              <p id="vis-hint" class="text-xs text-slate-500"></p>
+            </div>
+            <button type="button" id="vis-switch" role="switch" aria-checked="true" aria-label="إظهار على الموقع" class="switch"></button>
+          </div>
+
+          <div class="grid gap-3 rounded-2xl border border-ink-700 bg-ink-950 p-4">
+            <div class="flex items-center justify-between">
+              <p class="font-bold">البث المباشر <span class="text-xs font-normal text-slate-500">(اختياري)</span></p>
+              <button type="button" id="clear-stream" class="text-xs text-slate-400 transition hover:text-red-400">إزالة البث</button>
+            </div>
+            <label class="grid gap-1 text-xs font-semibold text-slate-400">Channel
+              <input name="channel" placeholder="b4" dir="ltr" autocomplete="off" class="rounded-xl border border-ink-700 bg-ink-900 px-3 py-2.5 font-mono text-sm text-slate-100 transition focus:border-brand">
+            </label>
+            <label class="grid gap-1 text-xs font-semibold text-slate-400">R2 Slug
+              <input name="r2_slug" placeholder="iwkksjrvle3u" dir="ltr" autocomplete="off" class="rounded-xl border border-ink-700 bg-ink-900 px-3 py-2.5 font-mono text-sm text-slate-100 transition focus:border-brand">
+            </label>
+            <div class="rounded-xl border border-dashed border-ink-700 bg-ink-900/60 p-2.5">
+              <p class="mb-0.5 text-[11px] text-slate-500">رابط المشغّل</p>
+              <code id="preview" dir="ltr" class="block break-all text-xs text-brand">—</code>
+            </div>
+          </div>
+
+          <p id="panel-msg" class="hidden text-sm"></p>
+          <div class="flex gap-2">
+            <button id="save" class="flex-1 rounded-xl bg-gradient-to-l from-brand to-brand-strong py-3 font-extrabold text-brand-ink shadow-[0_8px_24px_rgba(50,205,50,.3)] transition hover:brightness-110 disabled:opacity-50">حفظ</button>
+            <button type="button" id="reset" title="إعادة للإعدادات الافتراضية (ظاهرة بدون بث)" class="rounded-xl border border-ink-700 px-4 text-sm text-slate-300 transition hover:border-slate-500">افتراضي</button>
+          </div>
+          <p class="text-center text-[11px] text-slate-500">التغييرات تظهر على الموقع خلال أقل من دقيقة.</p>
+        </form>
+      </aside>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  'use strict';
+  const KEY_RE = /^[A-Za-z0-9_-]{1,64}$/;
+  const TZ = 'Africa/Cairo';
+  const $ = (s, el = document) => el.querySelector(s);
+  const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+  const img = (base, f) => (/^[\w.-]+\.(png|jpe?g|webp|gif|svg)$/i.test(String(f || '')) ? base + encodeURIComponent(f) : '');
+  const norm = (s) => String(s || '').toLowerCase().replace(/[ً-ٟـ]/g, '').replace(/[أإآ]/g, 'ا').replace(/ى/g, 'ي').replace(/ة/g, 'ه');
+  const dayKey = (d) => new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+  const shift = (key, n) => { const d = new Date(key + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+  const timeOf = (ts) => ts ? new Intl.DateTimeFormat('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit' }).format(new Date(ts * 1000)) : '--:--';
+
+  const useSupabase = Boolean(CONFIG.SUPABASE_URL && CONFIG.SUPABASE_ANON_KEY);
+  const sb = useSupabase ? window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY) : null;
+
+  // ===========================================================================
+  // DATA ADAPTER - the only code that talks to a backend. Swap it for your own API.
+  //   getSettings(ids)  -> Map(match_id -> { is_visible, channel, r2_slug })
+  //   upsert(rows)      rows: [{ match_id, is_visible, channel, r2_slug }]
+  //   remove(ids)       back to default (visible, no stream)
+  // ===========================================================================
+  const api = useSupabase ? {
+    async getSettings(ids) {
+      const map = new Map();
+      if (!ids.length) return map;
+      const { data, error } = await sb.from('match_settings').select('match_id, is_visible, channel, r2_slug').in('match_id', ids);
+      if (error) throw error;
+      data.forEach((r) => map.set(String(r.match_id), r));
+      return map;
+    },
+    async upsert(rows) {
+      const { error } = await sb.from('match_settings').upsert(rows, { onConflict: 'match_id' });
+      if (error) throw error;
+    },
+    async remove(ids) {
+      const { error } = await sb.from('match_settings').delete().in('match_id', ids);
+      if (error) throw error;
+    },
+  } : {
+    _all() { try { return JSON.parse(localStorage.getItem('pxl.match_settings.mock') || '{}'); } catch { return {}; } },
+    _save(o) { localStorage.setItem('pxl.match_settings.mock', JSON.stringify(o)); },
+    async getSettings(ids) { const all = this._all(), m = new Map(); ids.forEach((id) => all[id] && m.set(String(id), all[id])); return m; },
+    async upsert(rows) { const all = this._all(); rows.forEach((r) => { all[r.match_id] = r; }); this._save(all); },
+    async remove(ids) { const all = this._all(); ids.forEach((id) => delete all[id]); this._save(all); },
+  };
+
+  // Matches: unfiltered list of the day through the Worker (dashboard origin + ?raw=1)
+  async function fetchMatches(date) {
+    if (!CONFIG.WORKER_URL) throw new Error('أضف WORKER_URL في CONFIG.');
+    const url = `${CONFIG.WORKER_URL}/api/matches/matches_date_get/${date}/${encodeURI(CONFIG.MATCH_FILTERS)}/D/60?raw=1`;
+    let res;
+    try { res = await fetch(url, { headers: { Accept: 'application/json' } }); }
+    catch { throw new Error('تعذّر الاتصال بالـ Worker. أضف رابط هذه الصفحة إلى DASHBOARD_ORIGINS.'); }
+    if (res.status === 403) throw new Error('الـ Worker رفض هذا الموقع: أضف رابطه إلى المتغير DASHBOARD_ORIGINS.');
+    if (!res.ok) throw new Error('الـ Worker أعاد ' + res.status);
+    const json = await res.json();
+    return (Array.isArray(json.data) ? json.data : []).map((r) => {
+      const c = r.championship || {}, h = r.home_team || {}, a = r.away_team || {};
+      const s = Number(r.status);
+      return {
+        id: String(r.match_id), ts: Number(r.match_timestamp) || 0,
+        leagueId: String(r.championship_id || ''), league: c.title || 'أخرى', leagueLogo: img('https://imgs.ysscores.com/championship/64/', c.image),
+        home: h.title || '', away: a.title || '',
+        homeLogo: img('https://imgs.ysscores.com/teams/128/', h.image), awayLogo: img('https://imgs.ysscores.com/teams/128/', a.image),
+        status: s === 0 ? 'upcoming' : s === 4 ? 'finished' : 'live',
+        score: `${r.home_scores ?? 0} - ${r.away_scores ?? 0}`,
+      };
+    }).filter((m) => /^\d+$/.test(m.id));
+  }
+
+  // ---------------------------------------------------------------- state
+  const state = { date: dayKey(new Date()), matches: [], settings: new Map(), filter: 'all', q: '', selected: null, loading: false, error: '' };
+  const setOf = (id) => state.settings.get(id) || { is_visible: true, channel: null, r2_slug: null };
+  const hasStream = (s) => !!(s.channel || s.r2_slug);
+  function playerUrl(channel, slug) {
+    const okC = KEY_RE.test(channel || ''), okS = KEY_RE.test(slug || '');
+    if (!okC && !okS) return '';
+    const u = new URL(CONFIG.PLAYER_BASE);
+    if (okC) u.searchParams.set('channel', channel);
+    if (okS) u.searchParams.set('r2', slug);
+    return u.toString();
+  }
+
+  // ---------------------------------------------------------------- list
+  const crest = (src, name) => src
+    ? `<img src="${esc(src)}" alt="" loading="lazy" referrerpolicy="no-referrer" class="h-8 w-8 shrink-0 object-contain" onerror="this.style.visibility='hidden'">`
+    : `<span class="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-ink-700 text-xs">${esc(String(name).slice(0, 1))}</span>`;
+  function matchRow(m) {
+    const s = setOf(m.id), hidden = !s.is_visible, stream = hasStream(s), sel = state.selected === m.id;
+    const center = m.status === 'upcoming'
+      ? `<span class="font-mono text-sm font-bold text-slate-200" dir="ltr">${timeOf(m.ts)}</span>`
+      : `<span class="font-mono text-sm font-extrabold ${m.status === 'live' ? 'text-red-400' : 'text-slate-400'}" dir="ltr">${esc(m.score)}</span>`;
+    return `
+      <div class="rise group relative flex items-stretch rounded-2xl border transition ${sel ? 'border-brand bg-brand/10 shadow-[0_0_0_1px_rgba(50,205,50,.5)]' : 'border-ink-700 bg-ink-850 hover:border-slate-600'} ${hidden ? 'opacity-50' : ''}">
+        <button type="button" data-select="${esc(m.id)}" class="flex min-w-0 flex-1 items-center gap-3 p-3 text-start">
+          <span class="flex w-5 shrink-0 justify-center">${stream ? '<span class="h-2.5 w-2.5 animate-pulse rounded-full bg-red-500 shadow-[0_0_10px_#ef4444]" title="بث مرتبط"></span>' : ''}</span>
+          <span class="flex min-w-0 flex-1 items-center justify-end gap-2"><span class="truncate text-sm font-bold ${hidden ? 'line-through decoration-slate-400 decoration-2' : ''}">${esc(m.home)}</span>${crest(m.homeLogo, m.home)}</span>
+          <span class="grid w-20 shrink-0 justify-items-center gap-0.5">${center}
+            <span class="text-[10px] ${m.status === 'live' ? 'text-red-400' : 'text-slate-500'}">${m.status === 'live' ? 'مباشر' : m.status === 'finished' ? 'انتهت' : 'لم تبدأ'}</span></span>
+          <span class="flex min-w-0 flex-1 items-center gap-2">${crest(m.awayLogo, m.away)}<span class="truncate text-sm font-bold ${hidden ? 'line-through decoration-slate-400 decoration-2' : ''}">${esc(m.away)}</span></span>
+          <span class="hidden w-14 shrink-0 flex-col items-end gap-1 sm:flex">
+            ${hidden ? '<span class="rounded-full bg-slate-700 px-2 py-0.5 text-[10px] text-slate-300">مخفية</span>' : ''}
+            ${stream ? '<span class="rounded-full bg-red-500/15 px-2 py-0.5 text-[10px] font-bold text-red-300">بث</span>' : ''}
+          </span>
+        </button>
+        <button type="button" data-eye="${esc(m.id)}" title="${hidden ? 'إظهار على الموقع' : 'إخفاء من الموقع'}" class="grid w-11 shrink-0 place-items-center border-s border-ink-700 text-slate-400 transition hover:text-brand">
+          ${hidden ? EYE_OFF : EYE}
+        </button>
+      </div>`;
+  }
+  const EYE = '<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+  const EYE_OFF = '<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 3l18 18M10.6 5.1A10 10 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4.1M6.6 6.6A17 17 0 0 0 2 12s3.5 7 10 7a9.8 9.8 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>';
+
+  function visibleList() {
+    return state.matches.filter((m) => {
+      const s = setOf(m.id);
+      if (state.filter === 'visible' && !s.is_visible) return false;
+      if (state.filter === 'hidden' && s.is_visible) return false;
+      if (state.filter === 'stream' && !hasStream(s)) return false;
+      return !state.q || norm(`${m.home} ${m.away} ${m.league}`).includes(state.q);
+    });
+  }
+  function renderCounts() {
+    const c = { all: state.matches.length, visible: 0, hidden: 0, stream: 0 };
+    state.matches.forEach((m) => { const s = setOf(m.id); s.is_visible ? c.visible++ : c.hidden++; if (hasStream(s)) c.stream++; });
+    document.querySelectorAll('[data-count]').forEach((el) => { el.textContent = state.loading ? '' : c[el.dataset.count]; });
+    document.querySelectorAll('[data-filter]').forEach((b) => {
+      const on = b.dataset.filter === state.filter;
+      b.className = 'rounded-lg px-3 py-1.5 font-bold transition ' + (on ? 'bg-brand text-brand-ink' : 'text-slate-300 hover:bg-ink-800');
+      b.querySelector('span').className = on ? 'text-brand-ink/70' : 'text-slate-500';
+    });
+  }
+  function renderList() {
+    const box = $('#list');
+    renderCounts();
+    if (state.loading) {
+      box.innerHTML = Array.from({ length: 6 }, () => '<div class="h-16 animate-pulse rounded-2xl border border-ink-700 bg-ink-850"></div>').join('');
+      return;
+    }
+    if (state.error) { box.innerHTML = `<div class="rounded-2xl border border-red-500/40 bg-red-500/10 p-6 text-center text-red-300">${esc(state.error)}</div>`; return; }
+    const list = visibleList();
+    if (!list.length) { box.innerHTML = '<div class="rounded-2xl border border-dashed border-ink-700 p-10 text-center text-slate-500">لا توجد مباريات مطابقة.</div>'; return; }
+    const groups = new Map();
+    list.forEach((m) => { if (!groups.has(m.leagueId)) groups.set(m.leagueId, { name: m.league, logo: m.leagueLogo, items: [] }); groups.get(m.leagueId).items.push(m); });
+    box.innerHTML = [...groups.entries()].map(([id, g]) => {
+      const allHidden = g.items.every((m) => !setOf(m.id).is_visible);
+      g.items.sort((a, b) => a.ts - b.ts);
+      return `
+        <section class="grid gap-2">
+          <div class="flex items-center gap-2 px-1">
+            ${g.logo ? `<img src="${esc(g.logo)}" alt="" class="h-5 w-5 object-contain" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}
+            <h3 class="truncate text-sm font-extrabold text-slate-200">${esc(g.name)}</h3>
+            <span class="rounded-full bg-ink-800 px-2 text-[11px] text-slate-400">${g.items.length}</span>
+            <button type="button" data-league="${esc(id)}" data-hide="${allHidden ? 0 : 1}" class="ms-auto rounded-lg border border-ink-700 px-2.5 py-1 text-[11px] text-slate-400 transition hover:border-brand hover:text-brand">${allHidden ? 'إظهار البطولة' : 'إخفاء البطولة'}</button>
+          </div>
+          ${g.items.map(matchRow).join('')}
+        </section>`;
+    }).join('');
+  }
+
+  // ---------------------------------------------------------------- panel
+  const form = $('#panel-form'), msg = $('#panel-msg'), vis = $('#vis-switch');
+  function flash(text, ok) { msg.textContent = text; msg.className = 'text-sm ' + (ok ? 'text-brand' : 'text-red-400'); }
+  function setVis(on) {
+    vis.setAttribute('aria-checked', on ? 'true' : 'false');
+    $('#vis-hint').textContent = on ? 'تظهر في الرئيسية وصفحة المباريات' : 'مخفية من قوائم الموقع';
+  }
+  function updatePreview() { $('#preview').textContent = playerUrl(form.channel.value.trim(), form.r2_slug.value.trim()) || '—'; }
+  function openPanel(id) {
+    const m = state.matches.find((x) => x.id === id);
+    if (!m) return;
+    state.selected = id;
+    const s = setOf(id);
+    $('#panel-empty').classList.add('hidden');
+    form.classList.remove('hidden'); form.classList.add('grid');
+    $('#sel-head').innerHTML = `
+      <div class="rise grid gap-3">
+        <div class="flex items-center justify-between text-xs text-slate-400">
+          <span class="truncate">${esc(m.league)}</span>
+          <span dir="ltr">${m.status === 'upcoming' ? timeOf(m.ts) : esc(m.score)}</span>
+        </div>
+        <div class="grid grid-cols-[1fr_auto_1fr] items-center gap-2 text-center">
+          <div class="grid justify-items-center gap-1.5">${crest(m.homeLogo, m.home).replace('h-8 w-8', 'h-12 w-12')}<b class="text-sm">${esc(m.home)}</b></div>
+          <span class="rounded-full bg-ink-800 px-2 py-1 text-xs text-slate-400">ضد</span>
+          <div class="grid justify-items-center gap-1.5">${crest(m.awayLogo, m.away).replace('h-8 w-8', 'h-12 w-12')}<b class="text-sm">${esc(m.away)}</b></div>
+        </div>
+        <a href="${esc(CONFIG.BLOG_MATCH_PAGE + m.id)}" target="_blank" rel="noopener" class="justify-self-center font-mono text-xs text-slate-500 transition hover:text-brand" dir="ltr">#${esc(m.id)} ↗</a>
+      </div>`;
+    setVis(s.is_visible !== false);
+    form.channel.value = s.channel || '';
+    form.r2_slug.value = s.r2_slug || '';
+    msg.className = 'hidden';
+    updatePreview();
+    renderList();
+    if (window.matchMedia('(max-width: 1023px)').matches) $('#panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  // Write one or many matches; rows that are back to default are deleted.
+  async function persist(rows) {
+    const keep = rows.filter((r) => !r.is_visible || r.channel || r.r2_slug);
+    const drop = rows.filter((r) => r.is_visible && !r.channel && !r.r2_slug).map((r) => Number(r.match_id));
+    if (keep.length) await api.upsert(keep.map((r) => ({ ...r, match_id: Number(r.match_id) })));
+    if (drop.length) await api.remove(drop);
+    rows.forEach((r) => {
+      if (r.is_visible && !r.channel && !r.r2_slug) state.settings.delete(String(r.match_id));
+      else state.settings.set(String(r.match_id), { is_visible: r.is_visible, channel: r.channel, r2_slug: r.r2_slug });
+    });
+  }
+
+  form.addEventListener('input', updatePreview);
+  vis.addEventListener('click', () => setVis(vis.getAttribute('aria-checked') !== 'true'));
+  $('#clear-stream').addEventListener('click', () => { form.channel.value = ''; form.r2_slug.value = ''; updatePreview(); });
+  $('#reset').addEventListener('click', () => { setVis(true); form.channel.value = ''; form.r2_slug.value = ''; updatePreview(); form.requestSubmit(); });
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!state.selected) return;
+    const channel = form.channel.value.trim(), slug = form.r2_slug.value.trim();
+    if (channel && !KEY_RE.test(channel)) return flash('Channel: حروف إنجليزية وأرقام و - _ فقط.', false);
+    if (slug && !KEY_RE.test(slug)) return flash('R2 Slug: حروف إنجليزية وأرقام و - _ فقط.', false);
+    const btn = $('#save');
+    btn.disabled = true;
+    try {
+      await persist([{ match_id: state.selected, is_visible: vis.getAttribute('aria-checked') === 'true', channel: channel || null, r2_slug: slug || null }]);
+      flash('تم الحفظ ✓', true);
+      renderList();
+    } catch (err) { flash('فشل الحفظ: ' + (err.message || err), false); }
+    finally { btn.disabled = false; }
+  });
+
+  // ---------------------------------------------------------------- list events
+  $('#list').addEventListener('click', async (e) => {
+    const sel = e.target.closest('[data-select]');
+    if (sel) { openPanel(sel.dataset.select); return; }
+    const eye = e.target.closest('[data-eye]');
+    const league = e.target.closest('[data-league]');
+    let rows = [];
+    if (eye) {
+      const s = setOf(eye.dataset.eye);
+      rows = [{ match_id: eye.dataset.eye, is_visible: !s.is_visible, channel: s.channel || null, r2_slug: s.r2_slug || null }];
+    } else if (league) {
+      const hide = league.dataset.hide === '1';
+      rows = state.matches.filter((m) => m.leagueId === league.dataset.league)
+        .map((m) => { const s = setOf(m.id); return { match_id: m.id, is_visible: !hide, channel: s.channel || null, r2_slug: s.r2_slug || null }; });
+    } else return;
+    (eye || league).disabled = true;
+    try {
+      await persist(rows);
+      if (state.selected && rows.some((r) => r.match_id === state.selected)) setVis(setOf(state.selected).is_visible !== false);
+      renderList();
+    } catch (err) { alert('فشل الحفظ: ' + (err.message || err)); (eye || league).disabled = false; }
+  });
+  $('#filters').addEventListener('click', (e) => { const b = e.target.closest('[data-filter]'); if (b) { state.filter = b.dataset.filter; renderList(); } });
+  $('#search').addEventListener('input', (e) => { state.q = norm(e.target.value.trim()); renderList(); });
+
+  // ---------------------------------------------------------------- loading
+  async function load() {
+    $('#date').value = state.date;
+    state.loading = true; state.error = ''; renderList();
+    try {
+      state.matches = await fetchMatches(state.date);
+      state.settings = await api.getSettings(state.matches.map((m) => Number(m.id)));
+    } catch (err) {
+      state.matches = []; state.error = err.message || String(err);
+    }
+    state.loading = false;
+    if (state.selected && !state.matches.some((m) => m.id === state.selected)) {
+      state.selected = null; form.classList.add('hidden'); $('#panel-empty').classList.remove('hidden');
+    }
+    renderList();
+  }
+  $('#date').addEventListener('change', (e) => { if (e.target.value) { state.date = e.target.value; load(); } });
+  $('#prev-day').addEventListener('click', () => { state.date = shift(state.date, -1); load(); });
+  $('#next-day').addEventListener('click', () => { state.date = shift(state.date, 1); load(); });
+  $('#today').addEventListener('click', () => { state.date = dayKey(new Date()); load(); });
+
+  // ---------------------------------------------------------------- auth / boot
+  const badge = $('#mode-badge');
+  badge.textContent = useSupabase ? '● Supabase' : 'وضع تجريبي (محلي)';
+  badge.className += useSupabase ? ' text-brand' : ' text-amber-300';
+  function start() { $('#login-view').classList.add('hidden'); $('#app-view').classList.remove('hidden'); load(); }
+  if (!useSupabase) { start(); return; }
+  $('#login-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target), err = $('#login-error');
+    err.classList.add('hidden');
+    const { error } = await sb.auth.signInWithPassword({ email: f.get('email'), password: f.get('password') });
+    if (error) { err.textContent = error.message; err.classList.remove('hidden'); return; }
+    $('#logout').classList.remove('hidden'); start();
+  });
+  $('#logout').addEventListener('click', async () => { await sb.auth.signOut(); location.reload(); });
+  sb.auth.getSession().then(({ data }) => {
+    if (data.session) { $('#logout').classList.remove('hidden'); start(); }
+    else $('#login-view').classList.remove('hidden');
+  });
+})();
+</script>
+</body>
+</html>

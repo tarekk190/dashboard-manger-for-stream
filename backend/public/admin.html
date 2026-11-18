@@ -147,7 +147,7 @@
     <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
 
         <!-- Top Telemetry & Status Cards -->
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
             <div class="bg-dark-900 border border-slate-800 rounded-xl p-4 flex items-center justify-between gap-3">
                 <div>
                     <p class="text-xs font-semibold text-slate-400">إجمالي القنوات</p>
@@ -165,6 +165,16 @@
                 </div>
                 <div class="w-10 h-10 shrink-0 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
                     <i class="fa-solid fa-bolt text-lg"></i>
+                </div>
+            </div>
+
+            <div class="bg-dark-900 border border-slate-800 rounded-xl p-4 flex items-center justify-between gap-3">
+                <div>
+                    <p class="text-xs font-semibold text-slate-400">المشاهدين الحاليين</p>
+                    <p id="stat-live-viewers" class="text-2xl font-bold text-rose-400 mt-1">0</p>
+                </div>
+                <div class="w-10 h-10 shrink-0 rounded-lg bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-400">
+                    <i class="fa-solid fa-users text-lg"></i>
                 </div>
             </div>
 
@@ -207,6 +217,9 @@
                 </button>
             </div>
         </div>
+
+        <!-- Core protection: HD encode budget (filled by renderHdBudget) -->
+        <div id="hd-budget" hidden class="mb-4 px-4 py-2.5 rounded-xl border text-xs font-semibold flex flex-wrap items-center gap-x-3 gap-y-1" role="status"></div>
 
         <!-- Channels Grid / Cards Container -->
         <div id="channels-container" class="space-y-4">
@@ -529,15 +542,97 @@
             }
         }
 
+        // Live viewers (player heartbeat). Counts are kept here so the channel cards, which are
+        // re-rendered every 3 s, show the latest value immediately.
+        let viewerCounts = {};          // channel.id -> current viewers
+        function viewersBadgeText(id) {
+            return Number(viewerCounts[id] || 0).toLocaleString('ar-EG');
+        }
+        // Player link used by "معاينة المشغّل" and the iframe code: the server's ?channel= link plus
+        // &r2={slug}, so the player loads the stream from Cloudflare R2 (it prefers r2 over channel).
+        function playerEmbedUrl(channel) {
+            const base = (channel.links && channel.links.iframeEmbedUrl) || '';
+            if (!base || !channel.r2_slug) return base;
+            try {
+                const u = new URL(base);
+                u.searchParams.set('r2', channel.r2_slug);
+                return u.toString();
+            } catch (e) {
+                return base;
+            }
+        }
+        async function loadViewers() {
+            try {
+                const data = await api('/api/viewers');
+                viewerCounts = {};
+                (data.channels || []).forEach(c => { viewerCounts[c.id] = c.viewers || 0; });
+                document.getElementById('stat-live-viewers').innerText = Number(data.total || 0).toLocaleString('ar-EG');
+                document.querySelectorAll('[data-viewers-for]').forEach(el => {
+                    el.textContent = viewersBadgeText(el.getAttribute('data-viewers-for'));
+                });
+            } catch (err) {
+                console.error('Failed to load viewers:', err);
+            }
+        }
+
         // Render Channels Cards
         async function loadChannels() {
             try {
                 const data = await api('/api/channels');
                 channelsList = data.channels || [];
+                hdBudget = data.hd || null;
+                renderHdBudget();
                 renderChannels(channelsList);
             } catch (err) {
                 showToast(err.message, 'error');
             }
+        }
+
+        // Core protection: each HD (720p) encode costs CPU on top of the 480p one; the backend runs
+        // at most hd.limit of them at once (MAX_HD_ENCODES). Shown only in encode mode.
+        let hdBudget = null;
+        function renderHdBudget() {
+            const box = document.getElementById('hd-budget');
+            if (!box) return;
+            if (!hdBudget || hdBudget.mode !== 'encode') { box.hidden = true; return; }
+            const full = hdBudget.active >= hdBudget.limit;
+            box.hidden = false;
+            box.className = 'mb-4 px-4 py-2.5 rounded-xl border text-xs font-semibold flex flex-wrap items-center gap-x-3 gap-y-1 ' +
+                (full ? 'bg-amber-500/10 border-amber-500/30 text-amber-300' : 'bg-dark-900 border-slate-800 text-slate-300');
+            box.innerHTML = `<span>⚠️ الحد الأقصى ${hdBudget.limit} بث HD في نفس الوقت (حماية المعالج 4 vCPU)</span>` +
+                `<span class="font-mono ltr px-2 py-0.5 rounded-full bg-dark-950 border border-slate-700">HD ${hdBudget.active} / ${hdBudget.limit}</span>` +
+                `<span class="text-[11px] font-normal text-slate-400">القنوات الأخرى تُبث 480p فقط. فعّل HD للمباريات المهمة فقط.</span>`;
+        }
+
+        function hdControl(channel) {
+            if (!hdBudget || hdBudget.mode === 'off') return '';
+            const r = channel.restream || {};
+            const on = !!channel.hdEnabled;
+            let note = '';
+            if (on && r.hdBlocked) note = '<span class="text-amber-300">الحد ممتلئ: تُبث 480p فقط حتى يتوقف بث HD آخر ثم أعد التشغيل</span>';
+            else if (on && r.hd && r.hd !== 'off') note = '<span class="text-emerald-400">HD 720p يعمل</span>';
+            else if (on) note = '<span class="text-slate-400">يبدأ HD مع تشغيل البث</span>';
+            else note = '<span class="text-slate-500">480p فقط (توفير المعالج)</span>';
+            return `
+                <label class="flex flex-wrap items-center gap-2 text-[11px] text-slate-300 cursor-pointer select-none">
+                    <input type="checkbox" ${on ? 'checked' : ''} onchange="setChannelHd('${channel.id}', this.checked, this)" class="w-4 h-4 accent-emerald-500">
+                    <span class="font-semibold">جودة HD 720p</span>
+                    ${note}
+                </label>`;
+        }
+
+        async function setChannelHd(channelId, enabled, input) {
+            if (input) input.disabled = true;
+            try {
+                const data = await api(`/api/channels/${channelId}`, { method: 'PUT', body: JSON.stringify({ hdEnabled: enabled }) });
+                const blocked = data.restream && data.restream.hdBlocked;
+                showToast(blocked ? 'تم الحفظ، لكن حد HD ممتلئ: القناة تُبث 480p فقط'
+                    : enabled ? (data.restarted ? 'تم تفعيل HD (أعيد تشغيل البث)' : 'تم تفعيل HD')
+                    : (data.restarted ? 'تم إيقاف HD (أعيد تشغيل البث)' : 'تم إيقاف HD'), blocked ? 'error' : 'success');
+            } catch (err) {
+                showToast(err.message, 'error');
+            }
+            loadChannels();
         }
 
         function renderChannels(channels) {
@@ -564,6 +659,7 @@
                 const state = channelState(channel.restream);
                 const badge = STATE_BADGES[state];
                 const isOnline = state === 'ONLINE';
+                const embedUrl = escapeHtml(playerEmbedUrl(channel));
 
                 return `
                 <div class="bg-dark-900 border border-slate-800 hover:border-slate-700/80 rounded-2xl p-5 transition-all shadow-xl space-y-5">
@@ -580,6 +676,9 @@
                                     <span class="px-2 py-0.5 rounded-full ${badge.cls} text-[10px] font-bold border inline-flex items-center gap-1.5">
                                         <span class="w-1.5 h-1.5 rounded-full ${badge.dot}"></span>${badge.label}
                                     </span>
+                                    <span class="px-2 py-0.5 rounded-full bg-rose-500/10 text-rose-300 text-[10px] font-bold border border-rose-500/20 inline-flex items-center gap-1.5" title="المشاهدين الحاليين">
+                                        <i class="fa-solid fa-users text-[9px]"></i><span data-viewers-for="${escapeHtml(channel.id)}">${viewersBadgeText(channel.id)}</span>
+                                    </span>
                                 </div>
                                 <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400 mt-0.5">
                                     <span>مفتاح البث: <strong class="text-brand-400 font-mono ltr">${escapeHtml(channel.streamKey)}</strong></span>
@@ -591,7 +690,7 @@
 
                         <!-- Action Buttons -->
                         <div class="flex items-center gap-2 shrink-0">
-                            <a href="${channel.links.iframeEmbedUrl}" target="_blank" rel="noopener" class="px-3 py-1.5 bg-dark-800 hover:bg-dark-850 border border-slate-700 text-slate-200 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-colors">
+                            <a href="${embedUrl}" target="_blank" rel="noopener" class="px-3 py-1.5 bg-dark-800 hover:bg-dark-850 border border-slate-700 text-slate-200 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-colors">
                                 <i class="fa-solid fa-play text-[10px] text-brand-400"></i>
                                 <span>معاينة المشغّل</span>
                             </a>
@@ -647,6 +746,7 @@
                                 </button>
                             </div>
                         </div>
+                        ${hdControl(channel)}
                     </div>
 
                     <!-- One-Click Output Links Generator -->
@@ -714,12 +814,12 @@
                                     <i class="fa-solid fa-code text-cyan-400"></i>
                                     <span>كود تضمين المشغّل (iframe)</span>
                                 </span>
-                                <button onclick="copyToClipboard('&lt;iframe src=&quot;${channel.links.iframeEmbedUrl}&quot; width=&quot;100%&quot; height=&quot;100%&quot; frameborder=&quot;0&quot; allowfullscreen allow=&quot;autoplay; encrypted-media&quot;&gt;&lt;/iframe&gt;', 'كود التضمين')" class="text-xs text-brand-400 hover:text-brand-300 inline-flex items-center gap-1">
+                                <button onclick="copyToClipboard('&lt;iframe src=&quot;${embedUrl}&quot; width=&quot;100%&quot; height=&quot;100%&quot; frameborder=&quot;0&quot; allowfullscreen allow=&quot;autoplay; encrypted-media&quot;&gt;&lt;/iframe&gt;', 'كود التضمين')" class="text-xs text-brand-400 hover:text-brand-300 inline-flex items-center gap-1">
                                     <i class="fa-regular fa-copy"></i> <span>نسخ كود iframe</span>
                                 </button>
                             </div>
                             <div dir="ltr" class="font-mono text-xs bg-dark-950 p-2 rounded-lg text-slate-300 overflow-x-auto select-all text-left">
-                                &lt;iframe src="${channel.links.iframeEmbedUrl}" width="100%" height="100%" frameborder="0" allowfullscreen allow="autoplay; encrypted-media"&gt;&lt;/iframe&gt;
+                                &lt;iframe src="${embedUrl}" width="100%" height="100%" frameborder="0" allowfullscreen allow="autoplay; encrypted-media"&gt;&lt;/iframe&gt;
                             </div>
                         </div>
 
@@ -894,6 +994,10 @@
             await loadConfig();
             await loadChannels();
             await loadStats();
+            await loadViewers();
+
+            // Live viewers: every 10 seconds (the count itself moves on a 15 s heartbeat)
+            setInterval(loadViewers, 10000);
 
             // Background Telemetry Polling (every 3 seconds)
             setInterval(() => {

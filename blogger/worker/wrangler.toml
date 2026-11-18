@@ -1,0 +1,20 @@
+# PX League API proxy. Mirrors the settings of the live Worker (version b05d6ae6, 2026-11-16)
+# so `npx wrangler deploy` does not drop its existing bindings.
+name = "px-league-proxy"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+workers_dev = true
+
+[vars]
+ALLOWED_ORIGINS = "https://powerdoflearn.blogspot.com"
+# DASHBOARD_ORIGINS = "https://your-dashboard.vercel.app"   # origins allowed to use ?raw=1
+
+# Rate-limit binding that exists on the live Worker (not used by src/index.js yet)
+[[ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "7001"
+simple = { limit = 120, period = 60 }
+
+# Secrets (set once, kept across deploys):
+#   npx wrangler secret put SUPABASE_URL
+#   npx wrangler secret put SUPABASE_ANON_KEY
