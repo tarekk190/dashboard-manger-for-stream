@@ -46,6 +46,14 @@
     PLAYER_BASE: 'https://live.smarterwho.site/player/',
     BLOG_MATCH_PAGE: 'https://powerdoflearn.blogspot.com/p/match.html?id=',
     MATCH_FILTERS: '[]/[]/["8634"]',                           // same feed as the site
+    // Fixed channels: picking one in the form fills its R2 slug (the slug stays editable).
+    // A slug changes only if the channel is recreated in the admin panel: update it here then.
+    CHANNELS: {
+      b1: '8axxrfz9ygz1',
+      b2: 'l19glp5gmva0',
+      b3: '1ikcxk76du8w',
+      b4: 'iwkksjrvle3u',
+    },
   };
 </script>
 
@@ -128,7 +136,7 @@
               <button type="button" id="clear-stream" class="text-xs text-slate-400 transition hover:text-red-400">إزالة البث</button>
             </div>
             <label class="grid gap-1 text-xs font-semibold text-slate-400">Channel
-              <input name="channel" placeholder="b4" dir="ltr" autocomplete="off" class="rounded-xl border border-ink-700 bg-ink-900 px-3 py-2.5 font-mono text-sm text-slate-100 transition focus:border-brand">
+              <select name="channel" dir="ltr" class="rounded-xl border border-ink-700 bg-ink-900 px-3 py-2.5 font-mono text-sm text-slate-100 transition focus:border-brand"></select>
             </label>
             <label class="grid gap-1 text-xs font-semibold text-slate-400">R2 Slug
               <input name="r2_slug" placeholder="iwkksjrvle3u" dir="ltr" autocomplete="off" class="rounded-xl border border-ink-700 bg-ink-900 px-3 py-2.5 font-mono text-sm text-slate-100 transition focus:border-brand">
@@ -341,7 +349,7 @@
         <a href="${esc(CONFIG.BLOG_MATCH_PAGE + m.id)}" target="_blank" rel="noopener" class="justify-self-center font-mono text-xs text-slate-500 transition hover:text-brand" dir="ltr">#${esc(m.id)} ↗</a>
       </div>`;
     setVis(s.is_visible !== false);
-    form.channel.value = s.channel || '';
+    setChannel(s.channel);
     form.r2_slug.value = s.r2_slug || '';
     msg.className = 'hidden';
     updatePreview();
@@ -360,6 +368,26 @@
       else state.settings.set(String(r.match_id), { is_visible: r.is_visible, channel: r.channel, r2_slug: r.r2_slug });
     });
   }
+
+  // Channel dropdown: "none" + the fixed CONFIG.CHANNELS. A saved channel that is not in the
+  // list (older/manual entry) gets its own option, so opening a match never loses it.
+  const channelSelect = form.elements.namedItem('channel');
+  function addChannelOption(value, label) {
+    const o = document.createElement('option');
+    o.value = value; o.textContent = label;
+    channelSelect.appendChild(o);
+  }
+  addChannelOption('', '— بدون بث —');
+  Object.entries(CONFIG.CHANNELS || {}).forEach(([ch, slug]) => addChannelOption(ch, `${ch}  ·  ${slug}`));
+  function setChannel(ch) {
+    ch = ch || '';
+    if (ch && ![...channelSelect.options].some((o) => o.value === ch)) addChannelOption(ch, `${ch}  (غير موجودة في القائمة)`);
+    channelSelect.value = ch;
+  }
+  channelSelect.addEventListener('change', () => {
+    form.r2_slug.value = (CONFIG.CHANNELS || {})[channelSelect.value] || '';
+    updatePreview();
+  });
 
   form.addEventListener('input', updatePreview);
   vis.addEventListener('click', () => setVis(vis.getAttribute('aria-checked') !== 'true'));
