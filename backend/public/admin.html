@@ -50,6 +50,36 @@
         ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
         ::-webkit-scrollbar-thumb:hover { background: #475569; }
         .pulse-live { animation: pulseGlow 1.5s infinite; }
+
+        /* Channel source URL: locked (disabled) vs edit mode must never look alike.
+           Locked: dimmed, dark, dashed, lock icon. Edit: bright text, solid brand-400 border + glow
+           (same sky blue as the "تعديل" icon), lighter background. */
+        .src-url {
+            width: 100%; padding: .375rem .75rem .375rem 2rem; border-radius: .5rem;
+            font: 500 .75rem/1.25rem ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            text-align: left; outline: none;
+            color: #f8fafc; -webkit-text-fill-color: #f8fafc;
+            background: #1e293b; border: 1px solid #38bdf8;
+            box-shadow: 0 0 0 1px rgba(56, 189, 248, .25), 0 0 14px rgba(56, 189, 248, .25);
+            transition: background-color .15s, border-color .15s, box-shadow .15s, opacity .15s, color .15s;
+        }
+        .src-url::placeholder { color: #64748b; -webkit-text-fill-color: #64748b; }
+        .src-url:focus {
+            border-color: #7dd3fc; background: #233247;
+            box-shadow: 0 0 0 3px rgba(56, 189, 248, .35), 0 0 18px rgba(56, 189, 248, .4);
+        }
+        .src-url:disabled {
+            opacity: .55; cursor: not-allowed;
+            color: #94a3b8; -webkit-text-fill-color: #94a3b8;
+            background: #0b1120; border: 1px dashed #475569; box-shadow: none;
+        }
+        .src-url:disabled::placeholder { color: #475569; -webkit-text-fill-color: #475569; }
+        /* Icon sits after the input in the DOM so the state can switch it: link (edit) / lock (locked) */
+        .src-url-icon { position: absolute; inset: 0 auto 0 0; padding-left: .75rem; display: flex; align-items: center; font-size: .75rem; pointer-events: none; }
+        .src-url-icon .icon-edit { color: #38bdf8; }
+        .src-url-icon .icon-lock { display: none; color: #64748b; }
+        .src-url:disabled + .src-url-icon .icon-edit { display: none; }
+        .src-url:disabled + .src-url-icon .icon-lock { display: inline; }
         @keyframes pulseGlow {
             0%, 100% { opacity: 1; transform: scale(1); }
             50% { opacity: 0.5; transform: scale(0.92); }
@@ -720,11 +750,12 @@
                         <div class="flex flex-col sm:flex-row items-center gap-2">
                             <!-- URL input is LTR: icon on the physical left -->
                             <div class="relative flex-1 w-full" dir="ltr">
-                                <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-500 text-xs"><i class="fa-solid fa-link"></i></span>
-                                <!-- Read-only until "تعديل": polling can never steal its focus (see renderChannels) -->
+                                <!-- Read-only until "تعديل": polling can never steal its focus (see renderChannels).
+                                     Locked/edit looks: .src-url in the <style> block; the icon follows the input. -->
                                 <input id="source-url-${channel.id}" type="url" dir="ltr" disabled value="${escapeHtml(channel.sourceUrl || '')}" placeholder="https://.../stream.m3u8  ·  .ts  ·  rtmp://..." aria-label="رابط المصدر الخارجي"
                                     onkeydown="if (event.key === 'Enter') { event.preventDefault(); saveSourceUrl('${channel.id}'); } else if (event.key === 'Escape') { cancelEditSourceUrl('${channel.id}'); }"
-                                    class="w-full bg-dark-900 border border-slate-700/80 rounded-lg pl-8 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-brand-500 font-mono text-left disabled:opacity-70 disabled:cursor-not-allowed">
+                                    class="src-url">
+                                <span class="src-url-icon" aria-hidden="true"><i class="fa-solid fa-link icon-edit"></i><i class="fa-solid fa-lock icon-lock" title="مقفل"></i></span>
                             </div>
                             <div class="flex items-center gap-2 w-full sm:w-auto justify-end">
                                 <button id="url-edit-${channel.id}" onclick="editSourceUrl('${channel.id}')" class="px-3 py-1.5 bg-dark-800 hover:bg-dark-850 border border-slate-700 text-slate-300 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5" title="تعديل رابط المصدر">
