@@ -69,25 +69,31 @@
     </div>
     <div class="flex items-center gap-2 text-sm">
       <span id="mode-badge" class="rounded-full border border-ink-700 bg-ink-900 px-3 py-1"></span>
-      <button id="logout" class="hidden rounded-full border border-ink-700 px-3 py-1 text-slate-300 transition hover:border-red-400 hover:text-red-300">خروج</button>
+      <span id="user-email" class="hidden max-w-[14rem] truncate text-slate-400" dir="ltr"></span>
     </div>
   </header>
 
   <!-- Login -->
-  <section id="login-view" class="mx-auto mt-16 hidden max-w-sm rounded-3xl border border-ink-700 bg-ink-900/80 p-7 shadow-2xl backdrop-blur">
+  <!-- Boot / config error (shown when mock mode is used on a non-local host) -->
+  <section id="boot-error" class="mx-auto mt-16 hidden max-w-md rounded-3xl border border-red-500/40 bg-red-500/10 p-7 text-center text-red-200"></section>
+
+  <!-- Login overlay: centered, covers the page until a valid admin session exists -->
+  <div id="login-overlay" class="fixed inset-0 z-50 hidden place-items-center bg-ink-950/90 p-4 backdrop-blur">
+  <section id="login-view" class="w-full max-w-sm rounded-3xl border border-ink-700 bg-ink-900 p-7 shadow-2xl">
     <h2 class="mb-1 text-lg font-bold">تسجيل دخول المشرف</h2>
     <p class="mb-5 text-sm text-slate-400">حساب Supabase المضاف في stream_admins</p>
     <form id="login-form" class="grid gap-3">
       <input name="email" type="email" required placeholder="البريد الإلكتروني" dir="ltr" class="rounded-xl border border-ink-700 bg-ink-950 px-4 py-3 transition focus:border-brand">
       <input name="password" type="password" required placeholder="كلمة المرور" dir="ltr" class="rounded-xl border border-ink-700 bg-ink-950 px-4 py-3 transition focus:border-brand">
       <p id="login-error" class="hidden text-sm text-red-400"></p>
-      <button class="rounded-xl bg-brand py-3 font-extrabold text-brand-ink transition hover:brightness-110">دخول</button>
+      <button id="login-btn" class="rounded-xl bg-brand py-3 font-extrabold text-brand-ink transition hover:brightness-110 disabled:opacity-50">دخول</button>
     </form>
   </section>
+  </div>
 
   <div id="app-view" class="hidden">
     <!-- Toolbar -->
-    <div class="mb-5 grid gap-3 rounded-3xl border border-ink-700 bg-ink-900/70 p-4 shadow-xl backdrop-blur lg:grid-cols-[auto_1fr_auto] lg:items-center">
+    <div class="mb-5 grid gap-3 rounded-3xl border border-ink-700 bg-ink-900/70 p-4 shadow-xl backdrop-blur lg:grid-cols-[auto_1fr_auto_auto_auto] lg:items-center">
       <div class="flex items-center gap-2">
         <button id="prev-day" title="اليوم السابق" class="grid h-11 w-11 place-items-center rounded-xl border border-ink-700 bg-ink-950 transition hover:border-brand"><svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg></button>
         <input id="date" type="date" class="h-11 rounded-xl border border-ink-700 bg-ink-950 px-3 font-bold transition focus:border-brand" dir="ltr">
@@ -104,6 +110,11 @@
         <button data-filter="hidden" class="rounded-lg px-3 py-1.5 font-bold">مخفية <span data-count="hidden" class="text-slate-500"></span></button>
         <button data-filter="stream" class="rounded-lg px-3 py-1.5 font-bold">ببث <span data-count="stream" class="text-slate-500"></span></button>
       </div>
+      <button id="hide-all" type="button" title="إخفاء كل مباريات هذا اليوم من الموقع" class="flex h-11 items-center justify-center gap-2 rounded-xl border border-red-500/40 bg-red-500/10 px-4 text-sm font-bold text-red-300 transition hover:border-red-400 hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-40">
+        <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 3l18 18M10.6 5.1A10 10 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4.1M6.6 6.6A17 17 0 0 0 2 12s3.5 7 10 7a9.8 9.8 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>
+        <span>إخفاء الكل</span>
+      </button>
+      <button id="logout" type="button" class="hidden h-11 items-center justify-center rounded-xl border border-ink-700 bg-ink-950 px-4 text-sm font-bold text-slate-300 transition hover:border-red-400 hover:text-red-300">تسجيل خروج</button>
     </div>
 
     <!-- RTL grid: first track = right (panel, 400px), second = left (match list) -->
@@ -231,7 +242,7 @@
   }
 
   // ---------------------------------------------------------------- state
-  const state = { date: dayKey(new Date()), matches: [], settings: new Map(), filter: 'all', q: '', selected: null, loading: false, error: '' };
+  const state = { date: dayKey(new Date()), matches: [], settings: new Map(), filter: 'all', q: '', selected: null, loading: false, busy: false, error: '' };
   const setOf = (id) => state.settings.get(id) || { is_visible: true, channel: null, r2_slug: null };
   const hasStream = (s) => !!(s.channel || s.r2_slug);
   function playerUrl(channel, slug) {
@@ -286,6 +297,7 @@
     const c = { all: state.matches.length, visible: 0, hidden: 0, stream: 0 };
     state.matches.forEach((m) => { const s = setOf(m.id); s.is_visible ? c.visible++ : c.hidden++; if (hasStream(s)) c.stream++; });
     document.querySelectorAll('[data-count]').forEach((el) => { el.textContent = state.loading ? '' : c[el.dataset.count]; });
+    $('#hide-all').disabled = state.loading || state.busy || !c.visible;   // nothing left to hide
     document.querySelectorAll('[data-filter]').forEach((b) => {
       const on = b.dataset.filter === state.filter;
       b.className = 'rounded-lg px-3 py-1.5 font-bold transition ' + (on ? 'bg-brand text-brand-ink' : 'text-slate-300 hover:bg-ink-800');
@@ -431,6 +443,22 @@
       renderList();
     } catch (err) { alert('فشل الحفظ: ' + (err.message || err)); (eye || league).disabled = false; }
   });
+  // Hide All: every loaded match of the selected date (ignores search / filter), one upsert.
+  // Existing streams are kept; only is_visible changes.
+  $('#hide-all').addEventListener('click', async () => {
+    const targets = state.matches.filter((m) => setOf(m.id).is_visible);
+    if (!targets.length || state.busy) return;
+    const where = useSupabase ? 'من الموقع' : 'في الوضع التجريبي المحلي فقط (لن يتأثر الموقع)';
+    if (!confirm(`إخفاء ${targets.length} مباراة ليوم ${state.date} ${where}؟`)) return;
+    state.busy = true; renderCounts();
+    const btn = $('#hide-all'), label = btn.querySelector('span'), old = label.textContent;
+    label.textContent = 'جارٍ الإخفاء...';
+    try {
+      await persist(targets.map((m) => { const s = setOf(m.id); return { match_id: m.id, is_visible: false, channel: s.channel || null, r2_slug: s.r2_slug || null }; }));
+      if (state.selected) setVis(setOf(state.selected).is_visible !== false);
+    } catch (err) { alert('فشل الإخفاء: ' + (err.message || err)); }
+    finally { state.busy = false; label.textContent = old; renderList(); }
+  });
   $('#filters').addEventListener('click', (e) => { const b = e.target.closest('[data-filter]'); if (b) { state.filter = b.dataset.filter; renderList(); } });
   $('#search').addEventListener('input', (e) => { state.q = norm(e.target.value.trim()); renderList(); });
 
@@ -459,21 +487,67 @@
   const badge = $('#mode-badge');
   badge.textContent = useSupabase ? '● Supabase' : 'وضع تجريبي (محلي)';
   badge.className += useSupabase ? ' text-brand' : ' text-amber-300';
-  function start() { $('#login-view').classList.add('hidden'); $('#app-view').classList.remove('hidden'); load(); }
-  if (!useSupabase) { start(); return; }
+  // The dashboard (#app-view) stays hidden until a session of a stream admin exists.
+  // Real protection is RLS (schema.sql): only stream_admins may write match_settings;
+  // this screen keeps the UI itself away from anyone else.
+  let started = false;
+  function showApp(session) {
+    $('#login-overlay').classList.add('hidden'); $('#login-overlay').classList.remove('grid');
+    $('#app-view').classList.remove('hidden');
+    if (session) {
+      $('#logout').classList.remove('hidden'); $('#logout').classList.add('flex');
+      $('#user-email').textContent = (session.user && session.user.email) || '';
+      $('#user-email').classList.remove('hidden');
+    }
+    if (!started) { started = true; load(); }
+  }
+  function showLogin(message) {
+    started = false;
+    state.matches = []; state.settings = new Map(); state.selected = null;
+    $('#app-view').classList.add('hidden');
+    $('#logout').classList.add('hidden'); $('#logout').classList.remove('flex');
+    $('#user-email').classList.add('hidden');
+    $('#login-overlay').classList.remove('hidden'); $('#login-overlay').classList.add('grid');
+    const err = $('#login-error');
+    if (message) { err.textContent = message; err.classList.remove('hidden'); } else err.classList.add('hidden');
+  }
+
+  if (!useSupabase) {
+    // Mock mode keeps settings in localStorage and has no login: allow it only locally.
+    if (/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname) || location.protocol === 'file:') { showApp(null); return; }
+    const box = $('#boot-error');
+    box.textContent = 'لوحة التحكم غير مهيأة: أضف SUPABASE_URL و SUPABASE_ANON_KEY في CONFIG قبل نشرها على الإنترنت.';
+    box.classList.remove('hidden');
+    return;
+  }
+
+  // Signed in, but is this account in stream_admins? (RLS would reject its writes anyway.)
+  async function isAdmin() {
+    const { data, error } = await sb.rpc('is_stream_admin');
+    return !error && data === true;
+  }
+  async function enter(session) {
+    if (!session) return showLogin();
+    if (!(await isAdmin())) { await sb.auth.signOut(); return showLogin('هذا الحساب ليس مشرفًا (غير موجود في stream_admins).'); }
+    showApp(session);
+  }
+
   $('#login-form').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const f = new FormData(e.target), err = $('#login-error');
-    err.classList.add('hidden');
-    const { error } = await sb.auth.signInWithPassword({ email: f.get('email'), password: f.get('password') });
-    if (error) { err.textContent = error.message; err.classList.remove('hidden'); return; }
-    $('#logout').classList.remove('hidden'); start();
+    const f = new FormData(e.target), err = $('#login-error'), btn = $('#login-btn');
+    err.classList.add('hidden'); btn.disabled = true;
+    try {
+      const { data, error } = await sb.auth.signInWithPassword({ email: String(f.get('email')).trim(), password: f.get('password') });
+      if (error) { err.textContent = error.message === 'Invalid login credentials' ? 'البريد أو كلمة المرور غير صحيحة.' : error.message; err.classList.remove('hidden'); return; }
+      e.target.reset();
+      await enter(data.session);
+    } catch (ex) { err.textContent = 'تعذّر الاتصال بـ Supabase.'; err.classList.remove('hidden'); }
+    finally { btn.disabled = false; }
   });
-  $('#logout').addEventListener('click', async () => { await sb.auth.signOut(); location.reload(); });
-  sb.auth.getSession().then(({ data }) => {
-    if (data.session) { $('#logout').classList.remove('hidden'); start(); }
-    else $('#login-view').classList.remove('hidden');
-  });
+  $('#logout').addEventListener('click', async () => { try { await sb.auth.signOut(); } finally { showLogin(); } });
+  // Session expired / signed out in another tab -> back to the login screen
+  sb.auth.onAuthStateChange((event, session) => { if (event === 'SIGNED_OUT' || (!session && started)) showLogin(); });
+  sb.auth.getSession().then(({ data }) => enter(data.session)).catch(() => showLogin());
 })();
 </script>
 </body>
