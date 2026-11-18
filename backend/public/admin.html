@@ -652,7 +652,7 @@
 
             const segmentAge = (systemConfig && systemConfig.maxSegmentAgeSeconds) || 120;
 
-            channelsContainer.innerHTML = channels.map(channel => {
+            const html = channels.map(channel => {
                 // 'restarting' (auto-restart backoff) still needs the Stop button
                 const isRestreamRunning = channel.restream && ['running', 'starting', 'restarting'].includes(channel.restream.status);
                 const metrics = (channel.restream && channel.restream.metrics) || {};
@@ -662,7 +662,7 @@
                 const embedUrl = escapeHtml(playerEmbedUrl(channel));
 
                 return `
-                <div class="bg-dark-900 border border-slate-800 hover:border-slate-700/80 rounded-2xl p-5 transition-all shadow-xl space-y-5">
+                <div data-card="${escapeHtml(channel.id)}" class="bg-dark-900 border border-slate-800 hover:border-slate-700/80 rounded-2xl p-5 transition-all shadow-xl space-y-5">
 
                     <!-- Channel Top Bar -->
                     <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800/80 pb-4">
@@ -721,7 +721,24 @@
                             <!-- URL input is LTR: icon on the physical left -->
                             <div class="relative flex-1 w-full" dir="ltr">
                                 <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-500 text-xs"><i class="fa-solid fa-link"></i></span>
-                                <input id="source-url-${channel.id}" type="url" dir="ltr" value="${escapeHtml(channel.sourceUrl || '')}" placeholder="https://.../stream.m3u8  ·  .ts  ·  rtmp://..." aria-label="رابط المصدر الخارجي" class="w-full bg-dark-900 border border-slate-700/80 rounded-lg pl-8 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-brand-500 font-mono text-left">
+                                <!-- Read-only until "تعديل": polling can never steal its focus (see renderChannels) -->
+                                <input id="source-url-${channel.id}" type="url" dir="ltr" disabled value="${escapeHtml(channel.sourceUrl || '')}" placeholder="https://.../stream.m3u8  ·  .ts  ·  rtmp://..." aria-label="رابط المصدر الخارجي"
+                                    onkeydown="if (event.key === 'Enter') { event.preventDefault(); saveSourceUrl('${channel.id}'); } else if (event.key === 'Escape') { cancelEditSourceUrl('${channel.id}'); }"
+                                    class="w-full bg-dark-900 border border-slate-700/80 rounded-lg pl-8 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-brand-500 font-mono text-left disabled:opacity-70 disabled:cursor-not-allowed">
+                            </div>
+                            <div class="flex items-center gap-2 w-full sm:w-auto justify-end">
+                                <button id="url-edit-${channel.id}" onclick="editSourceUrl('${channel.id}')" class="px-3 py-1.5 bg-dark-800 hover:bg-dark-850 border border-slate-700 text-slate-300 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5" title="تعديل رابط المصدر">
+                                    <i class="fa-solid fa-pen text-brand-400"></i>
+                                    <span>تعديل</span>
+                                </button>
+                                <button id="url-save-${channel.id}" onclick="saveSourceUrl('${channel.id}')" class="hidden px-3 py-1.5 bg-brand-500 hover:bg-brand-600 text-white text-xs font-semibold rounded-lg transition-colors items-center gap-1.5 disabled:opacity-50">
+                                    <i class="fa-solid fa-check"></i>
+                                    <span>حفظ</span>
+                                </button>
+                                <button id="url-cancel-${channel.id}" onclick="cancelEditSourceUrl('${channel.id}')" class="hidden px-3 py-1.5 bg-dark-800 hover:bg-dark-850 border border-slate-700 text-slate-300 text-xs font-semibold rounded-lg transition-colors items-center gap-1.5">
+                                    <i class="fa-solid fa-xmark"></i>
+                                    <span>إلغاء</span>
+                                </button>
                             </div>
 
                             <div class="flex items-center gap-2 w-full sm:w-auto justify-end">
@@ -828,6 +845,93 @@
                 </div>
                 `;
             }).join('');
+            patchChannelCards(html);
+        }
+
+        // ------------------------------------------------------------------
+        // Source URL edit mode. Cards being edited are never re-rendered by the 3 s polling, so
+        // the input keeps focus, cursor and typed text. Everything else updates as usual.
+        // ------------------------------------------------------------------
+        const editingUrls = new Map();   // channelId -> value before editing (for Cancel)
+
+        function patchChannelCards(html) {
+            // Fast path: nothing being edited (or it is no longer on screen) -> plain re-render
+            const kept = [...channelsContainer.querySelectorAll(':scope > [data-card]')]
+                .filter(el => editingUrls.has(el.dataset.card));
+            if (!kept.length) { channelsContainer.innerHTML = html; return; }
+
+            const tpl = document.createElement('template');
+            tpl.innerHTML = html;
+            const keep = new Map(kept.map(el => [el.dataset.card, el]));
+            // Walk the fresh cards in order; insert new ones before the cursor and skip over a kept
+            // card without moving it (moving a focused element would blur it).
+            let cursor = channelsContainer.firstChild;
+            for (const node of [...tpl.content.children]) {
+                const old = keep.get(node.dataset.card);
+                if (!old) { channelsContainer.insertBefore(node, cursor); continue; }
+                while (cursor && cursor !== old) { const next = cursor.nextSibling; cursor.remove(); cursor = next; }
+                if (cursor === old) cursor = old.nextSibling;
+                else channelsContainer.appendChild(old);          // order changed (rare): accept the blur
+                keep.delete(node.dataset.card);
+            }
+            while (cursor) { const next = cursor.nextSibling; cursor.remove(); cursor = next; }
+            // An edited card that is no longer in the list (deleted / filtered out) leaves edit mode
+            keep.forEach((el, id) => editingUrls.delete(id));
+        }
+
+        function setUrlEditMode(channelId, on) {
+            const input = document.getElementById(`source-url-${channelId}`);
+            if (!input) return null;
+            input.disabled = !on;
+            document.getElementById(`url-edit-${channelId}`).classList.toggle('hidden', on);
+            for (const k of ['save', 'cancel']) {
+                const b = document.getElementById(`url-${k}-${channelId}`);
+                b.classList.toggle('hidden', !on);
+                b.classList.toggle('flex', on);
+            }
+            return input;
+        }
+
+        function editSourceUrl(channelId) {
+            const input = setUrlEditMode(channelId, true);
+            if (!input) return;
+            editingUrls.set(channelId, input.value);
+            input.focus();
+            input.setSelectionRange(input.value.length, input.value.length);
+        }
+
+        function cancelEditSourceUrl(channelId) {
+            const input = setUrlEditMode(channelId, false);
+            if (input && editingUrls.has(channelId)) input.value = editingUrls.get(channelId);
+            editingUrls.delete(channelId);
+            renderChannels(channelsList);                     // catch up on status missed while editing
+        }
+
+        async function saveSourceUrl(channelId) {
+            const input = document.getElementById(`source-url-${channelId}`);
+            const saveBtn = document.getElementById(`url-save-${channelId}`);
+            if (!input || !editingUrls.has(channelId) || saveBtn.disabled) return;
+            const sourceUrl = input.value.trim();
+            saveBtn.disabled = true;
+            try {
+                const data = await api(`/api/channels/${channelId}`, {
+                    method: 'PUT',
+                    body: JSON.stringify({ sourceUrl })
+                });
+                const idx = channelsList.findIndex(c => c.id === channelId);
+                if (idx !== -1 && data.channel) channelsList[idx] = { ...channelsList[idx], sourceUrl: data.channel.sourceUrl };
+                editingUrls.delete(channelId);
+                setUrlEditMode(channelId, false);
+                input.value = (data.channel && data.channel.sourceUrl) || '';
+                const running = data.restream && ['running', 'starting', 'restarting'].includes(data.restream.status);
+                showToast(running ? 'تم حفظ رابط المصدر ✓ (يُطبَّق عند إعادة التشغيل)' : 'تم حفظ رابط المصدر ✓', 'success');
+                renderChannels(channelsList);
+            } catch (err) {
+                showToast(err.message, 'error');               // stay in edit mode so the URL can be fixed
+                input.focus();
+            } finally {
+                saveBtn.disabled = false;
+            }
         }
 
         // Restream Operations
