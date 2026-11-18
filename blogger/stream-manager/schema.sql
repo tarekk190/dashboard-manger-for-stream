@@ -46,6 +46,15 @@ drop trigger if exists match_settings_touch on public.match_settings;
 create trigger match_settings_touch before insert or update on public.match_settings
   for each row execute function public.touch_match_settings();
 
+-- Table privileges ------------------------------------------------------------------------
+-- Newer Supabase projects do not grant table access to the API roles automatically.
+-- Without these, every request fails with "permission denied for table match_settings"
+-- (42501) before RLS is even checked. RLS below still decides which rows/actions pass.
+grant usage on schema public to anon, authenticated;
+grant select on public.match_settings to anon, authenticated;
+grant insert, update, delete on public.match_settings to authenticated;
+revoke all on public.stream_admins from anon, authenticated;   -- read only via is_stream_admin()
+
 -- Row level security ----------------------------------------------------------------------
 alter table public.match_settings enable row level security;
 
@@ -77,5 +86,7 @@ end $$;
 -- After checking the migrated rows you can remove the old table:
 -- drop table public.active_streams;
 
--- Add your admin (Authentication -> Users -> copy the user's UUID):
--- insert into public.stream_admins (user_id) values ('<your-user-uuid>') on conflict do nothing;
+-- Add your admin (the column is user_id). By e-mail, no UUID copying needed:
+-- insert into public.stream_admins (user_id)
+--   select id from auth.users where email = 'you@example.com'
+--   on conflict (user_id) do nothing;
