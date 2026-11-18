@@ -417,10 +417,12 @@ const RESTREAM_HD_ENABLED = RESTREAM_HD_MODE !== 'off';
 // and at most MAX_HD_ENCODES channels run the 720p encode at the same time; a channel over the
 // limit runs its default rendition only (logged, shown in the panel). 0 = no HD encodes at all.
 // HD copy (RESTREAM_HD_MODE=copy) costs no encode, so the limit does not apply to it.
-// Budget on this 4-vCPU server (HEVC 1080p50 source): 1.37 cores per channel with HD.
+// Budget on this 4-vCPU server (HEVC 1080p50 source): 1.17 cores per channel without HD,
+// 1.37 with HD. Default 0 so the CPU goes to 4 concurrent channels (b1..b4) on their default
+// rendition; raise it only on a bigger server (or with H.264 sources, which decode cheaper).
 const MAX_HD_ENCODES = (() => {
-    const n = parseInt(process.env.MAX_HD_ENCODES ?? '2', 10);
-    return Number.isFinite(n) ? Math.min(Math.max(n, 0), 16) : 2;
+    const n = parseInt(process.env.MAX_HD_ENCODES ?? '0', 10);
+    return Number.isFinite(n) ? Math.min(Math.max(n, 0), 16) : 0;
 })();
 // Default rendition preset: superfast while a second encode runs (CPU headroom), else veryfast
 const RESTREAM_X264_PRESET = X264_PRESETS.includes(process.env.RESTREAM_X264_PRESET)

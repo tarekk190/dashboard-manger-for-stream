@@ -230,6 +230,18 @@ Open `https://EDGE_DOMAIN/admin` (plain HTTP redirects to HTTPS).
    - **Cloudflare R2:** `https://R2_CUSTOM_DOMAIN/hd/{r2_slug}/index.html` (or `.css`)
    - **Player iframe:** `/player/?channel={streamKey}` or `/player/?r2={r2_slug}`
 
+### Running 4 channels at once (b1–b4)
+There is no limit on the number of channels: MediaMTX, Nginx, the backend and the Cloudflare Worker accept any stream key matching `[a-z0-9_-]`. The limit is the CPU. Each restream is a separate FFmpeg transcode, measured on the 4-vCPU server with an HEVC 1080p50 source:
+
+| Per channel | Cores | 4 channels |
+|---|---|---|
+| default 480p (superfast/veryfast) | ~1.17 | ~4.7 |
+| default + HD 720p encode | ~1.37 | ~5.5 |
+
+- `MAX_HD_ENCODES` now defaults to **0** (no HD encodes), so the CPU goes to the four default renditions. Raise it only on a bigger server.
+- Four HEVC 1080p50 sources still need slightly more than 4 vCPUs. Use H.264 sources (cheaper to decode), `RESTREAM_PROFILE=copy` (no encode, but H.264 sources only), or a 6–8 vCPU server for all four to stay smooth. Robotic audio or a rising `speed < 1.0x` in the restream logs means the server is overloaded.
+- The stream key cannot be changed after a channel is created. A card whose name and key disagree (for example "B2" with key `b1`) must be deleted and recreated with the right key.
+
 ---
 
 ## 5. Step-by-Step Cloudflare R2 & CDN Configuration
