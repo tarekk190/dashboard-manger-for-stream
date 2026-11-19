@@ -52,7 +52,9 @@
        window.pxlSeo in the next script.
        ==================================================================== -->
   <meta content='blogger' name='generator'/>
-  <link expr:href='data:blog.blogspotFaviconUrl' rel='icon' type='image/x-icon'/>
+  <!-- Brand icons (Blogger CDN). /s256/ favicon, /s512/ home-screen icon -->
+  <link href='https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEiV05olTOvO8_RHsJ9_0kW79d5iJL_0A3nGrnpgje3L_7GJDu8hGCziRT88QFiKU7rvYNyqUScM1mlFZ5mUSwUh7cWN0j0E3HPA9dkZU1ChL9Ts-PMuq6vISigGQ9wgeDNoOJgkZFSbS8jP1DGhdX3ld30_LZuNYKJwNAKrcMufGKGABZ4_dMhMRYqoHAM/s256/Gemini_Generated_Image_al6tvoal6tvoal6t%20%281%29.jpg' rel='icon' sizes='256x256' type='image/jpeg'/>
+  <link href='https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEiV05olTOvO8_RHsJ9_0kW79d5iJL_0A3nGrnpgje3L_7GJDu8hGCziRT88QFiKU7rvYNyqUScM1mlFZ5mUSwUh7cWN0j0E3HPA9dkZU1ChL9Ts-PMuq6vISigGQ9wgeDNoOJgkZFSbS8jP1DGhdX3ld30_LZuNYKJwNAKrcMufGKGABZ4_dMhMRYqoHAM/s512/Gemini_Generated_Image_al6tvoal6tvoal6t%20%281%29.jpg' rel='apple-touch-icon' sizes='512x512'/>
   <link expr:href='data:view.url.canonical' id='pxl-canonical' rel='canonical'/>
   <link expr:href='data:blog.homepageUrl + &quot;feeds/posts/default&quot;' expr:title='data:blog.title + &quot; - Atom&quot;' rel='alternate' type='application/atom+xml'/>
   <link expr:href='data:blog.homepageUrl + &quot;feeds/posts/default?alt=rss&quot;' expr:title='data:blog.title + &quot; - RSS&quot;' rel='alternate' type='application/rss+xml'/>
@@ -84,6 +86,12 @@
     <meta expr:content='resizeImage(data:view.featuredImage, 1200, &quot;1200:630&quot;)' name='twitter:image'/>
     <meta content='summary_large_image' name='twitter:card'/>
   <b:else/>
+    <!-- Default share image: PX League logo (home, news archive, standings, pages ...) -->
+    <meta content='https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEgB7bCjg0mXHv-k6qhUIYxC3k8pfyDz6KIq1rmbwi1lqCjWCRdCeTIAP0MCrF0HGxsmc9HGc71zKERsKg8jmYfCCMTTcZRMTkfItJB_lhz2eeiWC7YJgr3ETCCNAlMiCfUuhGewBS9fY-11IBmzF8BabuVxVhyphenhyphenNsCZV8OcVbW_xZnBSUAOGm9QwVwUhNTA/s1200/Gemini_Generated_Image_e55f4ze55f4ze55f%20%281%29.jpg' property='og:image'/>
+    <meta content='1200' property='og:image:width'/>
+    <meta content='1200' property='og:image:height'/>
+    <meta content='PX League' property='og:image:alt'/>
+    <meta content='https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEgB7bCjg0mXHv-k6qhUIYxC3k8pfyDz6KIq1rmbwi1lqCjWCRdCeTIAP0MCrF0HGxsmc9HGc71zKERsKg8jmYfCCMTTcZRMTkfItJB_lhz2eeiWC7YJgr3ETCCNAlMiCfUuhGewBS9fY-11IBmzF8BabuVxVhyphenhyphenNsCZV8OcVbW_xZnBSUAOGm9QwVwUhNTA/s1200/Gemini_Generated_Image_e55f4ze55f4ze55f%20%281%29.jpg' name='twitter:image'/>
     <meta content='summary' name='twitter:card'/>
   </b:if>
 
@@ -112,6 +120,8 @@
         "@id": "https://www.px-league.site/#organization",
         "name": "PX League",
         "url": "https://www.px-league.site/",
+        "logo": { "@type": "ImageObject", "url": "https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEgB7bCjg0mXHv-k6qhUIYxC3k8pfyDz6KIq1rmbwi1lqCjWCRdCeTIAP0MCrF0HGxsmc9HGc71zKERsKg8jmYfCCMTTcZRMTkfItJB_lhz2eeiWC7YJgr3ETCCNAlMiCfUuhGewBS9fY-11IBmzF8BabuVxVhyphenhyphenNsCZV8OcVbW_xZnBSUAOGm9QwVwUhNTA/s1200/Gemini_Generated_Image_e55f4ze55f4ze55f%20%281%29.jpg", "width": 1200, "height": 1200 },
+        "image": "https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEgB7bCjg0mXHv-k6qhUIYxC3k8pfyDz6KIq1rmbwi1lqCjWCRdCeTIAP0MCrF0HGxsmc9HGc71zKERsKg8jmYfCCMTTcZRMTkfItJB_lhz2eeiWC7YJgr3ETCCNAlMiCfUuhGewBS9fY-11IBmzF8BabuVxVhyphenhyphenNsCZV8OcVbW_xZnBSUAOGm9QwVwUhNTA/s1200/Gemini_Generated_Image_e55f4ze55f4ze55f%20%281%29.jpg",
         "sameAs": [
           "https://t.me/+VZ8Lb4i2iXRkNTdk",
           "https://whatsapp.com/channel/0029Vb72JBO6GcGMQKCaP51G",
@@ -352,6 +362,14 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
   border-radius: 10px; background: var(--brand); color: var(--brand-ink);
   font-size: .95rem; box-shadow: var(--brand-glow);
 }
+/* Brand logo image: crisp rounded square, never stretched; 40px desktop / 32px mobile */
+.logo__mark--img {
+  display: block; flex-shrink: 0; width: 40px; height: 40px;
+  object-fit: cover; border-radius: 10px; background: #0d4a37;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, .06), 0 4px 14px -4px rgba(50, 205, 50, .45);
+}
+@media (max-width: 860px) { .logo__mark--img { width: 32px; height: 32px; border-radius: 8px; } }
+.logo__text { line-height: 1; }
 .logo__text b { color: var(--brand-strong); }
 [data-theme="dark"] .logo__text b { color: var(--brand); }
 
@@ -1851,7 +1869,7 @@ body#layout .sidebar { width: 320px; }
   <header class='site-header'>
     <div class='container header-inner'>
       <a class='logo' expr:href='data:blog.homepageUrl'>
-        <span class='logo__mark'>PX</span>
+        <img alt='' class='logo__mark logo__mark--img' decoding='async' fetchpriority='high' height='40' src='https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEgB7bCjg0mXHv-k6qhUIYxC3k8pfyDz6KIq1rmbwi1lqCjWCRdCeTIAP0MCrF0HGxsmc9HGc71zKERsKg8jmYfCCMTTcZRMTkfItJB_lhz2eeiWC7YJgr3ETCCNAlMiCfUuhGewBS9fY-11IBmzF8BabuVxVhyphenhyphenNsCZV8OcVbW_xZnBSUAOGm9QwVwUhNTA/s96/Gemini_Generated_Image_e55f4ze55f4ze55f%20%281%29.jpg' srcset='https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEgB7bCjg0mXHv-k6qhUIYxC3k8pfyDz6KIq1rmbwi1lqCjWCRdCeTIAP0MCrF0HGxsmc9HGc71zKERsKg8jmYfCCMTTcZRMTkfItJB_lhz2eeiWC7YJgr3ETCCNAlMiCfUuhGewBS9fY-11IBmzF8BabuVxVhyphenhyphenNsCZV8OcVbW_xZnBSUAOGm9QwVwUhNTA/s96/Gemini_Generated_Image_e55f4ze55f4ze55f%20%281%29.jpg 1x, https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEgB7bCjg0mXHv-k6qhUIYxC3k8pfyDz6KIq1rmbwi1lqCjWCRdCeTIAP0MCrF0HGxsmc9HGc71zKERsKg8jmYfCCMTTcZRMTkfItJB_lhz2eeiWC7YJgr3ETCCNAlMiCfUuhGewBS9fY-11IBmzF8BabuVxVhyphenhyphenNsCZV8OcVbW_xZnBSUAOGm9QwVwUhNTA/s128/Gemini_Generated_Image_e55f4ze55f4ze55f%20%281%29.jpg 2x, https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEgB7bCjg0mXHv-k6qhUIYxC3k8pfyDz6KIq1rmbwi1lqCjWCRdCeTIAP0MCrF0HGxsmc9HGc71zKERsKg8jmYfCCMTTcZRMTkfItJB_lhz2eeiWC7YJgr3ETCCNAlMiCfUuhGewBS9fY-11IBmzF8BabuVxVhyphenhyphenNsCZV8OcVbW_xZnBSUAOGm9QwVwUhNTA/s200/Gemini_Generated_Image_e55f4ze55f4ze55f%20%281%29.jpg 3x' width='40'/>
         <span class='logo__text'>PX-<b>League</b></span>
       </a>
 
@@ -2377,7 +2395,8 @@ body#layout .sidebar { width: 320px; }
   "image": ["<b:eval expr='resizeImage(data:post.featuredImage, 1200, &quot;16:9&quot;)'/>"],</b:if><b:if cond='data:post.labels'>
   "articleSection": "<data:post.labels.first.name.jsonEscaped/>",</b:if>
   "author": { "@type": "Organization", "name": "PX League", "url": "https://www.px-league.site/" },
-  "publisher": { "@type": "Organization", "@id": "https://www.px-league.site/#organization", "name": "PX League", "url": "https://www.px-league.site/" }
+  "publisher": { "@type": "Organization", "@id": "https://www.px-league.site/#organization", "name": "PX League", "url": "https://www.px-league.site/",
+    "logo": { "@type": "ImageObject", "url": "https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEgB7bCjg0mXHv-k6qhUIYxC3k8pfyDz6KIq1rmbwi1lqCjWCRdCeTIAP0MCrF0HGxsmc9HGc71zKERsKg8jmYfCCMTTcZRMTkfItJB_lhz2eeiWC7YJgr3ETCCNAlMiCfUuhGewBS9fY-11IBmzF8BabuVxVhyphenhyphenNsCZV8OcVbW_xZnBSUAOGm9QwVwUhNTA/s1200/Gemini_Generated_Image_e55f4ze55f4ze55f%20%281%29.jpg", "width": 1200, "height": 1200 } }
 }</script>
                   </b:if>
                   <b:if cond='data:post.labels'>
@@ -2667,7 +2686,7 @@ body#layout .sidebar { width: 320px; }
       <div class='footer-grid'>
         <div class='footer-col'>
           <a class='logo' expr:href='data:blog.homepageUrl' style='margin-bottom:12px'>
-            <span class='logo__mark'>PX</span>
+            <img alt='' class='logo__mark logo__mark--img' decoding='async' loading='lazy' height='40' src='https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEgB7bCjg0mXHv-k6qhUIYxC3k8pfyDz6KIq1rmbwi1lqCjWCRdCeTIAP0MCrF0HGxsmc9HGc71zKERsKg8jmYfCCMTTcZRMTkfItJB_lhz2eeiWC7YJgr3ETCCNAlMiCfUuhGewBS9fY-11IBmzF8BabuVxVhyphenhyphenNsCZV8OcVbW_xZnBSUAOGm9QwVwUhNTA/s96/Gemini_Generated_Image_e55f4ze55f4ze55f%20%281%29.jpg' srcset='https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEgB7bCjg0mXHv-k6qhUIYxC3k8pfyDz6KIq1rmbwi1lqCjWCRdCeTIAP0MCrF0HGxsmc9HGc71zKERsKg8jmYfCCMTTcZRMTkfItJB_lhz2eeiWC7YJgr3ETCCNAlMiCfUuhGewBS9fY-11IBmzF8BabuVxVhyphenhyphenNsCZV8OcVbW_xZnBSUAOGm9QwVwUhNTA/s96/Gemini_Generated_Image_e55f4ze55f4ze55f%20%281%29.jpg 1x, https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEgB7bCjg0mXHv-k6qhUIYxC3k8pfyDz6KIq1rmbwi1lqCjWCRdCeTIAP0MCrF0HGxsmc9HGc71zKERsKg8jmYfCCMTTcZRMTkfItJB_lhz2eeiWC7YJgr3ETCCNAlMiCfUuhGewBS9fY-11IBmzF8BabuVxVhyphenhyphenNsCZV8OcVbW_xZnBSUAOGm9QwVwUhNTA/s128/Gemini_Generated_Image_e55f4ze55f4ze55f%20%281%29.jpg 2x, https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEgB7bCjg0mXHv-k6qhUIYxC3k8pfyDz6KIq1rmbwi1lqCjWCRdCeTIAP0MCrF0HGxsmc9HGc71zKERsKg8jmYfCCMTTcZRMTkfItJB_lhz2eeiWC7YJgr3ETCCNAlMiCfUuhGewBS9fY-11IBmzF8BabuVxVhyphenhyphenNsCZV8OcVbW_xZnBSUAOGm9QwVwUhNTA/s200/Gemini_Generated_Image_e55f4ze55f4ze55f%20%281%29.jpg 3x' width='40'/>
             <span class='logo__text'>PX-<b>League</b></span>
           </a>
           <b:section class='footer-section' id='footer-1' maxwidgets='1' showaddelement='yes'>
