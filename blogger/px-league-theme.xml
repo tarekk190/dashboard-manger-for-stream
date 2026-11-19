@@ -373,6 +373,85 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .logo__text b { color: var(--brand-strong); }
 [data-theme="dark"] .logo__text b { color: var(--brand); }
 
+/* --------------------------------------------------------------------------
+   Header brand: ambient "matchday broadcast" motion (pure CSS, header only).
+   .logo__badge  = fixed-size box (same 40/32px as the image: no layout shift)
+     ::before    = emerald aura behind the icon, breathing (opacity + transform)
+   .logo__clip   = rounded overflow:hidden frame
+     ::after     = diagonal floodlight sheen sweeping across every 5.6s
+   League b::after = thin broadcast underline that wipes in on the same beat
+   Only transform / opacity are animated. The global prefers-reduced-motion
+   rule (and the block below) switches every loop off.
+   -------------------------------------------------------------------------- */
+.site-header .logo { -webkit-tap-highlight-color: transparent; transition: transform .35s cubic-bezier(.34, 1.56, .64, 1); }
+.site-header .logo:active { transform: scale(.94); transition-duration: .12s; }
+.logo__badge {
+  position: relative; isolation: isolate; flex-shrink: 0;
+  display: block; width: 40px; height: 40px;
+  transition: transform .4s cubic-bezier(.34, 1.56, .64, 1);
+}
+.logo__badge::before {                   /* breathing aura */
+  content: ''; position: absolute; inset: -5px; z-index: -1; border-radius: 14px;
+  background: radial-gradient(closest-side, rgba(50, 205, 50, .55), rgba(16, 122, 84, .25) 60%, transparent);
+  filter: blur(4px);
+  opacity: .35; transform: scale(.9);
+  animation: pxl-logo-aura 3.2s ease-in-out infinite;
+  will-change: transform, opacity;
+  pointer-events: none;
+}
+.logo__clip {
+  position: relative; display: block; width: 100%; height: 100%;
+  border-radius: 10px; overflow: hidden;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, .06), 0 4px 14px -4px rgba(50, 205, 50, .45);
+  transform: translateZ(0);              /* own layer: keeps the clip crisp while the sheen moves */
+}
+.logo__clip .logo__mark--img { width: 100%; height: 100%; border-radius: 0; box-shadow: none; }
+.logo__clip::after {                     /* floodlight sheen */
+  content: ''; position: absolute; inset: -20% -60%;
+  background: linear-gradient(105deg, transparent 38%, rgba(255, 255, 255, .08) 44%, rgba(255, 255, 255, .55) 50%, rgba(214, 255, 226, .12) 56%, transparent 62%);
+  transform: translateX(-75%);
+  animation: pxl-logo-sheen 5.6s cubic-bezier(.45, 0, .2, 1) infinite;
+  will-change: transform;
+  pointer-events: none;
+}
+.site-header .logo__text b { position: relative; display: inline-block; }
+.site-header .logo__text b::after {      /* broadcast underline accent */
+  content: ''; position: absolute; left: 0; right: 0; bottom: -5px; height: 2px; border-radius: 2px;
+  background: linear-gradient(90deg, transparent, var(--brand) 25%, var(--brand) 75%, transparent);
+  box-shadow: 0 0 6px var(--brand);
+  transform-origin: left center; transform: scaleX(0); opacity: 0;
+  animation: pxl-logo-underline 5.6s cubic-bezier(.45, 0, .2, 1) infinite;
+  will-change: transform, opacity;
+}
+@keyframes pxl-logo-aura {
+  0%, 100% { opacity: .3;  transform: scale(.9); }
+  50%      { opacity: .85; transform: scale(1.08); }
+}
+@keyframes pxl-logo-sheen {               /* ~1s sweep, then rest */
+  0%        { transform: translateX(-75%); }
+  18%, 100% { transform: translateX(75%); }
+}
+@keyframes pxl-logo-underline {
+  0%, 8%    { transform: scaleX(0); opacity: 0; }
+  22%       { transform: scaleX(1); opacity: 1; }
+  60%       { transform: scaleX(1); opacity: .9; }
+  80%, 100% { transform: scaleX(1); opacity: 0; }
+}
+@media (hover: hover) and (pointer: fine) {
+  .site-header .logo:hover .logo__badge { transform: translateY(-1px) rotate(-4deg) scale(1.06); }
+  .site-header .logo:hover .logo__text b { color: var(--brand); }
+}
+@media (max-width: 860px) {
+  .logo__badge { width: 32px; height: 32px; }
+  .logo__clip { border-radius: 8px; }
+  .logo__badge::before { inset: -4px; border-radius: 12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .logo__badge::before, .logo__clip::after, .site-header .logo__text b::after { animation: none; }
+  .logo__badge::before { opacity: .45; transform: none; }
+  .logo__clip::after, .site-header .logo__text b::after { opacity: 0; }
+}
+
 .main-nav ul { list-style: none; margin: 0; padding: 0; display: flex; gap: 4px; }
 .main-nav a {
   display: block; padding: 8px 14px; border-radius: 999px;
@@ -1869,7 +1948,7 @@ body#layout .sidebar { width: 320px; }
   <header class='site-header'>
     <div class='container header-inner'>
       <a class='logo' expr:href='data:blog.homepageUrl'>
-        <img alt='' class='logo__mark logo__mark--img' decoding='async' fetchpriority='high' height='40' src='https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEgB7bCjg0mXHv-k6qhUIYxC3k8pfyDz6KIq1rmbwi1lqCjWCRdCeTIAP0MCrF0HGxsmc9HGc71zKERsKg8jmYfCCMTTcZRMTkfItJB_lhz2eeiWC7YJgr3ETCCNAlMiCfUuhGewBS9fY-11IBmzF8BabuVxVhyphenhyphenNsCZV8OcVbW_xZnBSUAOGm9QwVwUhNTA/s96/Gemini_Generated_Image_e55f4ze55f4ze55f%20%281%29.jpg' srcset='https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEgB7bCjg0mXHv-k6qhUIYxC3k8pfyDz6KIq1rmbwi1lqCjWCRdCeTIAP0MCrF0HGxsmc9HGc71zKERsKg8jmYfCCMTTcZRMTkfItJB_lhz2eeiWC7YJgr3ETCCNAlMiCfUuhGewBS9fY-11IBmzF8BabuVxVhyphenhyphenNsCZV8OcVbW_xZnBSUAOGm9QwVwUhNTA/s96/Gemini_Generated_Image_e55f4ze55f4ze55f%20%281%29.jpg 1x, https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEgB7bCjg0mXHv-k6qhUIYxC3k8pfyDz6KIq1rmbwi1lqCjWCRdCeTIAP0MCrF0HGxsmc9HGc71zKERsKg8jmYfCCMTTcZRMTkfItJB_lhz2eeiWC7YJgr3ETCCNAlMiCfUuhGewBS9fY-11IBmzF8BabuVxVhyphenhyphenNsCZV8OcVbW_xZnBSUAOGm9QwVwUhNTA/s128/Gemini_Generated_Image_e55f4ze55f4ze55f%20%281%29.jpg 2x, https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEgB7bCjg0mXHv-k6qhUIYxC3k8pfyDz6KIq1rmbwi1lqCjWCRdCeTIAP0MCrF0HGxsmc9HGc71zKERsKg8jmYfCCMTTcZRMTkfItJB_lhz2eeiWC7YJgr3ETCCNAlMiCfUuhGewBS9fY-11IBmzF8BabuVxVhyphenhyphenNsCZV8OcVbW_xZnBSUAOGm9QwVwUhNTA/s200/Gemini_Generated_Image_e55f4ze55f4ze55f%20%281%29.jpg 3x' width='40'/>
+        <span aria-hidden='true' class='logo__badge'><span class='logo__clip'><img alt='' class='logo__mark logo__mark--img' decoding='async' fetchpriority='high' height='40' src='https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEgB7bCjg0mXHv-k6qhUIYxC3k8pfyDz6KIq1rmbwi1lqCjWCRdCeTIAP0MCrF0HGxsmc9HGc71zKERsKg8jmYfCCMTTcZRMTkfItJB_lhz2eeiWC7YJgr3ETCCNAlMiCfUuhGewBS9fY-11IBmzF8BabuVxVhyphenhyphenNsCZV8OcVbW_xZnBSUAOGm9QwVwUhNTA/s96/Gemini_Generated_Image_e55f4ze55f4ze55f%20%281%29.jpg' srcset='https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEgB7bCjg0mXHv-k6qhUIYxC3k8pfyDz6KIq1rmbwi1lqCjWCRdCeTIAP0MCrF0HGxsmc9HGc71zKERsKg8jmYfCCMTTcZRMTkfItJB_lhz2eeiWC7YJgr3ETCCNAlMiCfUuhGewBS9fY-11IBmzF8BabuVxVhyphenhyphenNsCZV8OcVbW_xZnBSUAOGm9QwVwUhNTA/s96/Gemini_Generated_Image_e55f4ze55f4ze55f%20%281%29.jpg 1x, https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEgB7bCjg0mXHv-k6qhUIYxC3k8pfyDz6KIq1rmbwi1lqCjWCRdCeTIAP0MCrF0HGxsmc9HGc71zKERsKg8jmYfCCMTTcZRMTkfItJB_lhz2eeiWC7YJgr3ETCCNAlMiCfUuhGewBS9fY-11IBmzF8BabuVxVhyphenhyphenNsCZV8OcVbW_xZnBSUAOGm9QwVwUhNTA/s128/Gemini_Generated_Image_e55f4ze55f4ze55f%20%281%29.jpg 2x, https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEgB7bCjg0mXHv-k6qhUIYxC3k8pfyDz6KIq1rmbwi1lqCjWCRdCeTIAP0MCrF0HGxsmc9HGc71zKERsKg8jmYfCCMTTcZRMTkfItJB_lhz2eeiWC7YJgr3ETCCNAlMiCfUuhGewBS9fY-11IBmzF8BabuVxVhyphenhyphenNsCZV8OcVbW_xZnBSUAOGm9QwVwUhNTA/s200/Gemini_Generated_Image_e55f4ze55f4ze55f%20%281%29.jpg 3x' width='40'/></span></span>
         <span class='logo__text'>PX-<b>League</b></span>
       </a>
 
