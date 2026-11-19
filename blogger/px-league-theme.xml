@@ -2,7 +2,8 @@
 <!DOCTYPE html>
 <!--
   ============================================================================
-  PX-League - Blogger Theme (Arabic, RTL, Light/Dark)
+  PX League - Blogger Theme (Arabic, RTL, Light/Dark)
+  Site: https://www.px-league.site  (Blogger custom domain; was powerdoflearn.blogspot.com)
   ............................................................................
   Two views, separated with Blogger conditional tags:
 
@@ -12,8 +13,8 @@
      No player, no ads.
 
   2. MATCH POST (data:view.isPost)
-     Live streaming arena: 16:9 player in the center, ads around it
-     (top 728x90, bottom 728x90, side 160x600 on desktop).
+     Live streaming arena: 16:9 player in the center, ads above and below it
+     (728x90 / responsive). Ads are pushed only after the player has loaded.
      The stream comes from the POST ITSELF, so every match post plays its own stream.
      In the post editor (HTML view) add ONE of these:
        a) <div data-stream-src="https://live.smarterwho.site/player/?channel=b1"></div>
@@ -21,6 +22,9 @@
      The theme moves it into the 16:9 player box above the ads.
 
   Static pages (About, Privacy...) use a plain layout. Label/search pages show post cards.
+  Legal pages linked from the footer (create them in Blogger with these exact URLs):
+    /p/about-us.html  /p/privacy-policy.html  /p/terms-of-use.html
+    /p/contact-us.html  /p/disclaimer.html
 
   - Layouts v3 / widget version 2. Paste into: Theme > (arrow) > Edit HTML.
   - Ads, sidebar and footer texts are widgets: edit them on the Layout page.
@@ -32,8 +36,94 @@
   <meta charset='UTF-8'/>
   <meta content='width=device-width, initial-scale=1' name='viewport'/>
   <meta content='#32cd32' name='theme-color'/>
-  <title><b:if cond='data:view.isHomepage'><data:blog.title.escaped/><b:else/><data:view.title.escaped/> | <data:blog.title.escaped/></b:if></title>
-  <b:include data='blog' name='all-head-content'/>
+  <title><b:if cond='data:view.isHomepage'><data:blog.title.escaped/> | مباريات اليوم والنتائج المباشرة وترتيب الدوريات<b:else/><data:view.title.escaped/> | <data:blog.title.escaped/></b:if></title>
+
+  <!-- ====================================================================
+       SEO / social meta. Replaces Blogger's all-head-content, which printed its
+       own canonical, description and og:* tags (they would be emitted twice).
+       Every URL is built by Blogger from the blog's custom-domain setting
+       (https://www.px-league.site). The client-side routes (/p/match.html,
+       /p/standings.html ...) refine title, description and canonical with
+       window.pxlSeo in the next script.
+       ==================================================================== -->
+  <meta content='blogger' name='generator'/>
+  <link expr:href='data:blog.blogspotFaviconUrl' rel='icon' type='image/x-icon'/>
+  <link expr:href='data:view.url.canonical' id='pxl-canonical' rel='canonical'/>
+  <link expr:href='data:blog.homepageUrl + &quot;feeds/posts/default&quot;' expr:title='data:blog.title + &quot; - Atom&quot;' rel='alternate' type='application/atom+xml'/>
+  <link expr:href='data:blog.homepageUrl + &quot;feeds/posts/default?alt=rss&quot;' expr:title='data:blog.title + &quot; - RSS&quot;' rel='alternate' type='application/rss+xml'/>
+  <b:if cond='data:view.isSearch or data:view.isArchive'>
+    <!-- Label / search / archive listings duplicate post content: keep them out of the index -->
+    <meta content='noindex, follow' name='robots'/>
+  <b:else/>
+    <meta content='index, follow, max-image-preview:large' name='robots'/>
+  </b:if>
+  <b:if cond='data:view.description'>
+    <meta expr:content='data:view.description' name='description'/>
+    <meta expr:content='data:view.description' property='og:description'/>
+    <meta expr:content='data:view.description' name='twitter:description'/>
+  <b:else/>
+    <meta content='PX League: مباريات اليوم والنتائج المباشرة لحظة بلحظة، ترتيب الدوريات العربية والعالمية، أخبار كرة القدم والتوقعات.' name='description'/>
+    <meta content='PX League: مباريات اليوم والنتائج المباشرة لحظة بلحظة، ترتيب الدوريات العربية والعالمية، أخبار كرة القدم والتوقعات.' property='og:description'/>
+    <meta content='PX League: مباريات اليوم والنتائج المباشرة لحظة بلحظة، ترتيب الدوريات العربية والعالمية، أخبار كرة القدم والتوقعات.' name='twitter:description'/>
+  </b:if>
+  <meta expr:content='data:view.isPost ? &quot;article&quot; : &quot;website&quot;' property='og:type'/>
+  <meta expr:content='data:blog.title' property='og:site_name'/>
+  <meta content='ar_AR' property='og:locale'/>
+  <meta expr:content='data:view.url.canonical' property='og:url'/>
+  <meta expr:content='data:view.title' property='og:title'/>
+  <meta expr:content='data:view.title' name='twitter:title'/>
+  <b:if cond='data:view.featuredImage'>
+    <meta expr:content='resizeImage(data:view.featuredImage, 1200, &quot;1200:630&quot;)' property='og:image'/>
+    <meta content='1200' property='og:image:width'/>
+    <meta content='630' property='og:image:height'/>
+    <meta expr:content='resizeImage(data:view.featuredImage, 1200, &quot;1200:630&quot;)' name='twitter:image'/>
+    <meta content='summary_large_image' name='twitter:card'/>
+  <b:else/>
+    <meta content='summary' name='twitter:card'/>
+  </b:if>
+
+  <b:if cond='data:view.isHomepage'>
+  <!-- Structured data: site + publisher (home page only) -->
+  <script type='application/ld+json'>
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "WebSite",
+        "@id": "https://www.px-league.site/#website",
+        "url": "https://www.px-league.site/",
+        "name": "PX League",
+        "alternateName": "بي إكس ليج",
+        "inLanguage": "ar",
+        "publisher": { "@id": "https://www.px-league.site/#organization" },
+        "potentialAction": {
+          "@type": "SearchAction",
+          "target": { "@type": "EntryPoint", "urlTemplate": "https://www.px-league.site/search?q={search_term_string}" },
+          "query-input": "required name=search_term_string"
+        }
+      },
+      {
+        "@type": "Organization",
+        "@id": "https://www.px-league.site/#organization",
+        "name": "PX League",
+        "url": "https://www.px-league.site/",
+        "sameAs": [
+          "https://t.me/+VZ8Lb4i2iXRkNTdk",
+          "https://whatsapp.com/channel/0029Vb72JBO6GcGMQKCaP51G",
+          "https://play.google.com/store/apps/details?id=com.pxleague.app",
+          "https://apps.apple.com/sa/app/px-league/id6806053831"
+        ],
+        "contactPoint": {
+          "@type": "ContactPoint",
+          "contactType": "customer support",
+          "url": "https://www.px-league.site/p/contact-us.html",
+          "availableLanguage": ["ar"]
+        }
+      }
+    ]
+  }
+  </script>
+  </b:if>
 
   <!-- SETTINGS: your Cloudflare Worker URL (no trailing slash). Used by the
        home-page matches and the sidebar standings table.
@@ -41,6 +131,9 @@
   <script>
   //<![CDATA[
   window.PXL_WORKER_BASE_URL = 'https://px-league-proxy.pxleague.workers.dev';   // e.g. 'https://px-api.your-name.workers.dev'
+  // The Worker answers only the origins in its ALLOWED_ORIGINS list (blogger/worker/src/index.js):
+  // https://www.px-league.site and https://px-league.site. A new domain must be added there too.
+  window.PXL_SITE_URL = 'https://www.px-league.site';
   (function () {
     var theme = 'light';
     try { theme = localStorage.getItem('pxl-theme') === 'dark' ? 'dark' : 'light'; } catch (e) {}
@@ -53,6 +146,80 @@
   window.PXL_ROUTE = ({ '/p/standings.html': 'standings', '/p/match.html': 'match', '/p/predictions.html': 'predictions',
      '/p/matches.html': 'matches', '/p/app.html': 'app' })[location.pathname] || '';
   if (window.PXL_ROUTE) document.documentElement.setAttribute('data-pxl-route', window.PXL_ROUTE);
+
+  // ---------------------------------------------------------------------------
+  // Dynamic SEO for the client-side routes. Blogger renders these as one static
+  // page each, so their title / description / canonical are set here (Google
+  // indexes the rendered DOM). pxlSeo.set() is also called by the match script
+  // once the match data has loaded.
+  window.pxlSeo = (function () {
+    var SITE = 'PX League';
+    function meta(attr, key, value) {
+      if (!value) return;
+      var el = document.head.querySelector('meta[' + attr + '="' + key + '"]');
+      if (!el) { el = document.createElement('meta'); el.setAttribute(attr, key); document.head.appendChild(el); }
+      if (el.getAttribute('content') !== value) el.setAttribute('content', value);
+    }
+    function set(o) {
+      if (o.title) {
+        if (document.title !== o.title) document.title = o.title;
+        meta('property', 'og:title', o.title);
+        meta('name', 'twitter:title', o.title);
+      }
+      if (o.description) {
+        meta('name', 'description', o.description);
+        meta('property', 'og:description', o.description);
+        meta('name', 'twitter:description', o.description);
+      }
+      if (o.image) {
+        meta('property', 'og:image', o.image);
+        meta('name', 'twitter:image', o.image);
+      }
+      if (o.robots) meta('name', 'robots', o.robots);
+      if (o.url) {
+        var link = document.getElementById('pxl-canonical') || document.querySelector('link[rel="canonical"]');
+        if (!link) { link = document.createElement('link'); link.rel = 'canonical'; document.head.appendChild(link); }
+        if (link.href !== o.url) link.href = o.url;
+        meta('property', 'og:url', o.url);
+      }
+    }
+    // One JSON-LD block per id; rewritten only when its content changed.
+    function jsonLd(id, data) {
+      var el = document.getElementById(id);
+      if (!data) { if (el) el.remove(); return; }
+      var text = JSON.stringify(data);
+      if (!el) { el = document.createElement('script'); el.type = 'application/ld+json'; el.id = id; document.head.appendChild(el); }
+      if (el.textContent !== text) el.textContent = text;
+    }
+    return { set: set, jsonLd: jsonLd, site: SITE };
+  })();
+
+  (function () {
+    var base = (window.PXL_SITE_URL || location.origin).replace(/\/+$/, '');
+    var ROUTES = {
+      standings: { title: 'ترتيب الدوريات | PX League',
+        description: 'جداول ترتيب الدوري الإنجليزي والإسباني والإيطالي والألماني والفرنسي ودوري روشن السعودي والدوري المصري وأبطال أوروبا، محدّثة بعد كل جولة.' },
+      matches: { title: 'مركز المباريات: نتائج ومواعيد اليوم والأمس والغد | PX League',
+        description: 'جدول مباريات كرة القدم لأي يوم مع النتائج المباشرة وحالة كل مباراة وتصفية حسب الدوري، بتوقيت القاهرة.' },
+      predictions: { title: 'توقعات المباريات | PX League',
+        description: 'توقّع نتائج مباريات اليوم واجمع النقاط ونافس في ترتيب المتوقعين على PX League.' },
+      app: { title: 'تطبيق PX League لأندرويد وآيفون',
+        description: 'حمّل تطبيق PX League: نتائج المباريات لحظة بلحظة، الأخبار، التوقعات والدوريات الخاصة مع أصدقائك.' },
+      match: { title: 'تفاصيل المباراة | PX League',
+        description: 'تفاصيل المباراة: النتيجة المباشرة، أحداث اللقاء، التشكيلات، الملعب والحكم والقناة الناقلة على PX League.' }
+    };
+    var r = ROUTES[window.PXL_ROUTE];
+    if (!r) return;
+    var url = base + location.pathname;
+    var robots = null;
+    if (window.PXL_ROUTE === 'match') {
+      // /p/match.html?id=123 is one page per match: the id stays in the canonical URL.
+      // Without a valid id the page has no content of its own and is kept out of the index.
+      var id = new URLSearchParams(location.search).get('id') || '';
+      if (/^\d{1,12}$/.test(id)) url += '?id=' + id; else robots = 'noindex, follow';
+    }
+    window.pxlSeo.set({ title: r.title, description: r.description, url: url, robots: robots });
+  })();
   //]]>
   </script>
 
@@ -400,9 +567,6 @@ a.match-card:focus-visible { outline-offset: 3px; border-radius: var(--radius); 
 
 .arena-grid { display: grid; grid-template-columns: 1fr; gap: 16px; align-items: start; }
 .arena-center { min-width: 0; display: grid; gap: 14px; }
-@media (min-width: 1200px) {
-  .arena-grid { grid-template-columns: 160px minmax(0, 1fr) 160px; }
-}
 
 .player-frame {
   position: relative; width: 100%; aspect-ratio: 16 / 9;
@@ -424,21 +588,19 @@ a.match-card:focus-visible { outline-offset: 3px; border-radius: var(--radius); 
 }
 .player-placeholder svg { width: 54px; height: 54px; color: var(--brand); filter: drop-shadow(0 0 12px rgba(50, 205, 50, .5)); }
 
-/* Ad slots (post view only) */
+/* Ad slots (post view only). Hidden until BOTH are true:
+   - the slot holds real ad code (JS adds .is-filled: an <ins>, <iframe> or <img>), and
+   - the arena is ready (JS adds .is-ready after the player iframe has loaded).
+   No placeholder boxes, and no ad is ever shown next to an empty player or a loading
+   spinner. The adsbygoogle push happens only after the slot became visible. */
 .ad-slot {
-  display: grid; place-items: center; width: 100%;
-  border-radius: var(--radius-sm);
-  background: repeating-linear-gradient(45deg, var(--surface-2), var(--surface-2) 10px, var(--surface) 10px, var(--surface) 20px);
-  border: 1px dashed var(--border);
-  color: var(--text-muted); font-size: .8rem; overflow: hidden;
+  display: none; place-items: center; width: 100%;
+  overflow: hidden; text-align: center;
 }
 .ad-slot .widget, .ad-slot .widget-content { width: 100%; display: grid; place-items: center; }
-.ad-slot--h { min-height: 100px; }   /* 320x100 mobile, 728x90 desktop */
-.ad-slot--v { min-height: 600px; }   /* 160x600 skyscraper */
-.ad-side { display: none; }
-.ad-label { padding: 8px; }
-@media (min-width: 768px) { .ad-slot--h { min-height: 90px; } }
-@media (min-width: 1200px) { .ad-side { display: grid; position: sticky; top: calc(var(--header-h) + 16px); } }
+.ad-slot ins.adsbygoogle { display: block; width: 100%; }
+.arena.is-ready .ad-slot.is-filled { display: grid; min-height: 100px; }   /* 320x100 mobile */
+@media (min-width: 768px) { .arena.is-ready .ad-slot.is-filled { min-height: 90px; } }   /* 728x90 */
 
 /* ==========================================================================
    6. Content + sidebar
@@ -1525,6 +1687,17 @@ body { overflow-x: clip; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
+
+/* ==========================================================================
+   Static intro text (home + standings) and the no-JavaScript fallback
+   ========================================================================== */
+.site-intro { margin: 0 0 18px; color: var(--text-muted); font-size: .95rem; line-height: 1.85; }
+.site-intro strong { color: var(--text); }
+.noscript-box {
+  margin: 0 0 18px; padding: 14px 16px; border-radius: var(--radius-sm);
+  background: var(--surface); border: 1px solid var(--border); color: var(--text); font-size: .92rem;
+}
+.noscript-box a { color: var(--brand-strong); font-weight: 700; }
 ]]></b:skin>
 
 <!-- Layout editor (Theme > Layout) only -->
@@ -1534,7 +1707,7 @@ body#layout .header-inner, body#layout .main-nav, body#layout .header-actions,
 body#layout .fixtures, body#layout .arena-head, body#layout .player-frame { display: none; }
 body#layout .arena-grid, body#layout .content-wrap, body#layout .footer-grid { display: flex; gap: 8px; }
 body#layout .arena-center, body#layout .content-main, body#layout .footer-grid > * { flex: 1; }
-body#layout .ad-side { display: block; width: 160px; }
+body#layout .ad-slot { display: block; }
 body#layout .sidebar { width: 320px; }
 ]]></b:template-skin>
 </head>
@@ -1581,6 +1754,18 @@ body#layout .sidebar { width: 320px; }
     </div>
   </header>
 
+  <!-- Without JavaScript: matches, live scores and standings cannot load (they come from the
+       API). Say so, and point to the pages that work without it. -->
+  <noscript>
+    <div class='container' style='padding-top:16px'>
+      <div class='noscript-box' role='note'>
+        <strong>PX League</strong> يعرض مباريات اليوم والنتائج المباشرة وجداول الترتيب من خلال JavaScript، لذا يلزم تفعيله في المتصفح لرؤيتها.
+        يمكنك دون ذلك قراءة أحدث الأخبار في الصفحة الرئيسية، أو زيارة صفحات
+        <a href='/p/about-us.html'>من نحن</a> و<a href='/p/contact-us.html'>اتصل بنا</a> و<a href='/p/privacy-policy.html'>سياسة الخصوصية</a>.
+      </div>
+    </div>
+  </noscript>
+
   <!-- ======================================================================
        VIEW 2: MATCH POST - Live streaming arena (player + ads)
        The stream iframe comes from the post body (see the note at the top).
@@ -1594,22 +1779,12 @@ body#layout .sidebar { width: 320px; }
       </div>
 
       <div class='arena-grid'>
-        <!-- Side skyscraper 160x600 (desktop >= 1200px). RTL: right side -->
-        <b:section class='ad-side ad-slot ad-slot--v' id='ad-side-right' maxwidgets='1' showaddelement='yes'>
-          <b:widget id='HTML11' locked='false' title='' type='HTML' version='2' visible='true'>
-            <b:widget-settings>
-              <b:widget-setting name='content'><![CDATA[<div class="ad-label">مساحة إعلانية 160×600</div>]]></b:widget-setting>
-            </b:widget-settings>
-            <b:includable id='main'><data:content/></b:includable>
-          </b:widget>
-        </b:section>
-
         <div class='arena-center'>
-          <!-- Top ad 728x90 (320x100 on mobile) -->
+          <!-- Top ad 728x90 / responsive (shown only once the player has loaded) -->
           <b:section class='ad-slot ad-slot--h' id='ad-top' maxwidgets='1' showaddelement='yes'>
             <b:widget id='HTML10' locked='false' title='' type='HTML' version='2' visible='true'>
               <b:widget-settings>
-                <b:widget-setting name='content'><![CDATA[<div class="ad-label">مساحة إعلانية 728×90</div>]]></b:widget-setting>
+                <b:widget-setting name='content'><![CDATA[<!-- AdSense: paste ONLY the loader script and the <ins class="adsbygoogle"> tag here, WITHOUT the (adsbygoogle = window.adsbygoogle || []).push({}) line: the theme pushes it after the player has loaded. Empty = no ad, no box. -->]]></b:widget-setting>
               </b:widget-settings>
               <b:includable id='main'><data:content/></b:includable>
             </b:widget>
@@ -1643,26 +1818,17 @@ body#layout .sidebar { width: 320px; }
             </div>
           </aside>
 
-          <!-- Bottom ad 728x90 (320x100 on mobile) -->
+          <!-- Bottom ad 728x90 / responsive (shown only once the player has loaded) -->
           <b:section class='ad-slot ad-slot--h' id='ad-bottom' maxwidgets='1' showaddelement='yes'>
             <b:widget id='HTML12' locked='false' title='' type='HTML' version='2' visible='true'>
               <b:widget-settings>
-                <b:widget-setting name='content'><![CDATA[<div class="ad-label">مساحة إعلانية 728×90</div>]]></b:widget-setting>
+                <b:widget-setting name='content'><![CDATA[<!-- AdSense: paste ONLY the loader script and the <ins class="adsbygoogle"> tag here, WITHOUT the (adsbygoogle = window.adsbygoogle || []).push({}) line: the theme pushes it after the player has loaded. Empty = no ad, no box. -->]]></b:widget-setting>
               </b:widget-settings>
               <b:includable id='main'><data:content/></b:includable>
             </b:widget>
           </b:section>
         </div>
 
-        <!-- Side skyscraper 160x600 (desktop >= 1200px). RTL: left side -->
-        <b:section class='ad-side ad-slot ad-slot--v' id='ad-side-left' maxwidgets='1' showaddelement='yes'>
-          <b:widget id='HTML13' locked='false' title='' type='HTML' version='2' visible='true'>
-            <b:widget-settings>
-              <b:widget-setting name='content'><![CDATA[<div class="ad-label">مساحة إعلانية 160×600</div>]]></b:widget-setting>
-            </b:widget-settings>
-            <b:includable id='main'><data:content/></b:includable>
-          </b:widget>
-        </b:section>
       </div>
     </div>
   </section>
@@ -1692,6 +1858,9 @@ body#layout .sidebar { width: 320px; }
            script at the end of this file (search for "MATCHES API"). The spinner
            below stays until the data has been loaded.
            ================================================================ -->
+      <!-- Fixed intro text: real content for visitors, crawlers and ad review before the
+           match list (loaded by JavaScript) is available. -->
+      <p class='site-intro'><strong>PX League</strong> منصة عربية لمتابعة كرة القدم: جدول مباريات اليوم بتوقيت القاهرة، النتائج المباشرة دقيقة بدقيقة، أحداث كل مباراة وتشكيلاتها، ترتيب الدوريات الكبرى والعربية، إلى جانب أخبار الكرة والتوقعات. تُحدَّث النتائج تلقائيًا أثناء المباريات دون الحاجة لإعادة تحميل الصفحة.</p>
       <div aria-busy='true' aria-live='polite' id='matches-api-container'>
         <div class='px-loader' role='status'><span class='px-spinner'>&#160;</span><span>جاري تحميل المباريات...</span></div>
       </div>
@@ -1739,6 +1908,7 @@ body#layout .sidebar { width: 320px; }
           <h1 class='section-title' id='standings-title'>ترتيب الدوريات</h1>
           <p class='standings-page__sub'>اختر الدوري لعرض جدول الترتيب المحدّث.</p>
         </div>
+        <p class='site-intro'>جداول ترتيب أهم الدوريات الأوروبية والعربية في مكان واحد: الدوري الإنجليزي الممتاز، الإسباني، الإيطالي، الألماني، الفرنسي، دوري روشن السعودي، الدوري المصري، دوري أبطال أوروبا وأفريقيا وغيرها. يعرض كل جدول عدد المباريات والانتصارات والتعادلات والهزائم والأهداف وفارقها والنقاط، مع تمييز مراكز التأهل والهبوط، ويُحدَّث بعد نهاية كل جولة.</p>
         <div aria-label='اختر الدوري' class='league-filter' id='league-filter' role='tablist'>
           <button aria-selected='true' class='league-chip is-active' data-id='937599' role='tab' type='button'>الدوري الإنجليزي</button>
           <button aria-selected='false' class='league-chip' data-id='943230' role='tab' type='button'>دوري أبطال أوروبا</button>
@@ -2041,6 +2211,23 @@ body#layout .sidebar { width: 320px; }
                     </div>
                   </b:if>
                   <div class='post-body' id='px-post-body'><data:post.body/></div>
+                  <b:if cond='data:view.isPost'>
+                  <script type='application/ld+json'>{
+  "@context": "https://schema.org",
+  "@type": "NewsArticle",
+  "mainEntityOfPage": { "@type": "WebPage", "@id": "<data:post.url.canonical/>" },
+  "url": "<data:post.url.canonical/>",
+  "headline": "<data:post.title.jsonEscaped/>",
+  "description": "<data:post.snippets.long.jsonEscaped/>",
+  "datePublished": "<data:post.date.iso8601/>",
+  "dateModified": "<data:post.lastUpdated.iso8601/>",
+  "inLanguage": "ar",<b:if cond='data:post.featuredImage'>
+  "image": ["<b:eval expr='resizeImage(data:post.featuredImage, 1200, &quot;16:9&quot;)'/>"],</b:if><b:if cond='data:post.labels'>
+  "articleSection": "<data:post.labels.first.name.jsonEscaped/>",</b:if>
+  "author": { "@type": "Organization", "name": "PX League", "url": "https://www.px-league.site/" },
+  "publisher": { "@type": "Organization", "@id": "https://www.px-league.site/#organization", "name": "PX League", "url": "https://www.px-league.site/" }
+}</script>
+                  </b:if>
                   <b:if cond='data:post.labels'>
                     <div class='post-labels'>
                       <b:loop values='data:post.labels' var='label'>
@@ -2211,20 +2398,17 @@ body#layout .sidebar { width: 320px; }
           </ul>
         </div>
 
+        <!-- Legal pages: fixed in the theme (not a widget) so the links always match the
+             Blogger page URLs. Create each page with exactly this permalink. -->
         <div class='footer-col'>
-          <b:section class='footer-section' id='footer-2' maxwidgets='1' showaddelement='yes'>
-            <b:widget id='HTML41' locked='false' title='معلومات' type='HTML' version='2' visible='true'>
-              <b:widget-settings>
-                <b:widget-setting name='content'><![CDATA[<h3>معلومات</h3>
-<ul class="footer-links">
-  <li><a href="/p/about.html">من نحن</a></li>
-  <li><a href="/p/privacy.html">سياسة الخصوصية</a></li>
-  <li><a href="/p/contact.html">اتصل بنا</a></li>
-</ul>]]></b:widget-setting>
-              </b:widget-settings>
-              <b:includable id='main'><data:content/></b:includable>
-            </b:widget>
-          </b:section>
+          <h3>معلومات</h3>
+          <ul class='footer-links'>
+            <li><a expr:href='data:blog.homepageUrl + &quot;p/about-us.html&quot;'>من نحن</a></li>
+            <li><a expr:href='data:blog.homepageUrl + &quot;p/privacy-policy.html&quot;'>سياسة الخصوصية</a></li>
+            <li><a expr:href='data:blog.homepageUrl + &quot;p/terms-of-use.html&quot;'>شروط الاستخدام</a></li>
+            <li><a expr:href='data:blog.homepageUrl + &quot;p/disclaimer.html&quot;'>إخلاء المسؤولية</a></li>
+            <li><a expr:href='data:blog.homepageUrl + &quot;p/contact-us.html&quot;'>اتصل بنا</a></li>
+          </ul>
         </div>
 
         <div class='footer-col'>
@@ -3796,8 +3980,54 @@ body#layout .sidebar { width: 320px; }
 
       var home = (d.home_team && (d.home_team.full_title || d.home_team.title)) || '';
       var away = (d.away_team && (d.away_team.full_title || d.away_team.title)) || '';
-      if (home && away) document.title = home + ' ضد ' + away + ' | ' + (document.title.split(' | ').pop() || 'PX League');
+      if (home && away) updateSeo(d, st, home, away, champ);
       return st;
+    }
+
+    // SEO for /p/match.html?id=: title, description, canonical WITH the ?id= (one indexable
+    // URL per match) and SportsEvent structured data. pxlSeo (head script) only writes the
+    // tags / JSON-LD when they changed, so the 30 s polls cost nothing.
+    function updateSeo(d, st, home, away, champ) {
+      if (!window.pxlSeo || !/^\d{1,12}$/.test(matchId)) return;
+      var ts = Number(d.match_timestamp) || 0;
+      var league = champ.title || '';
+      var when = ts ? cairo(ts, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) + ' الساعة ' + cairoTime(ts) : '';
+      var score = (st === 'live' || st === 'finished') && d.home_scores != null && d.away_scores != null
+        ? d.home_scores + ' - ' + d.away_scores : '';
+      var name = home + ' ضد ' + away;
+      var title = name + (score ? ' (' + score + ')' : '') + (league ? ' - ' + league : '') + ' | PX League';
+      var lead = st === 'live' ? 'مباشر: مباراة ' : st === 'finished' ? 'نتيجة مباراة ' : 'موعد مباراة ';
+      var desc = lead + home + ' و' + away + (league ? ' في ' + league : '')
+        + (when ? '، ' + when + ' بتوقيت القاهرة' : '') + (d.Stadium ? '، على ملعب ' + d.Stadium : '')
+        + '. الأحداث والتشكيلات لحظة بلحظة على PX League.';
+      var url = (window.PXL_SITE_URL || location.origin).replace(/\/+$/, '') + '/p/match.html?id=' + matchId;
+      var homeLogo = imageUrl(TEAM_LOGO_BASE, (d.home_team || {}).image);
+      var awayLogo = imageUrl(TEAM_LOGO_BASE, (d.away_team || {}).image);
+      window.pxlSeo.set({ title: title, description: desc, url: url, image: homeLogo || awayLogo });
+
+      var homeTeam = { '@type': 'SportsTeam', name: home };
+      var awayTeam = { '@type': 'SportsTeam', name: away };
+      if (homeLogo) homeTeam.logo = homeLogo;
+      if (awayLogo) awayTeam.logo = awayLogo;
+      var ev = {
+        '@context': 'https://schema.org',
+        '@type': 'SportsEvent',
+        name: name,
+        description: desc,
+        url: url,
+        sport: 'Soccer',
+        eventStatus: 'https://schema.org/EventScheduled',
+        eventAttendanceMode: 'https://schema.org/OfflineEventAttendanceMode',
+        location: { '@type': 'Place', name: d.Stadium || league || name },
+        homeTeam: homeTeam,
+        awayTeam: awayTeam,
+        competitor: [homeTeam, awayTeam]
+      };
+      if (ts) ev.startDate = new Date(ts * 1000).toISOString();
+      if (league) ev.superEvent = { '@type': 'SportsEvent', name: league };
+      var images = [homeLogo, awayLogo].filter(Boolean);
+      if (images.length) ev.image = images;
+      window.pxlSeo.jsonLd('pxl-ld-match', ev);
     }
 
     // ------------------------------------------------------------------ events tab
@@ -4194,6 +4424,27 @@ body#layout .sidebar { width: 320px; }
     var postTitle = document.getElementById('px-post-title');
     if (arena) arena.hidden = false;
     if (postTitle) postTitle.hidden = true;
+    if (!arena) return;
+
+    // Ads: only slots with real ad code, and only after the player iframe has loaded
+    // (never beside an empty player or a loading placeholder). adsbygoogle is pushed
+    // here, once the slot is visible: a push into a hidden slot fails for good
+    // ("availableWidth=0"), which is why the widgets must not push themselves.
+    var slots = arena.querySelectorAll('.ad-slot');
+    for (var i = 0; i < slots.length; i++) {
+      if (slots[i].querySelector('ins.adsbygoogle, iframe, img')) slots[i].classList.add('is-filled');
+    }
+    var shown = false;
+    function showAds() {
+      if (shown) return;
+      shown = true;
+      arena.classList.add('is-ready');
+      var ins = arena.querySelectorAll('.ad-slot.is-filled ins.adsbygoogle:not([data-adsbygoogle-status])');
+      for (var j = 0; j < ins.length; j++) {
+        try { (window.adsbygoogle = window.adsbygoogle || []).push({}); } catch (e) {}
+      }
+    }
+    frame.addEventListener('load', showAds, { once: true });
   })();
   //]]>
   </script>
