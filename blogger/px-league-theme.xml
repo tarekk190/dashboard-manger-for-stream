@@ -10,7 +10,12 @@
   1. HOME PAGE  (data:view.isHomepage)
      "Today's matches" fixtures: <div id="matches-api-container"> + a placeholder
      script (search for "MATCHES API") where you plug in your API / Worker.
+     Sidebar: compact "أحدث الأخبار" card (7 latest posts) + "عرض كل الأخبار" button.
      No player, no ads.
+
+  NEWS PAGE  (/p/news.html, Blogger page titled "الأخبار", permalink "news")
+     Full archive: 12 cards per page (16:9 cover, category, title, summary, date)
+     with numbered pagination (?page=N), from the blog's own feed.
 
   2. MATCH POST (data:view.isPost)
      Live streaming arena: 16:9 player in the center, ads above and below it
@@ -144,7 +149,7 @@
   // picked here from location.pathname. The CSS hides #main for these
   // routes before the first paint, so the empty page article never flashes.
   window.PXL_ROUTE = ({ '/p/standings.html': 'standings', '/p/match.html': 'match', '/p/predictions.html': 'predictions',
-     '/p/matches.html': 'matches', '/p/app.html': 'app' })[location.pathname] || '';
+     '/p/matches.html': 'matches', '/p/app.html': 'app', '/p/news.html': 'news' })[location.pathname] || '';
   if (window.PXL_ROUTE) document.documentElement.setAttribute('data-pxl-route', window.PXL_ROUTE);
 
   // ---------------------------------------------------------------------------
@@ -205,6 +210,8 @@
         description: 'توقّع نتائج مباريات اليوم واجمع النقاط ونافس في ترتيب المتوقعين على PX League.' },
       app: { title: 'تطبيق PX League لأندرويد وآيفون',
         description: 'حمّل تطبيق PX League: نتائج المباريات لحظة بلحظة، الأخبار، التوقعات والدوريات الخاصة مع أصدقائك.' },
+      news: { title: 'الأخبار: آخر أخبار كرة القدم وتحليلات المباريات | PX League',
+        description: 'أرشيف أخبار PX League: تقارير المباريات، تحليلات القمم، أخبار الأندية والمنتخبات العربية والعالمية، ومتابعة الدوريات الكبرى يومًا بيوم.' },
       match: { title: 'تفاصيل المباراة | PX League',
         description: 'تفاصيل المباراة: النتيجة المباشرة، أحداث اللقاء، التشكيلات، الملعب والحكم والقناة الناقلة على PX League.' }
     };
@@ -217,6 +224,11 @@
       // Without a valid id the page has no content of its own and is kept out of the index.
       var id = new URLSearchParams(location.search).get('id') || '';
       if (/^\d{1,12}$/.test(id)) url += '?id=' + id; else robots = 'noindex, follow';
+    }
+    if (window.PXL_ROUTE === 'news') {
+      // /p/news.html?page=N: every archive page is its own canonical URL (page 1 has no parameter).
+      var pg = parseInt(new URLSearchParams(location.search).get('page'), 10);
+      if (pg > 1 && pg < 10000) { url += '?page=' + pg; r = { title: r.title.replace(' | ', ' - صفحة ' + pg + ' | '), description: r.description }; }
     }
     window.pxlSeo.set({ title: r.title, description: r.description, url: url, robots: robots });
   })();
@@ -433,95 +445,170 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 /* Cards appended by "عرض المزيد" fade in (disabled by the global prefers-reduced-motion rule) */
 .match-card--enter { animation: px-fade-in .35s ease both; }
 
-/* Match card */
+/* Match card: broadcast-style "scoreboard" card.
+   Layers: brand-tinted surface + a 3px status accent bar on top (lime = upcoming,
+   red = live, neutral = finished) + a soft radial "stage light" behind the centre. */
 .match-card {
+  --mc-accent: var(--brand);
+  --mc-tint: rgba(50, 205, 50, .07);
+  position: relative; isolation: isolate;
   display: block;
-  background: var(--surface);
+  background:
+    radial-gradient(120% 90% at 50% 0%, var(--mc-tint), transparent 62%),
+    linear-gradient(180deg, var(--surface) 0%, var(--surface-2) 140%);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--card-shadow);
   overflow: hidden;
   color: inherit;
-  transition: transform .25s ease, box-shadow .25s ease, border-color .25s ease;
+  transition: transform .28s cubic-bezier(.2, .8, .2, 1), box-shadow .28s ease, border-color .28s ease;
 }
+.match-card::before {                    /* status accent bar */
+  content: ''; position: absolute; inset: 0 0 auto; height: 3px; z-index: 1;
+  background: linear-gradient(90deg, transparent, var(--mc-accent) 30%, var(--mc-accent) 70%, transparent);
+  opacity: .9;
+}
+[data-theme="dark"] .match-card { --mc-tint: rgba(62, 230, 62, .09); }
 @media (hover: hover) and (pointer: fine) {
-  a.match-card:hover { transform: translateY(-3px); border-color: var(--brand); box-shadow: var(--shadow-hover); color: inherit; }
+  a.match-card:hover {
+    transform: translateY(-4px); color: inherit;
+    border-color: rgba(50, 205, 50, .55);
+    box-shadow: 0 0 0 1px rgba(50, 205, 50, .18), 0 14px 32px -12px rgba(50, 205, 50, .35), var(--shadow-hover);
+  }
+  a.match-card:hover .team__logo { transform: translateY(-2px) scale(1.04); }
+  a.match-card:hover .match-card__more { color: var(--brand-strong); gap: 8px; }
 }
 a.match-card:focus-visible { outline-offset: 3px; border-radius: var(--radius); }
 
 .match-card__top {                       /* league right, round left (RTL) */
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  padding: 9px 16px;
-  background: var(--card-head);
+  padding: 11px 16px 9px;
   border-bottom: 1px solid var(--border);
   font-size: .8rem; font-weight: 700; color: var(--text-muted);
 }
-.match-card__league { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.match-card__round { flex-shrink: 0; }
+.match-card__league {
+  display: inline-flex; align-items: center; gap: 8px; min-width: 0;
+  color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.match-card__league::before {            /* small accent diamond before the competition */
+  content: ''; flex-shrink: 0; width: 7px; height: 7px; border-radius: 2px; transform: rotate(45deg);
+  background: var(--mc-accent); box-shadow: 0 0 8px var(--mc-accent);
+}
+.match-card__round {
+  flex-shrink: 0; padding: 2px 9px; border-radius: 999px;
+  background: var(--surface-2); border: 1px solid var(--border); font-size: .72rem;
+}
+.match-card__round:empty { display: none; }
 
 .match-card__body {                      /* Team 1 right | center | Team 2 left (RTL) */
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding: 18px 16px;
+  padding: 20px 16px 18px;
 }
 .team {
   flex: 1 1 0; min-width: 0;
-  display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center;
+  display: flex; flex-direction: column; align-items: center; gap: 9px; text-align: center;
 }
-.team__logo {
+.team__logo {                            /* crest pedestal: soft halo + ring, logo itself untouched */
   position: relative;
-  width: 58px; height: 58px; border-radius: 50%;
+  width: 60px; height: 60px; border-radius: 50%;
   display: grid; place-items: center;
-  background: var(--surface-2); border: 1px solid var(--border);
+  background: radial-gradient(circle at 50% 35%, var(--surface) 0%, var(--surface-2) 72%);
+  border: 1px solid var(--border);
+  box-shadow: inset 0 -6px 14px rgba(0, 0, 0, .06), 0 6px 16px -8px rgba(0, 0, 0, .35);
   overflow: hidden;
+  transition: transform .28s cubic-bezier(.2, .8, .2, 1);
 }
+[data-theme="dark"] .team__logo { box-shadow: inset 0 -6px 14px rgba(0, 0, 0, .35), 0 0 0 3px rgba(255, 255, 255, .02), 0 8px 18px -8px rgba(0, 0, 0, .7); }
 .team__initials { font-weight: 800; font-size: .9rem; color: var(--text-muted); }
 .team__logo img {
   position: absolute; inset: 0; margin: auto;
-  width: 42px; height: 42px; object-fit: contain;
-  background: var(--surface-2);
+  width: 42px; height: 42px; object-fit: contain;     /* never stretched or cropped */
+  background: transparent;
 }
 .team__name { font-weight: 800; font-size: .95rem; line-height: 1.4; max-width: 100%; overflow-wrap: anywhere; }
 
-.match-center { flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; gap: 7px; min-width: 96px; }
-.match-time {
-  direction: ltr; font-size: 1.35rem; font-weight: 800; letter-spacing: .5px;
-  padding: 3px 14px; border-radius: 10px; background: var(--surface-2);
+.match-center { flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 100px; }
+.match-time,
+.match-score {
+  font-variant-numeric: tabular-nums; font-feature-settings: 'tnum' 1;
+  font-weight: 800; line-height: 1.15;
+  border-radius: 12px; border: 1px solid var(--border);
+  background: linear-gradient(180deg, var(--surface) 0%, var(--surface-2) 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06), 0 4px 12px -6px rgba(0, 0, 0, .3);
+}
+.match-time {                            /* kickoff: a scoreboard clock in a lime frame */
+  direction: ltr; font-size: 1.45rem; letter-spacing: 1px; padding: 5px 14px;
+  border-color: rgba(50, 205, 50, .4);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06), 0 0 0 3px var(--brand-soft), 0 6px 16px -8px rgba(50, 205, 50, .45);
 }
 .match-score {
   /* Flex follows the page direction: first number = Team 1, on Team 1's side */
-  display: inline-flex; align-items: center; gap: 8px;
-  font-size: 1.5rem; font-weight: 800;
-  padding: 2px 14px; border-radius: 10px; background: var(--surface-2);
+  display: inline-flex; align-items: center; gap: 10px;
+  font-size: 1.6rem; padding: 4px 16px;
 }
-.match-score .sep { color: var(--text-muted); font-weight: 600; }
+.match-score .sep { color: var(--text-muted); font-weight: 600; font-size: 1.1rem; }
 
+/* Status badges: one pill shape for every state */
 .badge {
   display: inline-flex; align-items: center; gap: 6px;
-  padding: 2px 10px; border-radius: 999px;
+  padding: 3px 11px; border-radius: 999px;
   font-size: .74rem; font-weight: 800; white-space: nowrap;
-  background: var(--surface-2); color: var(--text-muted);
+  background: var(--surface-2); color: var(--text-muted); border: 1px solid var(--border);
 }
-.badge--live { background: var(--live-soft); color: var(--live); }
+.badge--upcoming { background: var(--brand-soft); color: var(--brand-strong); border-color: rgba(50, 205, 50, .3); }
+[data-theme="dark"] .badge--upcoming { color: var(--brand); }
+.badge--upcoming::before {               /* tiny clock face */
+  content: ''; width: 9px; height: 9px; border-radius: 50%; box-sizing: border-box;
+  border: 1.6px solid currentColor;
+  background: linear-gradient(currentColor, currentColor) 50% 18% / 1.4px 3.4px no-repeat;
+}
+.badge--finished::before { content: '\2713'; font-size: .72rem; line-height: 1; }
+.badge--live { background: var(--live-soft); color: var(--live); border-color: rgba(225, 29, 72, .35); }
 .badge--live::before {
   content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--live);
   animation: pxl-pulse 1.6s infinite;
 }
 
-/* Live card: subtle red highlight */
-.match-card--live { border-color: rgba(225, 29, 72, .35); box-shadow: 0 0 0 1px rgba(225, 29, 72, .10), var(--card-shadow); }
-.match-card--live .match-score { color: var(--live); }
-.match-card--finished .match-score { color: var(--text-muted); }
-
-.match-card__bottom {                    /* commentator right, channel left (RTL) */
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding: 9px 16px;
-  border-top: 1px solid var(--border);
-  font-size: .8rem; color: var(--text-muted);
+/* States: same design language, different accent */
+.match-card--live {
+  --mc-accent: var(--live); --mc-tint: rgba(225, 29, 72, .09);
+  border-color: rgba(225, 29, 72, .35);
+  box-shadow: 0 0 0 1px rgba(225, 29, 72, .10), 0 10px 28px -14px rgba(225, 29, 72, .5), var(--card-shadow);
 }
-.match-card__meta { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.match-card--live::before { animation: mc-breathe 2.4s ease-in-out infinite; }
+.match-card--live .match-score { color: var(--live); border-color: rgba(225, 29, 72, .35); box-shadow: 0 0 0 3px var(--live-soft), 0 6px 16px -8px rgba(225, 29, 72, .5); }
+@keyframes mc-breathe { 0%, 100% { opacity: .5; } 50% { opacity: 1; } }
+.match-card--finished { --mc-accent: var(--text-muted); --mc-tint: transparent; }
+.match-card--finished::before { opacity: .35; }
+
+/* Footer: coverage chips. Known commentator / channel = solid chip; unknown = quiet
+   dashed "يُعلن لاحقًا" chip before kickoff, left out once the match has started;
+   nothing to show = only the "التفاصيل" hint. */
+.match-card__bottom {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 10px 16px 12px;
+  border-top: 1px solid var(--border);
+  font-size: .78rem; color: var(--text-muted);
+}
+.match-card__meta {
+  display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%;
+  padding: 4px 10px; border-radius: 999px;
+  background: var(--brand-soft); border: 1px solid rgba(50, 205, 50, .25);
+  color: var(--text); font-weight: 700;
+}
 .match-card__meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.match-card__meta svg { width: 15px; height: 15px; flex-shrink: 0; color: var(--brand-strong); }
+.match-card__meta svg { width: 14px; height: 14px; flex-shrink: 0; color: var(--brand-strong); }
 [data-theme="dark"] .match-card__meta svg { color: var(--brand); }
+.match-card__meta--pending {
+  background: transparent; border-style: dashed; border-color: var(--border);
+  color: var(--text-muted); font-weight: 600;
+}
+.match-card__meta--pending svg { color: var(--text-muted); opacity: .8; }
+[data-theme="dark"] .match-card__meta--pending svg { color: var(--text-muted); }
+.match-card__more {
+  margin-inline-start: auto; display: inline-flex; align-items: center; gap: 5px;
+  font-weight: 800; font-size: .76rem; color: var(--text-muted); transition: color .2s, gap .2s;
+}
 
 /* Loading / error / empty */
 .px-loader {
@@ -644,6 +731,49 @@ a.match-card:focus-visible { outline-offset: 3px; border-radius: var(--radius); 
   background: var(--surface); border: 1px solid var(--border); font-weight: 700; box-shadow: var(--shadow);
 }
 .pager a:hover { border-color: var(--brand); color: var(--text); box-shadow: var(--brand-glow); }
+
+/* Article cover image (first block of every news post body: <div class="post-cover">) */
+.post-body .post-cover { margin: 0 0 20px; }
+.post-body .post-cover img { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; object-fit: cover; border-radius: var(--radius-sm); }
+
+/* Home sidebar: "أحدث الأخبار" card (7 latest posts, rendered by the Blog widget and
+   moved into #home-news-slot). The sidebar stops being sticky on the home page:
+   with this card it is taller than the viewport. */
+.home-news { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow); }
+.home-news__title { margin: 0 0 12px; font-size: 1.05rem; font-weight: 800; display: flex; align-items: center; gap: 8px; }
+.home-news__title::before { content: ''; width: 4px; height: 18px; border-radius: 3px; background: var(--brand); }
+.home-news__list { list-style: none; margin: 0; padding: 0; display: grid; }
+.home-news__item { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 12px; align-items: start; padding: 10px 0; border-top: 1px solid var(--border); }
+.home-news__item:first-child { border-top: 0; padding-top: 0; }
+.home-news__thumb { position: relative; display: block; aspect-ratio: 16 / 9; border-radius: var(--radius-sm); overflow: hidden; background: var(--surface-2); }
+.home-news__thumb img { width: 100%; height: 100%; object-fit: cover; }
+.home-news__thumb .card__placeholder { font-size: 1rem; }
+.home-news__body { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.home-news__item-title { margin: 0; font-size: .9rem; line-height: 1.55; font-weight: 700;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.home-news__item-title a { color: var(--text); }
+.home-news__item-title a:hover { color: var(--brand-strong); }
+.home-news__meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--text-muted); font-size: .75rem; }
+.home-news__meta .card__tag { font-size: .7rem; padding: 1px 8px; }
+.home-news__empty { margin: 0 0 12px; color: var(--text-muted); font-size: .88rem; }
+.btn-all-news {
+  display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; margin-top: 14px;
+  border-radius: 999px; background: var(--brand); color: var(--brand-ink); font-weight: 800; box-shadow: var(--brand-glow);
+}
+.btn-all-news:hover { background: var(--brand-strong); color: var(--brand-ink); }
+@media (min-width: 1024px) { .sidebar:has(#home-news) { position: static; } }
+
+/* News archive page (/p/news.html) */
+.news-page__head { margin-bottom: 4px; }
+.news-page__status { margin: 0 0 14px; color: var(--text-muted); font-size: .88rem; }
+.news-pager { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 8px; margin-top: 28px; }
+.news-pager a, .news-pager span {
+  display: inline-grid; place-items: center; min-width: 44px; min-height: 44px; padding: 0 14px; border-radius: 999px;
+  background: var(--surface); border: 1px solid var(--border); font-weight: 700; box-shadow: var(--shadow);
+}
+.news-pager a:hover { border-color: var(--brand); color: var(--text); box-shadow: var(--brand-glow); }
+.news-pager [aria-current='page'] { background: var(--brand); border-color: var(--brand); color: var(--brand-ink); }
+.news-pager .news-pager__gap { background: none; border: 0; box-shadow: none; min-width: 20px; padding: 0; }
 
 /* Post / page article */
 .post-full { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 22px; box-shadow: var(--shadow); }
@@ -1730,6 +1860,7 @@ body#layout .sidebar { width: 320px; }
       <nav aria-label='القائمة الرئيسية' class='main-nav' id='main-nav'>
         <ul>
           <li><a expr:class='data:view.isHomepage ? &quot;is-active&quot; : &quot;&quot;' expr:href='data:blog.homepageUrl'>الرئيسية</a></li>
+          <li><a expr:href='data:blog.homepageUrl + &quot;p/news.html&quot;'>الأخبار</a></li>
           <li><a expr:href='data:blog.homepageUrl + &quot;p/matches.html&quot;'>المباريات</a></li>
           <li><a expr:href='data:blog.homepageUrl + &quot;p/predictions.html&quot;'>التوقعات</a></li>
           <li><a expr:href='data:blog.homepageUrl + &quot;p/standings.html&quot;'>الترتيب</a></li>
@@ -2194,6 +2325,27 @@ body#layout .sidebar { width: 320px; }
           </div>
         </div>
       </section>
+
+      <!-- ============================================================
+           NEWS ARCHIVE PAGE (/p/news.html, Blogger page "الأخبار"):
+           every post as a 16:9 card (cover, category, title, summary,
+           date), 12 per page, numbered pagination (?page=N). Filled from
+           the blog's own feed (/feeds/posts/summary, same origin) by the
+           "NEWS ARCHIVE" script at the end of this file.
+           ============================================================ -->
+      <section aria-labelledby='news-title' class='news-page' hidden='hidden' id='news-page'>
+        <div class='news-page__head'>
+          <h1 class='section-title' id='news-title'>الأخبار</h1>
+        </div>
+        <p class='site-intro'>تغطية يومية من فريق تحرير <strong>PX League</strong> لأهم أحداث كرة القدم العربية والعالمية: تقارير المباريات ونتائجها، تحليلات القمم قبل انطلاقها، أخبار الأندية والمنتخبات وانتقالات اللاعبين، ومتابعة الدوري الإنجليزي والإسباني ودوري أبطال أوروبا والدوري المصري ودوري روشن السعودي وغيرها.</p>
+        <p aria-live='polite' class='news-page__status' id='news-status'>&#160;</p>
+        <div class='post-grid' id='news-grid'>
+          <article aria-hidden='true' class='card'><div class='card__media'><span class='skeleton-block'>&#160;</span></div><div class='card__body'><span class='skeleton-block skeleton-tag'>&#160;</span><span class='skeleton-block skeleton-line skeleton-line--title'>&#160;</span><span class='skeleton-block skeleton-line'>&#160;</span><span class='skeleton-block skeleton-line skeleton-line--short'>&#160;</span></div></article>
+          <article aria-hidden='true' class='card'><div class='card__media'><span class='skeleton-block'>&#160;</span></div><div class='card__body'><span class='skeleton-block skeleton-tag'>&#160;</span><span class='skeleton-block skeleton-line skeleton-line--title'>&#160;</span><span class='skeleton-block skeleton-line'>&#160;</span><span class='skeleton-block skeleton-line skeleton-line--short'>&#160;</span></div></article>
+          <article aria-hidden='true' class='card'><div class='card__media'><span class='skeleton-block'>&#160;</span></div><div class='card__body'><span class='skeleton-block skeleton-tag'>&#160;</span><span class='skeleton-block skeleton-line skeleton-line--title'>&#160;</span><span class='skeleton-block skeleton-line'>&#160;</span><span class='skeleton-block skeleton-line skeleton-line--short'>&#160;</span></div></article>
+        </div>
+        <nav aria-label='صفحات الأخبار' class='news-pager' hidden='hidden' id='news-pager'>&#160;</nav>
+      </section>
       </b:if>
 
       <b:section class='main' id='main' maxwidgets='1' showaddelement='no'>
@@ -2244,48 +2396,48 @@ body#layout .sidebar { width: 320px; }
                 <p>الصفحة التي تبحث عنها غير موجودة أو تم نقلها.</p>
                 <a class='px-retry' expr:href='data:blog.homepageUrl'>العودة للرئيسية</a>
               </div>
+            <b:elseif cond='data:view.isHomepage'/>
+              <!-- HOME: compact "أحدث الأخبار" card, at most 7 posts. Rendered here (server
+                   side, crawlable) and moved into the sidebar slot #home-news-slot by the
+                   inline script next to it. The full archive lives on /p/news.html. -->
+              <section aria-labelledby='home-news-title' class='home-news' id='home-news'>
+                <h2 class='home-news__title' id='home-news-title'>أحدث الأخبار</h2>
+                <b:if cond='data:posts.empty'>
+                  <p class='home-news__empty'>ستظهر أحدث الأخبار هنا قريبًا.</p>
+                <b:else/>
+                  <ol class='home-news__list'>
+                    <b:loop index='i' values='data:posts' var='post'>
+                      <b:if cond='data:i lt 7 and data:post.title'>
+                        <li class='home-news__item'>
+                          <a class='home-news__thumb' expr:aria-label='data:post.title' expr:href='data:post.url' tabindex='-1'>
+                            <b:if cond='data:post.featuredImage'>
+                              <img expr:alt='data:post.title' expr:src='resizeImage(data:post.featuredImage, 240, &quot;16:9&quot;)' height='68' loading='lazy' width='120'/>
+                            <b:else/>
+                              <span class='card__placeholder'>PX</span>
+                            </b:if>
+                          </a>
+                          <div class='home-news__body'>
+                            <h3 class='home-news__item-title'><a expr:href='data:post.url'><data:post.title/></a></h3>
+                            <div class='home-news__meta'>
+                              <b:if cond='data:post.labels'>
+                                <a class='card__tag' expr:href='data:post.labels.first.url'><data:post.labels.first.name/></a>
+                              </b:if>
+                              <time expr:datetime='data:post.date.iso8601'><data:post.date/></time>
+                            </div>
+                          </div>
+                        </li>
+                      </b:if>
+                    </b:loop>
+                  </ol>
+                </b:if>
+                <a class='btn-all-news' expr:href='data:blog.homepageUrl + &quot;p/news.html&quot;'>عرض كل الأخبار <span aria-hidden='true'>&#8592;</span></a>
+              </section>
             <b:else/>
               <h2 class='section-title'>
-                <b:if cond='data:view.isLabelSearch'><data:view.search.label/><b:elseif cond='data:view.isHomepage'/>أحدث الأخبار<b:else/>المنشورات</b:if>
+                <b:if cond='data:view.isLabelSearch'><data:view.search.label/><b:else/>المنشورات</b:if>
               </h2>
               <b:if cond='data:posts.empty'>
-                <b:if cond='data:view.isHomepage'>
-                  <!-- Latest news placeholder: replaced automatically by your posts as soon as you publish -->
-                  <div aria-hidden='true' class='news-placeholder'>
-                    <div class='post-grid'>
-                    <article class='card'>
-                      <div class='card__media'><span class='skeleton-block'>&#160;</span></div>
-                      <div class='card__body'>
-                        <span class='skeleton-block skeleton-tag'>&#160;</span>
-                        <span class='skeleton-block skeleton-line skeleton-line--title'>&#160;</span>
-                        <span class='skeleton-block skeleton-line'>&#160;</span>
-                        <span class='skeleton-block skeleton-line skeleton-line--short'>&#160;</span>
-                      </div>
-                    </article>
-                    <article class='card'>
-                      <div class='card__media'><span class='skeleton-block'>&#160;</span></div>
-                      <div class='card__body'>
-                        <span class='skeleton-block skeleton-tag'>&#160;</span>
-                        <span class='skeleton-block skeleton-line skeleton-line--title'>&#160;</span>
-                        <span class='skeleton-block skeleton-line'>&#160;</span>
-                        <span class='skeleton-block skeleton-line skeleton-line--short'>&#160;</span>
-                      </div>
-                    </article>
-                    <article class='card'>
-                      <div class='card__media'><span class='skeleton-block'>&#160;</span></div>
-                      <div class='card__body'>
-                        <span class='skeleton-block skeleton-tag'>&#160;</span>
-                        <span class='skeleton-block skeleton-line skeleton-line--title'>&#160;</span>
-                        <span class='skeleton-block skeleton-line'>&#160;</span>
-                        <span class='skeleton-block skeleton-line skeleton-line--short'>&#160;</span>
-                      </div>
-                    </article>
-                    </div>
-                  </div>
-                  <p class='news-placeholder__note'>ستظهر أحدث الأخبار هنا قريبًا.</p>
-                <b:else/>
-                  <div class='empty-state'>لا توجد منشورات بعد.</div>
-                </b:if>
+                <div class='empty-state'>لا توجد منشورات بعد.</div>
               <b:else/>
                 <div class='post-grid'>
                   <b:loop values='data:posts' var='post'>
@@ -2337,6 +2489,133 @@ body#layout .sidebar { width: 320px; }
       })();
       //]]>
       </script>
+
+      <!-- ================================================================
+           NEWS ARCHIVE (/p/news.html): reads the blog's summary feed (same
+           origin: no Worker, no CORS) and renders 12 cards per page.
+           Untitled posts (e.g. an image-hosting draft published by mistake)
+           are skipped. Every feed value is HTML-escaped.
+           ================================================================ -->
+      <script>
+      //<![CDATA[
+      (function () {
+        if (window.PXL_ROUTE !== 'news') return;
+        var PER_PAGE = 12;
+        var grid = document.getElementById('news-grid');
+        var pager = document.getElementById('news-pager');
+        var status = document.getElementById('news-status');
+        if (!grid) return;
+        var page = parseInt(new URLSearchParams(location.search).get('page'), 10);
+        if (!(page >= 1 && page < 10000)) page = 1;
+
+        function esc(s) {
+          return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+          });
+        }
+        function cover(url) {
+          // Feed thumbnails are 72px squares (/s72-c/ or =s72-c): ask the CDN for a 640x360 crop.
+          if (!url) return '';
+          return url.replace(/\/s72-c(-[^/]*)?\//, '/w640-h360-p-k-no-nu/').replace(/=s72-c(-[^/]*)?$/, '=w640-h360-p-k-no-nu');
+        }
+        function excerpt(text) {
+          text = String(text || '').replace(/\s+/g, ' ').trim();
+          if (text.length <= 170) return text;
+          var cut = text.slice(0, 170);
+          var sp = cut.lastIndexOf(' ');
+          return (sp > 100 ? cut.slice(0, sp) : cut) + '…';
+        }
+        var dateFmt;
+        try { dateFmt = new Intl.DateTimeFormat('ar-EG', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Africa/Cairo' }); } catch (e) {}
+        function fmtDate(iso) {
+          var d = new Date(iso);
+          if (isNaN(d)) return '';
+          return dateFmt ? dateFmt.format(d) : d.toISOString().slice(0, 10);
+        }
+        function pageHref(n) { return n > 1 ? '?page=' + n : location.pathname; }
+
+        function card(e) {
+          var link = '';
+          (e.link || []).forEach(function (l) { if (l.rel === 'alternate') link = l.href; });
+          var title = e.title && e.title.$t;
+          if (!title || !link) return '';
+          var img = cover(e.media$thumbnail && e.media$thumbnail.url);
+          var label = e.category && e.category[0] && e.category[0].term;
+          var iso = e.published && e.published.$t;
+          return '<article class="card">' +
+            '<a class="card__media" href="' + esc(link) + '" aria-label="' + esc(title) + '">' +
+              (img ? '<img src="' + esc(img) + '" alt="' + esc(title) + '" width="640" height="360" loading="lazy" decoding="async">'
+                   : '<span class="card__placeholder">PX</span>') +
+            '</a>' +
+            '<div class="card__body">' +
+              (label ? '<a class="card__tag" href="/search/label/' + encodeURIComponent(label) + '">' + esc(label) + '</a>' : '') +
+              '<h2 class="card__title"><a href="' + esc(link) + '">' + esc(title) + '</a></h2>' +
+              '<p class="card__excerpt">' + esc(excerpt(e.summary && e.summary.$t)) + '</p>' +
+              (iso ? '<time class="card__date" datetime="' + esc(iso) + '">' + esc(fmtDate(iso)) + '</time>' : '') +
+            '</div></article>';
+        }
+
+        function renderPager(pages) {
+          if (pages <= 1) { pager.hidden = true; return; }
+          var out = [];
+          if (page > 1) out.push('<a href="' + pageHref(page - 1) + '" rel="prev">&#8594; الأحدث</a>');
+          var last = 0;
+          for (var n = 1; n <= pages; n++) {
+            if (n !== 1 && n !== pages && Math.abs(n - page) > 1) continue;
+            if (last && n - last > 1) out.push('<span class="news-pager__gap" aria-hidden="true">…</span>');
+            out.push(n === page ? '<span aria-current="page">' + n + '</span>'
+                                : '<a href="' + pageHref(n) + '" aria-label="الصفحة ' + n + '">' + n + '</a>');
+            last = n;
+          }
+          if (page < pages) out.push('<a href="' + pageHref(page + 1) + '" rel="next">الأقدم &#8592;</a>');
+          pager.innerHTML = out.join('');
+          pager.hidden = false;
+        }
+
+        function fail() {
+          grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1">تعذّر تحميل الأخبار الآن. <a class="px-retry" href="' + esc(location.href) + '">إعادة المحاولة</a></div>';
+          if (status) status.textContent = '';
+        }
+
+        var url = '/feeds/posts/summary?alt=json&max-results=' + PER_PAGE + '&start-index=' + ((page - 1) * PER_PAGE + 1);
+        fetch(url, { credentials: 'omit' }).then(function (r) {
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r.json();
+        }).then(function (data) {
+          var feed = data && data.feed || {};
+          var entries = feed.entry || [];
+          var total = parseInt(feed.openSearch$totalResults && feed.openSearch$totalResults.$t, 10) || 0;
+          var pages = Math.max(1, Math.ceil(total / PER_PAGE));
+          if (page > pages && total) { location.replace(pageHref(pages)); return; }
+          var html = entries.map(card).join('');
+          grid.innerHTML = html || '<div class="empty-state" style="grid-column:1/-1">لا توجد أخبار منشورة بعد.</div>';
+          if (status) status.textContent = total ? ('عدد الأخبار المنشورة: ' + total + (pages > 1 ? ' — الصفحة ' + page + ' من ' + pages : '')) : '';
+          renderPager(pages);
+
+          // Structured data: this archive page as a CollectionPage listing its articles.
+          if (window.pxlSeo) {
+            var base = (window.PXL_SITE_URL || location.origin).replace(/\/+$/, '');
+            var items = [];
+            entries.forEach(function (e) {
+              var href = '';
+              (e.link || []).forEach(function (l) { if (l.rel === 'alternate') href = l.href; });
+              if (href && e.title && e.title.$t) items.push({ '@type': 'ListItem', position: (page - 1) * PER_PAGE + items.length + 1, url: href, name: e.title.$t });
+            });
+            window.pxlSeo.jsonLd('pxl-ld-news', {
+              '@context': 'https://schema.org',
+              '@type': 'CollectionPage',
+              name: document.title,
+              url: base + location.pathname + (page > 1 ? '?page=' + page : ''),
+              inLanguage: 'ar',
+              isPartOf: { '@type': 'WebSite', '@id': base + '/#website', url: base + '/', name: 'PX League' },
+              publisher: { '@type': 'Organization', '@id': base + '/#organization', name: 'PX League', url: base + '/' },
+              mainEntity: { '@type': 'ItemList', itemListElement: items }
+            });
+          }
+        }).catch(fail);
+      })();
+      //]]>
+      </script>
       </b:if>
     </main>
 
@@ -2360,6 +2639,20 @@ body#layout .sidebar { width: 320px; }
           </a>
         </div>
       </section>
+
+      <b:if cond='data:view.isHomepage'>
+      <!-- Home only: the "أحدث الأخبار" card rendered by the Blog widget lands here -->
+      <div id='home-news-slot'>&#160;</div>
+      <script>
+      //<![CDATA[
+      (function () {
+        var card = document.getElementById('home-news');
+        var slot = document.getElementById('home-news-slot');
+        if (card && slot) slot.parentNode.replaceChild(card, slot);
+      })();
+      //]]>
+      </script>
+      </b:if>
 
       <b:section class='sidebar-section' id='sidebar' showaddelement='yes'>
       </b:section>
@@ -2391,6 +2684,7 @@ body#layout .sidebar { width: 320px; }
           <h3>روابط سريعة</h3>
           <ul class='footer-links'>
             <li><a expr:href='data:blog.homepageUrl'>الرئيسية</a></li>
+            <li><a expr:href='data:blog.homepageUrl + &quot;p/news.html&quot;'>الأخبار</a></li>
             <li><a expr:href='data:blog.homepageUrl + &quot;p/matches.html&quot;'>المباريات</a></li>
             <li><a expr:href='data:blog.homepageUrl + &quot;p/predictions.html&quot;'>التوقعات</a></li>
             <li><a expr:href='data:blog.homepageUrl + &quot;p/standings.html&quot;'>الترتيب</a></li>
@@ -2845,6 +3139,18 @@ body#layout .sidebar { width: 320px; }
           <span class="team__name">${esc(team.name)}</span>
         </div>`;
     }
+    // Footer chips: known commentator / channel = solid chip; unknown = quiet dashed
+    // "يُعلن لاحقًا" chip before kickoff, left out once the match has started.
+    function coverageHtml(m) {
+      var pre = m.status !== 'live' && m.status !== 'finished';
+      function chip(icon, text, pending) {
+        return `<span class="match-card__meta${pending ? ' match-card__meta--pending' : ''}">${icon}<span>${esc(text)}</span></span>`;
+      }
+      var out = '';
+      if (m.commentator) out += chip(ICON_MIC, m.commentator); else if (pre) out += chip(ICON_MIC, 'المعلق يُعلن لاحقًا', true);
+      if (m.channel) out += chip(ICON_TV, m.channel); else if (pre) out += chip(ICON_TV, 'القناة تُعلن لاحقًا', true);
+      return out + '<span class="match-card__more">التفاصيل <span aria-hidden="true">&#8592;</span></span>';
+    }
     function badgeHtml(m) {
       if (m.status === 'live') return 'مباشر' + (m.minute ? ` <span dir="ltr">${esc(m.minute)}'</span>` : '');
       return esc(m.status === 'finished' ? 'انتهت' : m.status === 'other' ? 'غير محدد' : 'لم تبدأ');
@@ -2857,13 +3163,10 @@ body#layout .sidebar { width: 320px; }
           <div class="match-card__top"><span class="match-card__league">${esc(m.league)}</span><span class="match-card__round">${esc(m.round)}</span></div>
           <div class="match-card__body">
             ${teamHtml(m.home)}
-            <div class="match-center">${center}<span class="badge${m.status === 'live' ? ' badge--live' : ''}">${badgeHtml(m)}</span></div>
+            <div class="match-center">${center}<span class="badge badge--${m.status === 'live' ? 'live' : m.status === 'finished' ? 'finished' : 'upcoming'}">${badgeHtml(m)}</span></div>
             ${teamHtml(m.away)}
           </div>
-          <div class="match-card__bottom">
-            <span class="match-card__meta">${ICON_MIC}<span>${esc(m.commentator || 'غير متوفر')}</span></span>
-            <span class="match-card__meta">${ICON_TV}<span>${esc(m.channel || 'غير متوفر')}</span></span>
-          </div>
+          <div class="match-card__bottom">${coverageHtml(m)}</div>
         </a>`;
     }
 
@@ -4641,11 +4944,19 @@ body#layout .sidebar { width: 320px; }
       var center = m.status === 'live' || m.status === 'finished'
         ? `<span class="match-score"><span>${esc(m.scoreHome)}</span><span class="sep">-</span><span>${esc(m.scoreAway)}</span></span>`
         : `<span class="match-time">${esc(m.time)}</span>`;
-      return `${center}<span class="badge${m.status === 'live' ? ' badge--live' : ''}">${liveBadgeHtml(m)}</span>`;
+      return `${center}<span class="badge badge--${m.status === 'live' ? 'live' : m.status === 'finished' ? 'finished' : 'upcoming'}">${liveBadgeHtml(m)}</span>`;
     }
+    // Footer chips: known commentator / channel = solid chip; unknown = quiet dashed
+    // "يُعلن لاحقًا" chip before kickoff, left out once the match has started.
     function cardBottomHtml(m) {
-      return `<span class="match-card__meta">${ICON_MIC}<span>${esc(m.commentator || 'غير متوفر')}</span></span>
-            <span class="match-card__meta">${ICON_TV}<span>${esc(m.channel || 'غير متوفر')}</span></span>`;
+      var pre = m.status !== 'live' && m.status !== 'finished';
+      function chip(icon, text, pending) {
+        return `<span class="match-card__meta${pending ? ' match-card__meta--pending' : ''}">${icon}<span>${esc(text)}</span></span>`;
+      }
+      var out = '';
+      if (m.commentator) out += chip(ICON_MIC, m.commentator); else if (pre) out += chip(ICON_MIC, 'المعلق يُعلن لاحقًا', true);
+      if (m.channel) out += chip(ICON_TV, m.channel); else if (pre) out += chip(ICON_TV, 'القناة تُعلن لاحقًا', true);
+      return out + '<span class="match-card__more">التفاصيل <span aria-hidden="true">&#8592;</span></span>';
     }
     function cardParts(m) {
       return { cls: cardClass(m), top: cardTopHtml(m), center: cardCenterHtml(m), bottom: cardBottomHtml(m) };
