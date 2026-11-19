@@ -17,10 +17,11 @@ export default {
     const pathname = url.pathname;
 
     // -----------------------------------------------------
-    // CORS – only allow Blogspot domains (adjust if needed)
+    // CORS – the PX League site (custom domain) and Blogspot domains
     // -----------------------------------------------------
     const origin = request.headers.get("Origin") || "";
-    const allowedOrigin = origin.endsWith("blogspot.com") ? origin : "";
+    const allowedOrigin = (origin === "https://www.px-league.site" || origin === "https://px-league.site"
+      || origin.endsWith(".blogspot.com")) ? origin : "";
     const cors = allowedOrigin ? corsHeaders(allowedOrigin) : {};
 
     try {

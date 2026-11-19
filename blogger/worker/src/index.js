@@ -5,8 +5,13 @@
 // >>> YOUR BLOG ORIGIN(S) <<<
 // Exact origins: scheme + host only. A trailing slash is tolerated (it is removed below),
 // because browsers send the Origin header WITHOUT one.
-// Add your custom domain as another entry if you use one, e.g. "https://www.pxleague.com".
+// The blog moved to the custom domain www.px-league.site (2026-11-19). Blogger 301-redirects
+// the apex and the old *.blogspot.com address to it, but both stay listed so a page that was
+// still open (or a cached copy) on the old host keeps working.
+// Extra origins can be added without a code change via the ALLOWED_ORIGINS var (comma separated).
 const ALLOWED_ORIGINS = [
+  "https://www.px-league.site",
+  "https://px-league.site",
   "https://powerdoflearn.blogspot.com",
 ].map((o) => o.trim().replace(/\/+$/, ""));
 // The dashboard's origin(s) come from the DASHBOARD_ORIGINS variable (comma separated),
@@ -36,6 +41,7 @@ const LOCAL_DASHBOARD_ORIGINS = [
 //   wrangler secret put SUPABASE_URL        https://<project>.supabase.co
 //   wrangler secret put SUPABASE_ANON_KEY   anon JWT or sb_publishable_... key (RLS: read-only)
 //   DASHBOARD_ORIGINS (var)                 https://your-dashboard.vercel.app
+//   ALLOWED_ORIGINS (var, optional)         extra blog origins, added to the list above
 // Without Supabase settings the proxy works as before (no filtering).
 //
 // Responses are cached at Cloudflare's edge, so many visitors share one upstream request.
@@ -96,9 +102,11 @@ export default {
       .split(",").map((o) => o.trim().replace(/\/+$/, "")).filter(Boolean)
       .concat(LOCAL_DASHBOARD_ORIGINS);
     const isDashboard = dashboardOrigins.includes(origin);
+    const siteOrigins = ALLOWED_ORIGINS.concat(String(env.ALLOWED_ORIGINS || "")
+      .split(",").map((o) => o.trim().replace(/\/+$/, "")).filter(Boolean));
 
     // --- CORS gate ----------------------------------------------------------
-    if (!ALLOWED_ORIGINS.includes(origin) && !isDashboard) {
+    if (!siteOrigins.includes(origin) && !isDashboard) {
       // No CORS headers: the browser blocks the response for foreign pages.
       return json({ error: "FORBIDDEN_ORIGIN", message: "Origin not allowed" }, 403, {});
     }
