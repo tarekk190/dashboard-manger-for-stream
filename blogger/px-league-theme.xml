@@ -39,7 +39,7 @@
 <html b:css='false' b:defaultwidgetversion='2' b:layoutsVersion='3' b:responsive='true' b:templateVersion='2.0.0' dir='rtl' lang='ar' xmlns='http://www.w3.org/1999/xhtml' xmlns:b='http://www.google.com/2005/gml/b' xmlns:data='http://www.google.com/2005/gml/data' xmlns:expr='http://www.google.com/2005/gml/expr'>
 <head>
   <meta charset='UTF-8'/>
-  <meta content='width=device-width, initial-scale=1' name='viewport'/>
+  <meta content='width=device-width, initial-scale=1, viewport-fit=cover' name='viewport'/>
   <meta content='#32cd32' name='theme-color'/>
   <title><b:if cond='data:view.isHomepage'><data:blog.title.escaped/> | مباريات اليوم والنتائج المباشرة وترتيب الدوريات<b:else/><data:view.title.escaped/> | <data:blog.title.escaped/></b:if></title>
 
@@ -1964,6 +1964,64 @@ body { overflow-x: clip; }
   .main-nav a { min-height: 44px; }
 }
 
+/* ==========================================================================
+   Mobile bottom navigation (<= 768px): native-app style tab bar.
+   Dark frosted emerald-slate glass in both themes, safe-area aware. The page
+   reserves its height (body padding-bottom) so the bar never covers the last
+   match card, the pager or the footer's legal links.
+   ========================================================================== */
+.bottom-nav { display: none; }
+@media (max-width: 768px) {
+  :root { --bottom-nav-h: 64px; }
+  .bottom-nav {
+    position: fixed; bottom: 0; inset-inline: 0; z-index: 999;
+    display: flex; align-items: stretch; justify-content: space-around;
+    height: calc(var(--bottom-nav-h) + env(safe-area-inset-bottom, 0px));
+    padding: 0 6px env(safe-area-inset-bottom, 0px);
+    background: rgba(9, 22, 19, .84);
+    -webkit-backdrop-filter: blur(16px) saturate(140%); backdrop-filter: blur(16px) saturate(140%);
+    border-top: 1px solid rgba(16, 185, 129, .18);
+    box-shadow: 0 -10px 30px -12px rgba(0, 0, 0, .45);
+  }
+  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .bottom-nav { background: rgba(9, 22, 19, .97); }
+  }
+  .bn__item {
+    position: relative; flex: 1 1 0; min-width: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+    color: #94a3b8; text-decoration: none;
+    -webkit-tap-highlight-color: transparent;
+    transition: color .25s ease, transform .35s cubic-bezier(.34, 1.56, .64, 1);
+  }
+  .bn__item:hover { color: #cbd5e1; }
+  .bn__item:active { transform: scale(.92); transition-duration: .1s; }
+  .bn__item:focus-visible { outline: 2px solid #34d399; outline-offset: -4px; border-radius: 12px; }
+  .bn__icon { position: relative; display: grid; place-items: center; width: 52px; height: 30px; }
+  .bn__icon::before {                    /* emerald pill behind the active icon */
+    content: ''; position: absolute; inset: 0; border-radius: 999px;
+    background: linear-gradient(180deg, rgba(16, 185, 129, .30), rgba(16, 185, 129, .16));
+    box-shadow: 0 0 16px rgba(16, 185, 129, .45), inset 0 0 0 1px rgba(52, 211, 153, .35);
+    opacity: 0; transform: scaleX(.55);
+    transition: opacity .25s ease, transform .35s cubic-bezier(.34, 1.56, .64, 1);
+  }
+  .bn__icon svg { position: relative; width: 22px; height: 22px; }
+  .bn__label { max-width: 100%; font-size: 11.5px; font-weight: 600; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bn__item.is-active { color: #34d399; }
+  .bn__item.is-active .bn__icon::before { opacity: 1; transform: none; }
+  .bn__item.is-active .bn__icon svg { filter: drop-shadow(0 0 6px rgba(52, 211, 153, .55)); }
+  .bn__item.is-active .bn__label { font-weight: 800; color: #6ee7b7; }
+
+  /* Reserve the bar's height at the end of every page */
+  body { padding-bottom: calc(var(--bottom-nav-h) + 12px + env(safe-area-inset-bottom, 0px)); }
+
+  /* Top header: logo + utility icons only (every nav link lives in the bottom bar) */
+  .menu-toggle, .main-nav { display: none !important; }
+  .header-social { display: flex; }
+}
+@media (max-width: 359.98px) {
+  .header-social .is-whatsapp { display: none; }   /* 320px phones: keep the header on one line */
+}
+
 /* Small phones (iPhone SE / low-end Android, 320-360px) */
 @media (max-width: 360px) {
   .container { padding-inline: 12px; }
@@ -2965,6 +3023,38 @@ body#layout .sidebar { width: 320px; }
       </div>
     </div>
   </footer>
+
+  <!-- ======================================================================
+       MOBILE BOTTOM NAVIGATION (<= 768px only; desktop keeps the header nav).
+       Tabs = the working primary routes. Active tab: server side for home /
+       posts / listings, then the inline script below for the /p/ routes
+       (runs before first paint: no flash, no layout shift).
+       ====================================================================== -->
+  <nav aria-label='التنقل السفلي' class='bottom-nav' id='bottom-nav'>
+    <a expr:class='data:view.isHomepage ? &quot;bn__item is-active&quot; : &quot;bn__item&quot;' data-tab='home' expr:href='data:blog.homepageUrl'><span class='bn__icon'><svg aria-hidden='true' fill='none' stroke='currentColor' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.9' viewBox='0 0 24 24'><rect height='16' rx='2.5' width='20' x='2' y='4'/><path d='M12 4v16'/><circle cx='12' cy='12' r='3'/><path d='M2 9h3v6H2M22 9h-3v6h3'/></svg></span><span class='bn__label'>المباريات</span></a>
+    <a expr:class='(data:view.isPost or data:view.isSearch) ? &quot;bn__item is-active&quot; : &quot;bn__item&quot;' data-tab='news' expr:href='data:blog.homepageUrl + &quot;p/news.html&quot;'><span class='bn__icon'><svg aria-hidden='true' fill='none' stroke='currentColor' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.9' viewBox='0 0 24 24'><path d='M4 5.5A1.5 1.5 0 0 1 5.5 4h11A1.5 1.5 0 0 1 18 5.5V19a1 1 0 0 0 2 0V9'/><path d='M18 19.5A1.5 1.5 0 0 1 16.5 21h-11A1.5 1.5 0 0 1 4 19.5V5.5'/><path d='M8 8h6M8 12h6M8 16h3'/></svg></span><span class='bn__label'>الأخبار</span></a>
+    <a class='bn__item' data-tab='standings' expr:href='data:blog.homepageUrl + &quot;p/standings.html&quot;'><span class='bn__icon'><svg aria-hidden='true' fill='none' stroke='currentColor' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.9' viewBox='0 0 24 24'><path d='M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0z'/><path d='M17 5h3v2a3 3 0 0 1-3 3M7 5H4v2a3 3 0 0 0 3 3'/></svg></span><span class='bn__label'>الترتيب</span></a>
+    <a class='bn__item' data-tab='predictions' expr:href='data:blog.homepageUrl + &quot;p/predictions.html&quot;'><span class='bn__icon'><svg aria-hidden='true' fill='none' stroke='currentColor' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.9' viewBox='0 0 24 24'><circle cx='12' cy='12' r='9'/><circle cx='12' cy='12' r='5'/><circle cx='12' cy='12' fill='currentColor' r='1.2'/></svg></span><span class='bn__label'>التوقعات</span></a>
+    <a class='bn__item' data-tab='app' expr:href='data:blog.homepageUrl + &quot;p/app.html&quot;'><span class='bn__icon'><svg aria-hidden='true' fill='none' stroke='currentColor' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.9' viewBox='0 0 24 24'><rect height='19' rx='3' width='12' x='6' y='2.5'/><path d='M10.5 18.5h3'/></svg></span><span class='bn__label'>التطبيق</span></a>
+  </nav>
+  <script>
+  //<![CDATA[
+  (function () {
+    var nav = document.getElementById('bottom-nav');
+    if (!nav) return;
+    // /p/ routes (client-side): match details belong to the matches tab
+    var map = { news: 'news', standings: 'standings', predictions: 'predictions', app: 'app', match: 'home', matches: 'home' };
+    var tab = map[window.PXL_ROUTE || ''];
+    var items = nav.querySelectorAll('.bn__item');
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i];
+      if (tab) it.classList.toggle('is-active', it.getAttribute('data-tab') === tab);
+      if (it.classList.contains('is-active')) it.setAttribute('aria-current', 'page');
+    }
+  })();
+  //]]>
+  </script>
+
 
   <!-- ======================================================================
        Global UI: theme toggle, mobile menu, footer year
