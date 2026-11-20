@@ -17,14 +17,10 @@
      Full archive: 12 cards per page (16:9 cover, category, title, summary, date)
      with numbered pagination (?page=N), from the blog's own feed.
 
-  2. MATCH POST (data:view.isPost)
-     Live streaming arena: 16:9 player in the center, ads above and below it
-     (728x90 / responsive). Ads are pushed only after the player has loaded.
-     The stream comes from the POST ITSELF, so every match post plays its own stream.
-     In the post editor (HTML view) add ONE of these:
-       a) <div data-stream-src="https://live.smarterwho.site/player/?channel=b1"></div>
-       b) a normal <iframe src="..."></iframe>  (the first iframe in the post is used)
-     The theme moves it into the 16:9 player box above the ads.
+  2. POST (data:view.isPost)
+     Article with two ad slots: "ad-top" above the article and "ad-bottom" below it
+     (Layout page widgets, 728x90 / responsive). The site does not host or embed live
+     match streams: an iframe in a post (e.g. a YouTube highlight) is ordinary content.
 
   Static pages (About, Privacy...) use a plain layout. Label/search pages show post cards.
   Legal pages linked from the footer (create them in Blogger with these exact URLs):
@@ -253,6 +249,24 @@
       return window.pxlLang() === 'en' ? 'en-GB' : (latinDigits ? 'ar-EG-u-nu-latn' : 'ar-EG');
     };
   })();
+  // Blogger's EU cookie notice (cookienotice.js, shown to visitors from the EU/EEA/UK).
+  // Without these options Blogger writes it in the BROWSER's language (French for a French
+  // browser, etc.); here it follows the site language instead and links to our privacy policy.
+  // Blogger reads window.cookieOptions when the notice script runs at the end of <body>.
+  // The look is restyled in the CSS ("Cookie notice"). This is a notice, not a consent
+  // manager: for AdSense traffic from the EEA/UK/Switzerland, also enable a Google-certified
+  // CMP (AdSense > Privacy & messaging) once the site is approved.
+  window.cookieOptions = window.pxlLang() === 'en' ? {
+    msg: 'This site uses cookies from Google to deliver its services, analyse traffic and show ads. By using this site, you agree to its use of cookies.',
+    close: 'OK',
+    learn: 'Privacy policy',
+    link: '/p/privacy-policy.html'
+  } : {
+    msg: 'يستخدم هذا الموقع ملفات تعريف الارتباط (الكوكيز) من Google لتقديم خدماته وتحليل الزيارات وعرض الإعلانات. باستخدامك الموقع فإنك توافق على ذلك.',
+    close: 'موافق',
+    learn: 'سياسة الخصوصية',
+    link: '/p/privacy-policy.html'
+  };
   // Client-side routing for the standings / match pages. Blogger's URL
   // comparisons in <b:if> evaluate to false on this blog, so the route is
   // picked here from location.pathname. The CSS hides #main for these
@@ -884,54 +898,51 @@ a.match-card:focus-visible { outline-offset: 3px; border-radius: var(--radius); 
 }
 
 /* ==========================================================================
-   5. MATCH POST: streaming arena (16:9 player + ads)
+   5. POST: ad slots (above and below the article)
    ========================================================================== */
-.arena { padding-block: 20px 4px; }
-.arena-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin-bottom: 12px; }
-.arena-title { margin: 0; font-size: 1.35rem; line-height: 1.45; font-weight: 800; }
-.live-pill {
-  display: inline-flex; align-items: center; gap: 8px;
-  padding: 4px 12px; border-radius: 999px;
-  background: var(--live-soft); color: var(--live); font-weight: 800; font-size: .85rem;
-}
-.live-pill::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--live); animation: pxl-pulse 1.6s infinite; }
-
-.arena-grid { display: grid; grid-template-columns: 1fr; gap: 16px; align-items: start; }
-.arena-center { min-width: 0; display: grid; gap: 14px; }
-
-.player-frame {
-  position: relative; width: 100%; aspect-ratio: 16 / 9;
-  width: min(100%, calc((100vh - var(--header-h) - 24px) * 16 / 9));
-  width: min(100%, calc((100svh - var(--header-h) - 24px) * 16 / 9));
-  margin-inline: auto; contain: layout paint;
-  border-radius: var(--radius); overflow: hidden; background: #000;
-  box-shadow: var(--shadow); border: 1px solid var(--border);
-}
-[data-theme="dark"] .player-frame { box-shadow: 0 0 0 1px rgba(62, 230, 62, .25), 0 0 40px rgba(62, 230, 62, .12); }
-@supports not (aspect-ratio: 16 / 9) { .player-frame { height: 0; padding-top: 56.25%; } }
-.player-frame iframe, .player-frame video, .player-placeholder {
-  position: absolute; inset: 0; width: 100%; height: 100%; border: 0;
-}
-.player-placeholder {
-  display: grid; place-items: center; align-content: center; gap: 10px; text-align: center;
-  color: #cfd6dd; font-weight: 700;
-  background: radial-gradient(ellipse at center, #10161d 0%, #000 75%);
-}
-.player-placeholder svg { width: 54px; height: 54px; color: var(--brand); filter: drop-shadow(0 0 12px rgba(50, 205, 50, .5)); }
-
-/* Ad slots (post view only). Hidden until BOTH are true:
-   - the slot holds real ad code (JS adds .is-filled: an <ins>, <iframe> or <img>), and
-   - the arena is ready (JS adds .is-ready after the player iframe has loaded).
-   No placeholder boxes, and no ad is ever shown next to an empty player or a loading
-   spinner. The adsbygoogle push happens only after the slot became visible. */
+/* Hidden unless the widget holds real ad code (JS adds .is-filled): no empty boxes. */
+.post-ad--top { padding-top: 16px; }
+.post-ad--bottom { margin-top: 16px; }
 .ad-slot {
   display: none; place-items: center; width: 100%;
   overflow: hidden; text-align: center;
 }
 .ad-slot .widget, .ad-slot .widget-content { width: 100%; display: grid; place-items: center; }
 .ad-slot ins.adsbygoogle { display: block; width: 100%; }
-.arena.is-ready .ad-slot.is-filled { display: grid; min-height: 100px; }   /* 320x100 mobile */
-@media (min-width: 768px) { .arena.is-ready .ad-slot.is-filled { min-height: 90px; } }   /* 728x90 */
+.ad-slot.is-filled { display: grid; min-height: 100px; }   /* 320x100 mobile */
+@media (min-width: 768px) { .ad-slot.is-filled { min-height: 90px; } }   /* 728x90 */
+
+/* Cookie notice (Blogger's cookienotice.js: #cookieChoiceInfo.cookie-choices-info).
+   Blogger's own stylesheet pins a grey bar over the header (top: 0, full width, left-aligned
+   text). The id selector outranks its class rules: a bottom card in the theme's colours that
+   sits above the mobile bottom navigation, aligned for RTL and LTR. */
+#cookieChoiceInfo.cookie-choices-info {
+  top: auto; left: auto; right: auto;
+  inset-inline: 12px; bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  width: auto; max-width: 720px; margin-inline: auto; padding: 14px 16px;
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow);
+  font-family: inherit; line-height: 1.6; z-index: 4000;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px;
+}
+#cookieChoiceInfo .cookie-choices-inner { display: contents; }
+#cookieChoiceInfo .cookie-choices-text {
+  flex: 1 1 260px; margin: 0; max-width: none; font-size: .9rem; color: var(--text); text-align: start;
+}
+#cookieChoiceInfo .cookie-choices-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; }
+#cookieChoiceInfo .cookie-choices-button {
+  display: inline-flex; align-items: center; min-height: 40px; margin: 0; padding: 0 14px;
+  border-radius: 999px; border: 1px solid var(--border);
+  color: var(--text); font-weight: 700; text-transform: none; text-decoration: none;
+}
+#cookieChoiceInfo #cookieChoiceDismiss { background: var(--brand); border-color: var(--brand); color: #0b1a0b; }
+#cookieChoiceInfo .cookie-choices-button:hover { color: var(--text); filter: brightness(.95); }
+#cookieChoiceInfo #cookieChoiceDismiss:hover { color: #0b1a0b; }
+@media (max-width: 768px) {
+  #cookieChoiceInfo.cookie-choices-info {
+    bottom: calc(var(--bottom-nav-h, 64px) + 10px + env(safe-area-inset-bottom, 0px));
+  }
+}
 
 /* ==========================================================================
    6. Content + sidebar
@@ -1654,12 +1665,6 @@ html[data-pxl-route] #main { display: none !important; }
 .app-card__link:hover .app-card__more { gap: 10px; }
 .app-card__link:focus-visible { outline: 2px solid #32CD32; outline-offset: 4px; }
 
-/* Match page: live stream block (match_info.stream, merged by the Worker) */
-.match-stream { display: grid; gap: 10px; animation: px-fade-in .35s ease both; }
-.match-stream[hidden] { display: none; }
-.match-stream__head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.match-stream__title { margin: 0; display: flex; align-items: center; gap: 8px; font-size: 1.05rem; font-weight: 800; }
-.match-stream__title::before { content: ''; width: 4px; height: 18px; border-radius: 3px; background: var(--live); }
 
 /* ==========================================================================
    Matches center (/p/matches.html)
@@ -1928,28 +1933,6 @@ html[data-pxl-route] #main { display: none !important; }
   .btn-social { flex: 1 1 0; justify-content: center; }
 }
 
-/* Social channels banner directly under the live player (match post arena).
-   Theme tokens for the card (light/dark), brand colours on the buttons (.btn-social--*). */
-.stream-social {
-  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 16px;
-  padding: 14px 16px; border-radius: var(--radius);
-  background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow);
-}
-.stream-social__text { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.stream-social__icon {
-  width: 40px; height: 40px; flex-shrink: 0; display: grid; place-items: center; border-radius: 12px;
-  background: var(--brand-soft); color: var(--brand-strong);
-}
-[data-theme="dark"] .stream-social__icon { color: var(--brand); }
-.stream-social__icon svg { width: 22px; height: 22px; }
-.stream-social__title { margin: 0; font-size: 1rem; font-weight: 800; line-height: 1.5; color: var(--text); }
-.stream-social__sub { margin: 0; font-size: .82rem; color: var(--text-muted); }
-.stream-social__actions { display: flex; flex-wrap: wrap; gap: 10px; }
-.stream-social .btn-social { min-height: 44px; justify-content: center; }
-@media (max-width: 600px) {
-  .stream-social { padding: 12px; }
-  .stream-social__actions { width: 100%; }
-}
 
 /* Latest news placeholder (shown while the blog has no posts) */
 .news-placeholder .card { pointer-events: none; }
@@ -2237,9 +2220,9 @@ body { overflow-x: clip; }
 <b:template-skin><![CDATA[
 body#layout { background: #f6f7f9; font-family: Arial, sans-serif; }
 body#layout .header-inner, body#layout .main-nav, body#layout .header-actions,
-body#layout .fixtures, body#layout .arena-head, body#layout .player-frame { display: none; }
-body#layout .arena-grid, body#layout .content-wrap, body#layout .footer-grid { display: flex; gap: 8px; }
-body#layout .arena-center, body#layout .content-main, body#layout .footer-grid > * { flex: 1; }
+body#layout .fixtures { display: none; }
+body#layout .content-wrap, body#layout .footer-grid { display: flex; gap: 8px; }
+body#layout .content-main, body#layout .footer-grid > * { flex: 1; }
 body#layout .ad-slot { display: block; }
 body#layout .sidebar { width: 320px; }
 ]]></b:template-skin>
@@ -2306,77 +2289,26 @@ body#layout .sidebar { width: 320px; }
   </noscript>
 
   <!-- ======================================================================
-       VIEW 2: MATCH POST - Live streaming arena (player + ads)
-       The stream iframe comes from the post body (see the note at the top).
+       VIEW 2: POST - top ad slot (above the article; the bottom slot follows the
+       Blog section). Shown only when the widget holds ad code.
        ====================================================================== -->
   <b:if cond='data:view.isPost'>
-  <section aria-label='البث المباشر' class='arena' hidden='hidden' id='px-arena'>
-    <div class='container'>
-      <div class='arena-head'>
-        <span class='live-pill'>مباشر</span>
-        <h1 class='arena-title'><data:view.title.escaped/></h1>
-      </div>
-
-      <div class='arena-grid'>
-        <div class='arena-center'>
-          <!-- Top ad 728x90 / responsive (shown only once the player has loaded) -->
-          <b:section class='ad-slot ad-slot--h' id='ad-top' maxwidgets='1' showaddelement='yes'>
-            <b:widget id='HTML10' locked='false' title='' type='HTML' version='2' visible='true'>
-              <b:widget-settings>
-                <b:widget-setting name='content'><![CDATA[<!-- AdSense: paste ONLY the loader script and the <ins class="adsbygoogle"> tag here, WITHOUT the (adsbygoogle = window.adsbygoogle || []).push({}) line: the theme pushes it after the player has loaded. Empty = no ad, no box. -->]]></b:widget-setting>
-              </b:widget-settings>
-              <b:includable id='main'><data:content/></b:includable>
-            </b:widget>
-          </b:section>
-
-          <!-- ==============================================================
-               16:9 PLAYER BOX
-               Filled automatically from the post body: a
-               <div data-stream-src="https://..."></div> or the first <iframe>.
-               You do NOT paste the iframe here (this box is shared by all posts).
-               ============================================================== -->
-          <div class='player-frame' id='px-player-slot'>
-            <div class='player-placeholder'>
-              <svg aria-hidden='true' fill='currentColor' viewBox='0 0 24 24'><path d='M8 5.14v13.72a1 1 0 0 0 1.52.85l10.9-6.86a1 1 0 0 0 0-1.7L9.52 4.29A1 1 0 0 0 8 5.14z'/></svg>
-              <span>سيبدأ البث قريبًا</span>
-            </div>
-          </div>
-
-          <!-- Social channels banner, directly under the player -->
-          <aside aria-label='قنواتنا على تيليجرام وواتساب' class='stream-social'>
-            <div class='stream-social__text'>
-              <span class='stream-social__icon'><svg aria-hidden='true' fill='none' stroke='currentColor' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' viewBox='0 0 24 24'><path d='M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9'/><path d='M13.7 21a2 2 0 0 1-3.4 0'/></svg></span>
-              <div>
-                <p class='stream-social__title'>تابع قنواتنا الرسمية</p>
-                <p class='stream-social__sub'>روابط البث والأهداف والنتائج لحظة بلحظة</p>
-              </div>
-            </div>
-            <div class='stream-social__actions'>
-              <a aria-label='قناتنا على تيليجرام' class='btn-social btn-social--telegram' href='https://t.me/+VZ8Lb4i2iXRkNTdk' rel='noopener' target='_blank'><svg aria-hidden='true' fill='currentColor' viewBox='0 0 24 24'><path d='M21.9 4.6 18.8 19c-.2 1-.8 1.3-1.7.8l-4.6-3.4-2.2 2.1c-.2.2-.5.5-1 .5l.3-4.7 8.6-7.8c.4-.3-.1-.5-.6-.2L7 12.9l-4.6-1.4c-1-.3-1-1 .2-1.5l18-6.9c.8-.3 1.6.2 1.3 1.5z'/></svg><span>تيليجرام</span></a>
-              <a aria-label='قناتنا على واتساب' class='btn-social btn-social--whatsapp' href='https://whatsapp.com/channel/0029Vb72JBO6GcGMQKCaP51G' rel='noopener' target='_blank'><svg aria-hidden='true' fill='currentColor' viewBox='0 0 24 24'><path d='M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2zm0 18.2c-1.5 0-3-.4-4.3-1.2l-.3-.2-3 .8.8-2.9-.2-.3A8.2 8.2 0 1 1 12 20.2z'/><path d='M8.6 7.3c.2-.4.4-.4.7-.4h.5c.2 0 .4 0 .6.4l.8 1.9c.1.2.1.4 0 .5l-.5.7c-.1.1-.2.3 0 .5.6 1 1.4 1.8 2.4 2.4.2.1.4.1.5 0l.7-.6c.2-.1.4-.2.6-.1l1.9.9c.3.1.5.3.5.5v.6c0 .4-.1.7-.6.9-.6.3-1.4.5-2.2.3-2.8-.7-5.1-3-5.8-5.8-.2-.8 0-1.6.4-2.2z'/></svg><span>واتساب</span></a>
-            </div>
-          </aside>
-
-          <!-- Bottom ad 728x90 / responsive (shown only once the player has loaded) -->
-          <b:section class='ad-slot ad-slot--h' id='ad-bottom' maxwidgets='1' showaddelement='yes'>
-            <b:widget id='HTML12' locked='false' title='' type='HTML' version='2' visible='true'>
-              <b:widget-settings>
-                <b:widget-setting name='content'><![CDATA[<!-- AdSense: paste ONLY the loader script and the <ins class="adsbygoogle"> tag here, WITHOUT the (adsbygoogle = window.adsbygoogle || []).push({}) line: the theme pushes it after the player has loaded. Empty = no ad, no box. -->]]></b:widget-setting>
-              </b:widget-settings>
-              <b:includable id='main'><data:content/></b:includable>
-            </b:widget>
-          </b:section>
-        </div>
-
-      </div>
-    </div>
-  </section>
+  <div class='container post-ad post-ad--top'>
+    <b:section class='ad-slot ad-slot--h' id='ad-top' maxwidgets='1' showaddelement='yes'>
+      <b:widget id='HTML10' locked='false' title='' type='HTML' version='2' visible='true'>
+        <b:widget-settings>
+          <b:widget-setting name='content'><![CDATA[<!-- AdSense: paste ONLY the loader script and the <ins class="adsbygoogle"> tag here, WITHOUT the (adsbygoogle = window.adsbygoogle || []).push({}) line: the theme pushes it once the page has loaded. Empty = no ad, no box. -->]]></b:widget-setting>
+        </b:widget-settings>
+        <b:includable id='main'><data:content/></b:includable>
+      </b:widget>
+    </b:section>
+  </div>
   </b:if>
 
   <!-- ======================================================================
        CONTENT (all views) + SIDEBAR
        - Home: latest match posts as cards
-       - Post: match details (title is in the arena above)
+       - Post: article (ad slots above and below it)
        - Page: plain article
        - Label / search: cards
        ====================================================================== -->
@@ -2410,7 +2342,7 @@ body#layout .sidebar { width: 320px; }
           <span class='community-banner__icon'><svg aria-hidden='true' fill='none' stroke='currentColor' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' viewBox='0 0 24 24'><path d='M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2'/><circle cx='9' cy='7' r='4'/><path d='M23 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8'/></svg></span>
           <div>
             <h2>انضم لمجتمعنا على تليجرام وواتساب لمتابعة أحدث التوقعات</h2>
-            <p>تنبيهات المباريات، روابط البث والتوقعات أولًا بأول.</p>
+            <p>تنبيهات المباريات، الأهداف والتوقعات أولًا بأول.</p>
           </div>
         </div>
         <div class='community-banner__actions'>
@@ -2480,20 +2412,6 @@ body#layout .sidebar { width: 320px; }
       <section aria-label='تفاصيل المباراة' class='match-page' hidden='hidden' id='match-page'>
         <div class='match-hero' id='match-hero'>
           <div class='px-loader' role='status'><span class='px-spinner'>&#160;</span><span>جاري تحميل المباراة...</span></div>
-        </div>
-        <!-- Live stream: shown when the Match Controller attached one to this match
-             (match_info.stream, merged by the Worker). Filled by applyStream(). -->
-        <div aria-labelledby='match-stream-title' class='match-stream' hidden='hidden' id='match-stream'>
-          <div class='match-stream__head'>
-            <h2 class='match-stream__title' id='match-stream-title'>البث المباشر</h2>
-            <span class='badge badge--live'>مباشر</span>
-          </div>
-          <div class='player-frame' id='px-player-slot'>
-            <div class='player-placeholder'>
-              <svg aria-hidden='true' fill='currentColor' viewBox='0 0 24 24'><path d='M8 5.14v13.72a1 1 0 0 0 1.52.85l10.9-6.86a1 1 0 0 0 0-1.7L9.52 4.29A1 1 0 0 0 8 5.14z'/></svg>
-              <span>جاري تحميل البث...</span>
-            </div>
-          </div>
         </div>
         <div aria-label='أقسام المباراة' class='match-tabs' role='tablist'>
           <button aria-controls='match-tab-events' aria-selected='true' class='match-tab is-active' data-tab='events' id='match-tabbtn-events' role='tab' type='button'>أحداث اللقاء</button>
@@ -2925,6 +2843,19 @@ body#layout .sidebar { width: 320px; }
           </b:includable>
         </b:widget>
       </b:section>
+      <b:if cond='data:view.isPost'>
+      <!-- Bottom ad slot (below the article) -->
+      <div class='post-ad post-ad--bottom'>
+        <b:section class='ad-slot ad-slot--h' id='ad-bottom' maxwidgets='1' showaddelement='yes'>
+          <b:widget id='HTML12' locked='false' title='' type='HTML' version='2' visible='true'>
+            <b:widget-settings>
+              <b:widget-setting name='content'><![CDATA[<!-- AdSense: paste ONLY the loader script and the <ins class="adsbygoogle"> tag here, WITHOUT the (adsbygoogle = window.adsbygoogle || []).push({}) line: the theme pushes it once the page has loaded. Empty = no ad, no box. -->]]></b:widget-setting>
+            </b:widget-settings>
+            <b:includable id='main'><data:content/></b:includable>
+          </b:widget>
+        </b:section>
+      </div>
+      </b:if>
       <b:if cond='data:view.isPage'>
       <script>
       //<![CDATA[
@@ -3228,14 +3159,11 @@ body#layout .sidebar { width: 320px; }
       'صُمم بعناية لعشاق كرة القدم': 'Crafted with care for football fans',
       'PX League منصة عربية لمتابعة مباريات كرة القدم لحظة بلحظة: جدول المباريات اليومي، النتائج المباشرة، ترتيب الدوريات، الأخبار والتوقعات، بتجربة سريعة ونظيفة على الويب وتطبيقات أندرويد وآيفون.':
         'PX League is an Arabic platform for following football as it happens: the daily match schedule, live scores, league standings, news and predictions, with a fast, clean experience on the web and on Android and iPhone.',
-      // stream arena / community
-      'مباشر': 'LIVE', 'سيبدأ البث قريبًا': 'The stream will start soon', 'البث المباشر': 'Live stream',
-      'جاري تحميل البث...': 'Loading the stream...',
-      'تابع قنواتنا الرسمية': 'Follow our official channels',
-      'روابط البث والأهداف والنتائج لحظة بلحظة': 'Stream links, goals and scores as they happen',
+      // community
+      'مباشر': 'LIVE',
       'انضم لمجتمعنا': 'Join our community',
       'انضم لمجتمعنا على تليجرام وواتساب لمتابعة أحدث التوقعات': 'Join our Telegram and WhatsApp community for the latest predictions',
-      'تنبيهات المباريات، روابط البث والتوقعات أولًا بأول.': 'Match alerts, stream links and predictions as they drop.',
+      'تنبيهات المباريات، الأهداف والتوقعات أولًا بأول.': 'Match alerts, goals and predictions as they drop.',
       // home
       'مباريات اليوم': "Today's matches",
       'منصة عربية لمتابعة كرة القدم: جدول مباريات اليوم بتوقيت القاهرة، النتائج المباشرة دقيقة بدقيقة، أحداث كل مباراة وتشكيلاتها، ترتيب الدوريات الكبرى والعربية، إلى جانب أخبار الكرة والتوقعات. تُحدَّث النتائج تلقائيًا أثناء المباريات دون الحاجة لإعادة تحميل الصفحة.':
@@ -5228,7 +5156,6 @@ body#layout .sidebar { width: 320px; }
           home: teamLineup(lu?.lineup?.[hk], lu?.lineup_injureds?.[hk]),
           away: teamLineup(lu?.lineup?.[ak], lu?.lineup_injureds?.[ak])
         },
-        stream: info?.stream || null,
         hasEvents: Number(info?.events) === 1,
         hasLineup: Number(info?.lineup) === 1
       };
@@ -5542,7 +5469,6 @@ body#layout .sidebar { width: 320px; }
       try {
         info = await fetchJson(api('match_info', matchId), silent ? 1 : 3);
         if (!isMatchInfo(info)) throw new Error('malformed match_info');
-        applyStream(info.stream);                                // stream merged in by the Worker
         var results = await Promise.allSettled([
           Number(info.events) ? fetchJson(api('matches_event', matchId), silent ? 1 : 2).then(function (d) {
             if (!d || typeof d !== 'object' || !Array.isArray(d.events)) throw new Error('malformed matches_event');
@@ -5622,40 +5548,6 @@ body#layout .sidebar { width: 320px; }
     var initialTab = tabs.filter(function (t) { return '#' + t.getAttribute('data-tab') === location.hash; })[0];
     if (initialTab) selectTab(initialTab, false);
 
-    // ------------------------------------------------------------------ live stream (Match Controller)
-    // The Worker merges the dashboard's match_settings into match_info:
-    //   data.stream = { channel, r2_slug }   (absent = no stream)
-    // match_info is refreshed every 30 s from 30 min before kick-off and while live, so a
-    // stream attached or removed in the dashboard follows on the next refresh. No extra request.
-    var STREAM_PLAYER_BASE = window.PXL_STREAM_PLAYER_BASE || 'https://live.smarterwho.site/player/';
-    var STREAM_KEY_RE = /^[A-Za-z0-9_-]{1,64}$/;
-    var streamBox = document.getElementById('match-stream');
-    var streamSlot = document.getElementById('px-player-slot');
-    var streamSrc = null;
-    function streamUrl(s) {
-      var channel = String(s.channel || ''), slug = String(s.r2_slug || '');
-      var okChannel = STREAM_KEY_RE.test(channel), okSlug = STREAM_KEY_RE.test(slug);
-      if (!okChannel && !okSlug) return '';
-      var u = new URL(STREAM_PLAYER_BASE);
-      if (okChannel) u.searchParams.set('channel', channel);
-      if (okSlug) u.searchParams.set('r2', slug);
-      return u.toString();
-    }
-    function showStream(src) {
-      if (!streamBox || !streamSlot || src === streamSrc) return;   // same stream: never reload the player
-      streamSrc = src;
-      streamSlot.textContent = '';
-      if (!src) { streamBox.hidden = true; return; }
-      var f = document.createElement('iframe');
-      f.src = src;
-      f.title = 'البث المباشر';
-      f.setAttribute('allow', 'autoplay; fullscreen; encrypted-media; picture-in-picture');
-      f.setAttribute('allowfullscreen', 'true');
-      streamSlot.appendChild(f);
-      streamBox.hidden = false;
-    }
-    function applyStream(s) { showStream(s && typeof s === 'object' ? streamUrl(s) : ''); }
-
     // ------------------------------------------------------------------ self-test
     // Console: pxlSelfTest() (defaults to 5702737), or open /p/match.html?id=5702737&selftest=1
     window.pxlSelfTest = async function (id) {
@@ -5691,67 +5583,27 @@ body#layout .sidebar { width: 320px; }
 
   <b:if cond='data:view.isPost'>
   <!-- ======================================================================
-       POST VIEW: move the post's stream into the 16:9 player box
-       Accepts in the post body:
-         <div data-stream-src="https://live.smarterwho.site/player/?channel=b1"></div>
-         or the first <iframe> of the post.
+       POST VIEW: ad slots (ad-top above the article, ad-bottom below it)
+       A slot is shown only when its widget holds ad code (<ins>, <iframe> or <img>);
+       adsbygoogle is pushed here, after the slot became visible: a push into a hidden
+       slot fails for good ("availableWidth=0"), so the widgets must not push themselves.
        ====================================================================== -->
   <script>
   //<![CDATA[
   (function () {
-    var slot = document.getElementById('px-player-slot');
-    var body = document.getElementById('px-post-body');
-    if (!slot || !body) return;
-
-    var frame = null;
-    var marker = body.querySelector('[data-stream-src]');
-    if (marker) {
-      var src = marker.getAttribute('data-stream-src') || '';
-      if (/^https:\/\//i.test(src)) {
-        frame = document.createElement('iframe');
-        frame.src = src;
-      }
-      marker.remove();
-    } else {
-      frame = body.querySelector('iframe');
-    }
-    if (!frame) return;   // regular article: the arena stays hidden, the post shows normally
-
-    frame.setAttribute('allow', 'autoplay; fullscreen; encrypted-media; picture-in-picture');
-    frame.setAttribute('allowfullscreen', 'true');
-    frame.setAttribute('title', document.title);
-    frame.removeAttribute('width');
-    frame.removeAttribute('height');
-    frame.removeAttribute('style');
-    slot.textContent = '';
-    slot.appendChild(frame);
-
-    // Stream found: show the arena (its title replaces the article title)
-    var arena = document.getElementById('px-arena');
-    var postTitle = document.getElementById('px-post-title');
-    if (arena) arena.hidden = false;
-    if (postTitle) postTitle.hidden = true;
-    if (!arena) return;
-
-    // Ads: only slots with real ad code, and only after the player iframe has loaded
-    // (never beside an empty player or a loading placeholder). adsbygoogle is pushed
-    // here, once the slot is visible: a push into a hidden slot fails for good
-    // ("availableWidth=0"), which is why the widgets must not push themselves.
-    var slots = arena.querySelectorAll('.ad-slot');
+    var slots = document.querySelectorAll('.post-ad .ad-slot');
+    var any = false;
     for (var i = 0; i < slots.length; i++) {
-      if (slots[i].querySelector('ins.adsbygoogle, iframe, img')) slots[i].classList.add('is-filled');
+      if (slots[i].querySelector('ins.adsbygoogle, iframe, img')) { slots[i].classList.add('is-filled'); any = true; }
     }
-    var shown = false;
-    function showAds() {
-      if (shown) return;
-      shown = true;
-      arena.classList.add('is-ready');
-      var ins = arena.querySelectorAll('.ad-slot.is-filled ins.adsbygoogle:not([data-adsbygoogle-status])');
+    if (!any) return;
+    function push() {
+      var ins = document.querySelectorAll('.post-ad .ad-slot.is-filled ins.adsbygoogle:not([data-adsbygoogle-status])');
       for (var j = 0; j < ins.length; j++) {
         try { (window.adsbygoogle = window.adsbygoogle || []).push({}); } catch (e) {}
       }
     }
-    frame.addEventListener('load', showAds, { once: true });
+    if (document.readyState === 'complete') push(); else window.addEventListener('load', push, { once: true });
   })();
   //]]>
   </script>
