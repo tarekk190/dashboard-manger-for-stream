@@ -149,10 +149,107 @@
   // The Worker answers only the origins in its ALLOWED_ORIGINS list (blogger/worker/src/index.js):
   // https://www.px-league.site and https://px-league.site. A new domain must be added there too.
   window.PXL_SITE_URL = 'https://www.px-league.site';
+  // matches_date_get/{YYYY-MM-DD}/{CHAMPIONSHIP_IDS_JSON}/[]/["8634"]/D/60 - shared by the home
+  // block, /p/matches.html and the predictions page. An empty [] drops leagues such as the
+  // Egyptian Premier League (941513) and the Egypt Cup (62474482): 32 matches instead of 48.
+  // Every builder passes this through encodeURI(), giving %5B%22...%22%5D like the original URL.
+  window.PXL_CHAMP_IDS = ["901130","41019","79123","47821","47037","90322","573139","308191","138192","252344","13178","970117","888111","75166","560100","797102","78989","799154","30067","160110","154108","41480","26232","91130","784120","751343","38371","690345","796368","370347"];
+  window.PXL_MATCH_FILTERS = JSON.stringify(window.PXL_CHAMP_IDS) + '/[]/["8634"]';
+  // Shared match state for matches_date_get items and match_info: 'live' | 'upcoming' | 'finished' | 'other'.
+  // live === 1 is checked FIRST (status stays 4 during a penalty shootout), but only from 10 min
+  // before kick-off to 3.5 h after it: the API also sets live: 1 on matches 12-16 h away
+  // (11 of 48 on 2026-11-20, all status 0), and those must not show as live.
+  window.pxlMatchStatus = function (raw) {
+    var LIVE_WINDOW_MS = 3.5 * 60 * 60 * 1000;
+    var kickoff = Number(raw && raw.match_timestamp) * 1000, now = Date.now();
+    var inWindow = kickoff > 0 && now >= kickoff - 10 * 60 * 1000 && now <= kickoff + LIVE_WINDOW_MS;
+    if (Number(raw && raw.live) === 1 && inWindow) return 'live';
+    var s = Number(raw && raw.status);
+    if (s === 0) return 'upcoming';
+    if (s === 4) return 'finished';
+    return inWindow ? 'live' : 'other';
+  };
+  // Live phase + minute, shared by the home block, /p/matches.html and /p/match.html.
+  // Verified codes: 0 not started, 1 first half (minutes = seconds since kick-off), 2 HALF-TIME
+  // (minutes = 0, ht_time set), 3 second half (minutes already includes the first 2700 s), 4 finished.
+  // pxlMatchStatus() still decides live/upcoming/finished; phase() only refines a live match.
+  window.pxlLive = (function () {
+    var warned = {};
+    var MAX_TICK_S = 5 * 60;          // refreshes failing: the local clock stops 5 min after the last sync
+    function esc(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) { return '&#' + c.charCodeAt(0) + ';'; }); }
+    // '1h' | 'ht' | '2h' | '' (unknown). Pass isLive to log an unknown live code once per match.
+    function phase(raw, isLive) {
+      var s = Number(raw && raw.status);
+      var p = s === 1 ? '1h' : s === 2 ? 'ht' : s === 3 ? '2h' : '';
+      if (!p && isLive) {
+        var id = raw && raw.match_id, key = s + ':' + id;
+        if (!warned[key]) { warned[key] = 1; console.warn('unknown live status', s, id); }
+      }
+      return p;
+    }
+    // Match clock in seconds -> "37", "45+2", "61", "90+4". '' for any other status (2 included).
+    function minute(status, seconds) {
+      var secs = Number(seconds), st = Number(status);
+      if (!(secs > 0)) return '';
+      var m = Math.floor(secs / 60) + 1;
+      if (st === 1) return m > 45 ? '45+' + (m - 45) : String(m);
+      if (st === 3) { var t = secs >= 2700 ? m : 45 + m; return t > 90 ? '90+' + (t - 90) : String(t); }
+      return '';
+    }
+    // Clock snapshot from match_info, taken when the response arrived. null unless 1st / 2nd half.
+    function clock(raw) {
+      var st = Number(raw && raw.status), s = Number(raw && raw.minutes);
+      return (st === 1 || st === 3) && s > 0 ? { st: st, s: s, at: Date.now() } : null;
+    }
+    function minuteNow(c) {
+      if (!c) return '';
+      var elapsed = Math.min(Math.max((Date.now() - c.at) / 1000, 0), MAX_TICK_S);
+      return minute(c.st, c.s + elapsed);
+    }
+    // Inner badge HTML. Half-time: "استراحة" only. Otherwise "مباشر" + the minute (if known); the
+    // minute span carries its clock so the ticker below can advance it between refreshes.
+    function badge(ph, c) {
+      if (ph === 'ht') return 'استراحة';
+      var m = ph === '1h' || ph === '2h' ? minuteNow(c) : '';
+      return 'مباشر' + (m ? ` <span dir="ltr" data-pxl-clock="${c.st},${c.s},${c.at}">${esc(m)}'</span>` : '');
+    }
+    // One ticker for the whole page: every 10 s, advance each visible minute from its clock.
+    // Every refresh re-renders the badge with a fresh clock, which resyncs it.
+    setInterval(function () {
+      if (document.hidden) return;
+      var els = document.querySelectorAll('[data-pxl-clock]');
+      for (var i = 0; i < els.length; i++) {
+        var p = els[i].getAttribute('data-pxl-clock').split(',').map(Number);
+        var t = minuteNow({ st: p[0], s: p[1], at: p[2] });
+        if (t && els[i].textContent !== t + "'") els[i].textContent = t + "'";
+      }
+    }, 10000);
+    return { phase: phase, minute: minute, clock: clock, minuteNow: minuteNow, badge: badge };
+  })();
   (function () {
     var theme = 'light';
     try { theme = localStorage.getItem('pxl-theme') === 'dark' ? 'dark' : 'light'; } catch (e) {}
     document.documentElement.setAttribute('data-theme', theme);
+  })();
+  // Language (AR default / EN), applied before the first paint so an English visitor never sees
+  // the page flip direction. Arabic stays the default for new visitors and for crawlers (no
+  // localStorage), so SEO, structured data and the server-rendered markup are unchanged.
+  // The text itself is translated by the i18n script at the end of <body>; until it has run,
+  // .pxl-i18n-pending keeps the content transparent (CSS reveals it after 1.5 s regardless).
+  (function () {
+    var lang = 'ar';
+    try { lang = localStorage.getItem('pxl-lang') === 'en' ? 'en' : 'ar'; } catch (e) {}
+    var root = document.documentElement;
+    if (lang === 'en') {
+      root.setAttribute('lang', 'en');
+      root.setAttribute('dir', 'ltr');
+      root.classList.add('pxl-i18n-pending');
+    }
+    window.pxlLang = function () { return root.getAttribute('lang') === 'en' ? 'en' : 'ar'; };
+    // Intl locale for dates: Arabic (optionally with Latin digits) or English.
+    window.pxlLocale = function (latinDigits) {
+      return window.pxlLang() === 'en' ? 'en-GB' : (latinDigits ? 'ar-EG-u-nu-latn' : 'ar-EG');
+    };
   })();
   // Client-side routing for the standings / match pages. Blogger's URL
   // comparisons in <b:if> evaluate to false on this blog, so the route is
@@ -483,6 +580,42 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 [data-theme="dark"] .icon-sun { display: block; }
 [data-theme="dark"] .icon-moon { display: none; }
 .menu-toggle { display: none; }
+
+/* ==========================================================================
+   Language switch (AR / EN): header button, bilingual pages, smooth switch
+   ========================================================================== */
+.lang-toggle {                           /* same 44px glass button as the theme toggle, label beside the globe */
+  width: auto; min-width: 44px; padding-inline: 10px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  font-family: inherit; font-size: .8rem; font-weight: 800; letter-spacing: .04em; line-height: 1;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.lang-toggle svg { width: 18px; height: 18px; flex-shrink: 0; transition: transform .35s cubic-bezier(.34, 1.56, .64, 1); }
+.lang-toggle:hover svg { transform: rotate(-20deg); }
+.lang-toggle__label { min-width: 2ch; }
+@media (max-width: 380px) {              /* 320-380px phones: label only, keeps the header on one line */
+  .lang-toggle { padding-inline: 0; width: 44px; }
+  .lang-toggle svg { display: none; }
+}
+/* Bilingual content (legal pages): one file, the active language decides */
+html[lang="ar"] .lang-en { display: none; }
+html[lang="en"] .lang-ar { display: none; }
+/* Smooth switch: content fades and lifts 6px for ~200ms while lang/dir change */
+.header-inner, .content-wrap, .site-footer, .bottom-nav { transition: opacity .2s ease, transform .2s ease; }
+html.is-lang-switching .content-wrap,
+html.is-lang-switching .site-footer { opacity: 0; transform: translateY(6px); }
+html.is-lang-switching .header-inner,
+html.is-lang-switching .bottom-nav { opacity: .35; }
+/* First paint in English: hidden until the text is translated (auto-reveal after 1.5 s as a fallback) */
+html.pxl-i18n-pending .header-inner, html.pxl-i18n-pending .content-wrap,
+html.pxl-i18n-pending .site-footer, html.pxl-i18n-pending .bottom-nav { opacity: 0; animation: pxlI18nReveal 0s 1.5s forwards; }
+@keyframes pxlI18nReveal { to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  html.is-lang-switching .content-wrap, html.is-lang-switching .site-footer { transform: none; }
+  .lang-toggle svg { transition: none; }
+}
+/* LTR polish (the rest of the layout already uses logical properties) */
+[dir="ltr"] .store-badge__text strong { text-align: left; }
 
 @media (max-width: 860px) {
   .header-inner { grid-template-columns: 1fr auto; }
@@ -995,7 +1128,7 @@ a.match-card:focus-visible { outline-offset: 3px; border-radius: var(--radius); 
 
 /* Events timeline: home side | minute | away side (RTL: home on the right) */
 .ev-list { list-style: none; margin: 0; padding: 0; position: relative; }
-.ev-list::before { content: ''; position: absolute; inset-block: 0; inset-inline-start: 50%; width: 2px; transform: translateX(50%); background: var(--border); }
+.ev-list::before { content: ''; position: absolute; inset-block: 0; left: 50%; width: 2px; transform: translateX(-50%); background: var(--border); }   /* physical centring: same in RTL and LTR */
 .ev { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 54px minmax(0, 1fr); align-items: center; gap: 10px; padding: 7px 0; }
 .ev__min {
   grid-column: 2; justify-self: center; z-index: 1;
@@ -2139,6 +2272,11 @@ body#layout .sidebar { width: 320px; }
           <a aria-label='قناتنا على تيليجرام' class='icon-btn is-telegram' href='https://t.me/+VZ8Lb4i2iXRkNTdk' rel='noopener' target='_blank' title='تيليجرام'><svg aria-hidden='true' fill='currentColor' viewBox='0 0 24 24'><path d='M21.9 4.6 18.8 19c-.2 1-.8 1.3-1.7.8l-4.6-3.4-2.2 2.1c-.2.2-.5.5-1 .5l.3-4.7 8.6-7.8c.4-.3-.1-.5-.6-.2L7 12.9l-4.6-1.4c-1-.3-1-1 .2-1.5l18-6.9c.8-.3 1.6.2 1.3 1.5z'/></svg></a>
           <a aria-label='قناتنا على واتساب' class='icon-btn is-whatsapp' href='https://whatsapp.com/channel/0029Vb72JBO6GcGMQKCaP51G' rel='noopener' target='_blank' title='واتساب'><svg aria-hidden='true' fill='currentColor' viewBox='0 0 24 24'><path d='M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2zm0 18.2c-1.5 0-3-.4-4.3-1.2l-.3-.2-3 .8.8-2.9-.2-.3A8.2 8.2 0 1 1 12 20.2z'/><path d='M8.6 7.3c.2-.4.4-.4.7-.4h.5c.2 0 .4 0 .6.4l.8 1.9c.1.2.1.4 0 .5l-.5.7c-.1.1-.2.3 0 .5.6 1 1.4 1.8 2.4 2.4.2.1.4.1.5 0l.7-.6c.2-.1.4-.2.6-.1l1.9.9c.3.1.5.3.5.5v.6c0 .4-.1.7-.6.9-.6.3-1.4.5-2.2.3-2.8-.7-5.1-3-5.8-5.8-.2-.8 0-1.6.4-2.2z'/></svg></a>
         </div>
+        <!-- Language switch: shows the language you switch TO (EN in Arabic, AR in English) -->
+        <button aria-label='Switch to English' class='icon-btn lang-toggle' data-i18n-skip='' id='lang-toggle' lang='en' type='button'>
+          <svg aria-hidden='true' fill='none' stroke='currentColor' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.9' viewBox='0 0 24 24'><circle cx='12' cy='12' r='9'/><path d='M3 12h18'/><path d='M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18z'/></svg>
+          <span class='lang-toggle__label'>EN</span>
+        </button>
         <button aria-label='تبديل الوضع الليلي' class='icon-btn' id='theme-toggle' type='button'>
           <svg aria-hidden='true' class='icon-moon' fill='none' stroke='currentColor' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' viewBox='0 0 24 24'><path d='M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z'/></svg>
           <svg aria-hidden='true' class='icon-sun' fill='none' stroke='currentColor' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' viewBox='0 0 24 24'><circle cx='12' cy='12' r='4.5'/><path d='M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4'/></svg>
@@ -2834,7 +2972,7 @@ body#layout .sidebar { width: 320px; }
           return (sp > 100 ? cut.slice(0, sp) : cut) + '…';
         }
         var dateFmt;
-        try { dateFmt = new Intl.DateTimeFormat('ar-EG', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Africa/Cairo' }); } catch (e) {}
+        try { dateFmt = new Intl.DateTimeFormat(window.pxlLocale(), { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Africa/Cairo' }); } catch (e) {}
         function fmtDate(iso) {
           var d = new Date(iso);
           if (isNaN(d)) return '';
@@ -3045,6 +3183,342 @@ body#layout .sidebar { width: 320px; }
     <a class='bn__item' data-tab='standings' expr:href='data:blog.homepageUrl + &quot;p/standings.html&quot;'><span class='bn__icon'><svg aria-hidden='true' fill='none' stroke='currentColor' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.9' viewBox='0 0 24 24'><path d='M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0z'/><path d='M17 5h3v2a3 3 0 0 1-3 3M7 5H4v2a3 3 0 0 0 3 3'/></svg></span><span class='bn__label'>الترتيب</span></a>
     <a class='bn__item' data-tab='app' expr:href='data:blog.homepageUrl + &quot;p/app.html&quot;'><span class='bn__icon'><svg aria-hidden='true' fill='none' stroke='currentColor' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.9' viewBox='0 0 24 24'><rect height='19' rx='3' width='12' x='6' y='2.5'/><path d='M10.5 18.5h3'/></svg></span><span class='bn__label'>التطبيق</span></a>
   </nav>
+
+  <!-- ======================================================================
+       I18N: Arabic (default) / English switch
+       - Dictionary keyed by the exact Arabic UI text, so the markup and the render code
+         stay as they are. Text nodes + aria-label / title / placeholder are translated.
+       - data-i18n='key' on an element uses KEYED[key] instead (for text that is not 1:1).
+       - English mode: a MutationObserver translates whatever the page scripts render later
+         (match cards, badges, events, messages). Arabic mode: observer off, originals restored.
+       - Never touched: .post-body (articles), .legal-page (has its own .lang-ar / .lang-en
+         blocks), [data-i18n-skip], <script>, <style>, <textarea>, <code>, <pre>, and anything
+         that is not an exact dictionary match (team, player, league and post names).
+       - Dates follow window.pxlLocale(); API data (team names) stays as the API sends it.
+       ====================================================================== -->
+  <script>
+  //<![CDATA[
+  (function () {
+    'use strict';
+    var root = document.documentElement;
+    var AR_RE = /[؀-ۿ]/;
+    var SKIP = '.post-body, .legal-page, [data-i18n-skip], script, style, textarea, code, pre, noscript';
+    var ATTRS = ['aria-label', 'title', 'placeholder'];
+
+    // ------------------------------------------------------------------ dictionary
+    var D = {
+      // navigation / header / footer
+      'تخطَّ إلى المحتوى': 'Skip to content',
+      'المباريات': 'Matches', 'الأخبار': 'News', 'التوقعات': 'Predictions', 'الترتيب': 'Standings', 'التطبيق': 'App',
+      'القائمة الرئيسية': 'Main menu', 'التنقل السفلي': 'Bottom navigation', 'الشريط الجانبي': 'Sidebar',
+      'فتح القائمة': 'Open menu', 'إغلاق القائمة': 'Close menu', 'تبديل الوضع الليلي': 'Toggle dark mode',
+      'قناتنا على تيليجرام': 'Our Telegram channel', 'قناتنا على واتساب': 'Our WhatsApp channel',
+      'قنواتنا على تيليجرام وواتساب': 'Our Telegram and WhatsApp channels',
+      'تيليجرام': 'Telegram', 'واتساب': 'WhatsApp',
+      'روابط سريعة': 'Quick links', 'معلومات': 'Information', 'تابعنا': 'Follow us',
+      'من نحن': 'About us', 'سياسة الخصوصية': 'Privacy policy', 'شروط الاستخدام': 'Terms of use',
+      'إخلاء المسؤولية': 'Disclaimer', 'اتصل بنا': 'Contact us',
+      'التطبيق على Google Play': 'Get it on Google Play', 'التطبيق على App Store': 'Download on the App Store',
+      'PX League. جميع الحقوق محفوظة.': 'PX League. All rights reserved.',
+      'صُمم بعناية لعشاق كرة القدم': 'Crafted with care for football fans',
+      'PX League منصة عربية لمتابعة مباريات كرة القدم لحظة بلحظة: جدول المباريات اليومي، النتائج المباشرة، ترتيب الدوريات، الأخبار والتوقعات، بتجربة سريعة ونظيفة على الويب وتطبيقات أندرويد وآيفون.':
+        'PX League is an Arabic platform for following football as it happens: the daily match schedule, live scores, league standings, news and predictions, with a fast, clean experience on the web and on Android and iPhone.',
+      // stream arena / community
+      'مباشر': 'LIVE', 'سيبدأ البث قريبًا': 'The stream will start soon', 'البث المباشر': 'Live stream',
+      'جاري تحميل البث...': 'Loading the stream...',
+      'تابع قنواتنا الرسمية': 'Follow our official channels',
+      'روابط البث والأهداف والنتائج لحظة بلحظة': 'Stream links, goals and scores as they happen',
+      'انضم لمجتمعنا': 'Join our community',
+      'انضم لمجتمعنا على تليجرام وواتساب لمتابعة أحدث التوقعات': 'Join our Telegram and WhatsApp community for the latest predictions',
+      'تنبيهات المباريات، روابط البث والتوقعات أولًا بأول.': 'Match alerts, stream links and predictions as they drop.',
+      // home
+      'مباريات اليوم': "Today's matches",
+      'منصة عربية لمتابعة كرة القدم: جدول مباريات اليوم بتوقيت القاهرة، النتائج المباشرة دقيقة بدقيقة، أحداث كل مباراة وتشكيلاتها، ترتيب الدوريات الكبرى والعربية، إلى جانب أخبار الكرة والتوقعات. تُحدَّث النتائج تلقائيًا أثناء المباريات دون الحاجة لإعادة تحميل الصفحة.':
+        "Your football hub: today's schedule in Cairo time, minute-by-minute live scores, events and line-ups for every match, standings for the major European and Arab leagues, plus football news and predictions. Scores update automatically during matches, no reload needed.",
+      'جاري تحميل المباريات...': 'Loading matches...', 'عرض المزيد': 'Show more',
+      'انتهت جميع مباريات اليوم.': "All of today's matches have finished.", 'لا توجد مباريات اليوم.': 'No matches today.',
+      'أحدث الأخبار': 'Latest news', 'ستظهر أحدث الأخبار هنا قريبًا.': 'The latest news will appear here soon.',
+      'عرض كل الأخبار': 'View all news',
+      'حمل تطبيق PX League': 'Get the PX League app',
+      'توقّع نتائج المباريات، تابع الأخبار والنتائج لحظة بلحظة، أنشئ دوريك الخاص مع أصدقائك ونافس في الدوري العام على الصدارة والجوائز.':
+        'Predict match results, follow news and live scores, create a private league with your friends and compete in the global league for the top spot and prizes.',
+      'اعرف المزيد عن التطبيق': 'Learn more about the app',
+      // match cards / statuses
+      'استراحة': 'HT', 'انتهت': 'FT', 'لم تبدأ': 'Not started', 'غير محدد': 'TBD', 'مباشر الآن': 'Live now',
+      'التفاصيل': 'Details', 'مباريات': 'Matches', 'يُعلن لاحقًا': 'TBA',
+      'المعلق يُعلن لاحقًا': 'Commentator TBA', 'القناة تُعلن لاحقًا': 'Channel TBA',
+      'مباريات مباشرة': 'Live matches', 'حالة المباراة': 'Match status',
+      'لم يتم ضبط رابط خادم المباريات.': 'The matches server URL is not configured.',
+      'تعذّر تحميل المباريات حاليًا.': 'Could not load matches right now.',
+      'إعادة المحاولة': 'Try again', 'جاري التحميل...': 'Loading...', 'إغلاق': 'Close',
+      // matches center
+      'مركز المباريات': 'Match center', 'أمس': 'Yesterday', 'اليوم': 'Today', 'غداً': 'Tomorrow', 'غدًا': 'Tomorrow',
+      'اختر تاريخًا': 'Pick a date', 'اختر اليوم': 'Choose a day', 'اختر البطولة': 'Choose a competition',
+      'الكل': 'All', 'كل البطولات': 'All competitions', 'كل الأيام': 'All days',
+      'ابحث عن بطولة أو فريق': 'Search a competition or team', 'ابحث عن بطولة أو فريق...': 'Search a competition or team...',
+      'لا توجد مباريات في هذا اليوم.': 'No matches on this day.', 'لا توجد مباريات مباشرة الآن.': 'No live matches right now.',
+      'لا توجد مباريات لم تبدأ بعد.': 'No upcoming matches.', 'لا توجد مباريات منتهية في هذا اليوم.': 'No finished matches on this day.',
+      'لا توجد نتائج مطابقة لبحثك.': 'No results match your search.', 'عرض كل المباريات': 'Show all matches',
+      // standings
+      'ترتيب الدوريات': 'League standings', 'اختر الدوري': 'Choose a league',
+      'اختر الدوري لعرض جدول الترتيب المحدّث.': 'Pick a league to see its up-to-date table.',
+      'جداول ترتيب أهم الدوريات الأوروبية والعربية في مكان واحد: الدوري الإنجليزي الممتاز، الإسباني، الإيطالي، الألماني، الفرنسي، دوري روشن السعودي، الدوري المصري، دوري أبطال أوروبا وأفريقيا وغيرها. يعرض كل جدول عدد المباريات والانتصارات والتعادلات والهزائم والأهداف وفارقها والنقاط، مع تمييز مراكز التأهل والهبوط، ويُحدَّث بعد نهاية كل جولة.':
+        'Standings for the top European and Arab leagues in one place: the Premier League, LaLiga, Serie A, the Bundesliga, Ligue 1, the Saudi Pro League, the Egyptian Premier League, the Champions League, the CAF Champions League and more. Each table shows played, won, drawn, lost, goals, goal difference and points, marks qualification and relegation places, and is updated after every round.',
+      'الدوري الإنجليزي': 'Premier League', 'دوري أبطال أوروبا': 'Champions League', 'الدوري الإسباني': 'LaLiga',
+      'الدوري المصري': 'Egyptian Premier League', 'دوري روشن السعودي': 'Saudi Pro League', 'الدوري الإيطالي': 'Serie A',
+      'الدوري الألماني': 'Bundesliga', 'الدوري الفرنسي': 'Ligue 1', 'دوري أبطال أفريقيا': 'CAF Champions League',
+      'الدوري الأوروبي': 'Europa League', 'الدوري المغربي': 'Botola Pro', 'الدوري الجزائري': 'Algerian Ligue 1',
+      'الدوري التونسي': 'Tunisian Ligue 1', 'الدوري البرتغالي': 'Primeira Liga', 'الدوري التركي': 'Süper Lig',
+      'الدوري الإماراتي': 'UAE Pro League', 'الدوري القطري': 'Qatar Stars League',
+      'جاري تحميل الترتيب...': 'Loading standings...', 'تعذّر تحميل الترتيب حاليًا.': 'Could not load the standings right now.',
+      'لا يتوفر جدول الترتيب لهذا الدوري حاليًا.': 'No table is available for this league right now.',
+      'دليل الألوان': 'Colour key', 'فريقًا': 'teams', 'الفريق': 'Team', 'لعب': 'P', 'فوز': 'W', 'تعادل': 'D', 'خسارة': 'L',
+      'له': 'GF', 'عليه': 'GA', 'نقاط': 'Pts',
+      // match page
+      'تفاصيل المباراة': 'Match details', 'أقسام المباراة': 'Match sections', 'أحداث اللقاء': 'Events', 'التشكيلات': 'Line-ups',
+      'جاري تحميل المباراة...': 'Loading the match...',
+      'الشوط الأول': 'Half-time', 'ركلات الترجيح': 'Penalties', 'مجموع المباراتين': 'Aggregate', 'الحكم': 'Referee',
+      'انطلاق المباراة': 'Kick-off', 'نهاية الشوط الأول': 'Half-time', 'بداية الشوط الثاني': 'Second half',
+      'نهاية الوقت الأصلي': 'End of normal time', 'نهاية المباراة': 'Full-time',
+      'خروج': 'Off', 'تبديل': 'Substitution', 'هدف عكسي': 'Own goal', 'ركلة جزاء': 'Penalty', 'صناعة': 'Assist',
+      'هدف': 'Goal', 'بطاقة صفراء': 'Yellow card', 'إنذار ثانٍ': 'Second yellow', 'بطاقة حمراء': 'Red card',
+      'لم تبدأ المباراة بعد، ستظهر الأحداث هنا فور انطلاقها.': 'The match has not started yet; events will appear here once it kicks off.',
+      'لا توجد أحداث مسجلة لهذه المباراة.': 'No events recorded for this match.',
+      'تم استبداله': 'Subbed off', 'دخل بديلًا': 'Came on', 'المدرب': 'Coach', 'البدلاء': 'Substitutes', 'الغيابات': 'Absentees',
+      'لم يتم الإعلان عن التشكيلات بعد.': 'Line-ups have not been announced yet.',
+      'لم يتم تحديد المباراة. اختر مباراة من الصفحة الرئيسية.': 'No match selected. Pick one from the home page.',
+      'تعذّر تحميل الأحداث.': 'Could not load the events.', 'تعذّر تحميل التشكيلات.': 'Could not load the line-ups.',
+      'المباراة غير موجودة.': 'Match not found.', 'تعذّر تحميل بيانات المباراة.': 'Could not load the match data.',
+      'غير معروف': 'Unknown',
+      // predictions
+      'توقع واجمع النقاط': 'Predict and earn points', 'توقعات PX League': 'PX League Predictions',
+      'كل مباريات البطولات المحددة تظهر في مكان واحد، والترتيب يجمع نقاطك من جميع المباريات.':
+        'All matches from the selected competitions in one place; the leaderboard adds up your points from every match.',
+      'النتيجة الصحيحة': 'Exact score', 'الفائز صحيح فقط': 'Correct winner only', 'توقع غير صحيح': 'Wrong prediction',
+      'المباريات المتاحة للتوقع': 'Matches open for predictions', 'يُغلق التوقع لحظة بدء المباراة': 'Predictions lock at kick-off',
+      'الترتيب العام': 'Leaderboard', 'اضغط على أي شخص لرؤية توقعاته مباراةً بمباراة.': 'Tap anyone to see their predictions match by match.',
+      'حسابك والترتيب العام': 'Your account and the leaderboard',
+      'المتصفح لا يدعم تسجيل الدخول الآمن.': 'This browser does not support secure sign-in.',
+      'اسم المستخدم من 3 إلى 20 حرفًا: حروف إنجليزية أو أرقام أو _': 'Username: 3 to 20 characters, English letters, digits or _',
+      'كلمة المرور 6 أحرف على الأقل.': 'The password must be at least 6 characters.',
+      'اسم المستخدم مستخدم بالفعل.': 'That username is already taken.', 'تعذّر الحفظ على هذا الجهاز.': 'Could not save on this device.',
+      'اسم المستخدم أو كلمة المرور غير صحيحة.': 'Wrong username or password.',
+      'التوقع مغلق: بدأت المباراة.': 'Predictions are closed: the match has started.',
+      'التوقع مغلق': 'Prediction closed', 'بانتظار النتيجة': 'awaiting the result', 'سجّل الدخول أولاً': 'Sign in first',
+      'تم الحفظ ✓': 'Saved ✓', 'عدّلت توقعك، اضغط «تحديث التوقع» للحفظ': 'You changed your pick; press "Update prediction" to save',
+      'اختر النتيجة ثم احفظ': 'Pick a score, then save', 'تحديث التوقع': 'Update prediction', 'حفظ التوقع': 'Save prediction',
+      'لا توجد مباريات متاحة لهذا الاختيار حاليًا.': 'No matches are available for this selection right now.',
+      'جارٍ الحفظ...': 'Saving...', 'تعذّر حفظ التوقع.': 'Could not save the prediction.',
+      'الحساب': 'Account', 'دخول': 'Sign in', 'حساب جديد': 'New account', 'اسم المستخدم': 'Username',
+      'الاسم الظاهر': 'Display name', '(اختياري)': '(optional)', 'الدولة': 'Country', 'كلمة المرور': 'Password',
+      'إنشاء الحساب': 'Create account', 'الحساب والتوقعات محفوظة على هذا الجهاز فقط حاليًا.': 'Your account and predictions are currently saved on this device only.',
+      'ترتيبك': 'Your rank', 'نقطة': 'pts', 'نتيجة صحيحة': 'Exact scores', 'فائز صحيح': 'Correct winners', 'توقع محفوظ': 'Saved predictions',
+      'تسجيل الخروج': 'Sign out', 'حدث خطأ، حاول مرة أخرى.': 'Something went wrong, please try again.',
+      'لا يوجد متوقعون بعد. سجّل حسابك وكن أول من يتصدر الترتيب!': 'No players yet. Sign up and be the first on the leaderboard!',
+      'أنت': 'You', 'التوقع مخفي حتى بداية المباراة': 'Hidden until kick-off', 'التوقع': 'Prediction', 'النتيجة': 'Result',
+      'المركز': 'Rank', 'لا توجد توقعات بعد.': 'No predictions yet.', 'تعذّر تحميل التوقعات.': 'Could not load the predictions.',
+      'مصر': 'Egypt', 'السعودية': 'Saudi Arabia', 'الإمارات': 'UAE', 'قطر': 'Qatar', 'الكويت': 'Kuwait', 'البحرين': 'Bahrain',
+      'عُمان': 'Oman', 'الأردن': 'Jordan', 'فلسطين': 'Palestine', 'لبنان': 'Lebanon', 'سوريا': 'Syria', 'العراق': 'Iraq',
+      'اليمن': 'Yemen', 'المغرب': 'Morocco', 'الجزائر': 'Algeria', 'تونس': 'Tunisia', 'ليبيا': 'Libya', 'السودان': 'Sudan',
+      'موريتانيا': 'Mauritania', 'الصومال': 'Somalia', 'تركيا': 'Turkey', 'بريطانيا': 'United Kingdom', 'فرنسا': 'France',
+      'ألمانيا': 'Germany', 'أمريكا': 'United States', 'دولة أخرى': 'Other country',
+      // news / posts
+      'تغطية يومية من فريق تحرير': 'Daily coverage from the editorial team of',
+      'لأهم أحداث كرة القدم العربية والعالمية: تقارير المباريات ونتائجها، تحليلات القمم قبل انطلاقها، أخبار الأندية والمنتخبات وانتقالات اللاعبين، ومتابعة الدوري الإنجليزي والإسباني ودوري أبطال أوروبا والدوري المصري ودوري روشن السعودي وغيرها.':
+        'on the biggest stories in Arab and world football: match reports and results, previews of the big games, club and national-team news, transfers, and coverage of the Premier League, LaLiga, the Champions League, the Egyptian Premier League, the Saudi Pro League and more.',
+      'أخبار ذات صلة': 'Related news', 'المنشورات': 'Posts', 'لا توجد منشورات بعد.': 'No posts yet.',
+      'الصفحة التي تبحث عنها غير موجودة أو تم نقلها.': 'The page you are looking for does not exist or has moved.',
+      'العودة للرئيسية': 'Back to home', 'صفحات الأخبار': 'News pages', 'التنقل بين الصفحات': 'Pagination',
+      'تعذّر تحميل الأخبار الآن.': 'Could not load the news right now.', 'لا توجد أخبار منشورة بعد.': 'No news published yet.',
+      'عدد الأخبار المنشورة': 'Published articles', 'الأحدث': 'Newer', 'الأقدم': 'Older',
+      '→ الأحدث': '← Newer', 'الأقدم ←': 'Older →', '←': '→',
+      // app page
+      'تحدّي التوقعات يبدأ من هنا · متوفر على Android و iPhone': 'The prediction challenge starts here · on Android and iPhone',
+      'توقّع، نافس، وتصدّر!': 'Predict, compete, top the table!',
+      'تطبيقك الرياضي الشامل لمتابعة نتائج وأخبار المباريات لحظة بلحظة، وتوقع النتائج ومنافسة أصدقائك وآلاف اللاعبين في الدوريات الخاصة والدوري العام للفوز بالجوائز.':
+        'Your all-in-one football app: live scores and match news, predictions, and competition against your friends and thousands of players in private leagues and the global league to win prizes.',
+      'حمّله الآن من': 'Get it now on', 'متوفر على': 'Available on', 'توقعك صحيح': 'Your pick is right', '+ نقاط': '+ points',
+      'تنويه:': 'Note:',
+      'تطبيق PX League مخصص لمتابعة نتائج المباريات، الأخبار، الإحصائيات، وتحديات التوقعات التنافسية فقط، ولا يقدم أي بثوث مرئية للمباريات.':
+        'The PX League app is for match results, news, statistics and prediction challenges only. It does not stream any matches.',
+      'لماذا PX League؟': 'Why PX League?', 'كل ما تحتاجه للمنافسة في مكان واحد': 'Everything you need to compete, in one place',
+      'متابعة المباريات والأخبار': 'Matches and news',
+      'جداول المباريات اليومية، النتائج الفورية، الإحصائيات، والتنبيهات اللحظية بدون بثوث.': 'Daily fixtures, instant results, statistics and real-time alerts, without streams.',
+      'توقّع النتائج واجمع النقاط': 'Predict results, earn points',
+      'سجّل توقعك قبل صافرة البداية واحصد النقاط حسب دقة توقعك.': 'Lock in your prediction before kick-off and earn points for accuracy.',
+      'حماس الدوري العام والجوائز': 'The global league and prizes',
+      'انضم للمنافسة الكبرى في الدوري العام ضد آلاف المتوقعين وتصدّر الترتيب للفوز بجوائز قيّمة.': 'Join the big competition against thousands of players and top the table to win great prizes.',
+      'دوريكم الخاص مع الأصدقاء': 'Your private league with friends',
+      'أنشئ دوري توقعات خاص، شارك كود الدعوة مع أصدقائك، وتابعوا الترتيب جولة بعد جولة.': 'Create a private prediction league, share the invite code with friends, and follow the table round by round.',
+      'إحصائيات وتقييم الأداء': 'Stats and performance',
+      'راجع سجل توقعاتك، نسبة الدقة، وتطور مركزك في لوحة المتصدرين.': 'Review your prediction history, accuracy and progress on the leaderboard.',
+      'تنبيهات لحظية ذكية': 'Smart real-time alerts',
+      'إشعارات فورية بالأهداف، بداية المباريات، وتحديثات مركزك في الترتيب.': 'Instant notifications for goals, kick-offs and changes to your rank.',
+      'ثلاث خطوات بسيطة': 'Three simple steps', 'كيف يعمل PX League؟': 'How does PX League work?',
+      'اختر المباراة وتابع أخبارها وإحصائياتها.': 'Pick a match and follow its news and stats.',
+      'سجّل توقعك قبل انطلاق الصافرة.': 'Lock in your prediction before kick-off.',
+      'اجمع النقاط، تصدّر دوريات الأصدقاء والدوري العام، ونافس على الجوائز!': 'Earn points, top your friends’ leagues and the global league, and compete for prizes!',
+      'إجابات سريعة': 'Quick answers', 'الأسئلة الشائعة': 'FAQ',
+      'ما هو PX League؟': 'What is PX League?',
+      'تطبيق رياضي لمتابعة نتائج وأخبار مباريات كرة القدم لحظة بلحظة، وتوقع النتائج وجمع النقاط، مع إنشاء دوريات خاصة مع أصدقائك أو المنافسة في الدوري العام على الصدارة والجوائز.':
+        'A sports app for live football scores and news, predicting results and earning points, with private leagues for your friends and a global league for the top spot and prizes.',
+      'هل يحتوي التطبيق على بث مباريات؟': 'Does the app stream matches?',
+      'لا. PX League مخصص لمتابعة النتائج والأخبار والإحصائيات وتحديات التوقعات فقط، ولا يقدم أي بث مرئي للمباريات.': 'No. PX League is for results, news, statistics and prediction challenges only; it does not stream any matches.',
+      'كيف أحصل على النقاط؟': 'How do I earn points?',
+      'سجّل توقعك قبل انطلاق المباراة، وتُحتسب نقاطك حسب دقة توقعك مقارنة بالنتيجة النهائية. تفاصيل احتساب كل توقع متوفرة داخل التطبيق.': 'Make your prediction before kick-off; points depend on how close you are to the final score. The scoring details are in the app.',
+      'كيف أنشئ دوري خاص مع أصدقائي؟': 'How do I create a private league with my friends?',
+      'من داخل التطبيق أنشئ دوري توقعات خاصًا، ثم شارك كود الدعوة مع أصدقائك لينضموا إليك، وتابعوا النقاط والترتيب معًا مباراة بعد مباراة.': 'Create a private prediction league in the app, share the invite code so your friends can join, and follow points and the table together match after match.',
+      'ما هو الدوري العام والجوائز؟': 'What are the global league and prizes?',
+      'الدوري العام منافسة مفتوحة لكل مستخدمي التطبيق، يُرتَّب فيها المتوقعون حسب مجموع نقاطهم، ويتنافس المتصدرون على الجوائز. تفاصيل الجوائز وشروطها تُعلن داخل التطبيق.': 'The global league is open to every app user and ranks players by total points; the leaders compete for prizes. Prize details and terms are announced in the app.',
+      'متى أقدر أغيّر توقعي؟': 'When can I change my prediction?',
+      'سجّل توقعك قبل انطلاق المباراة. قد لا يكون التعديل متاحًا بعد بداية المباراة.': 'Make your prediction before kick-off; changes may not be possible once the match has started.',
+      'هل التطبيق متوفر على Android و iPhone؟': 'Is the app available on Android and iPhone?',
+      'نعم، PX League متوفر الآن على Android و iPhone. استخدم أزرار المتاجر الرسمية في هذه الصفحة لتحميله.': 'Yes, PX League is available now on Android and iPhone. Use the official store buttons on this page to download it.',
+      'جاهز تثبت توقعاتك؟': 'Ready to prove your predictions?', 'حمّل PX League وابدأ المنافسة مباراة بعد مباراة.': 'Download PX League and start competing match after match.'
+    };
+    // Patterns for text built from a label + data
+    var RX = [
+      [/^(\d+) نقطة \(النتيجة (.+)\)$/, function (m) { return m[1] + ' pts (result ' + m[2] + ')'; }],
+      [/^(\d+) نقطة$/, function (m) { return m[1] + ' pts'; }],
+      [/^توقعك (.+)$/, function (m) { return 'your pick ' + m[1]; }],
+      [/^تأهل (.+)$/, function (m) { return m[1] + ' advance'; }],
+      [/^الصفحة (\d+) من (\d+)$/, function (m) { return 'Page ' + m[1] + ' of ' + m[2]; }],
+      [/^أهداف (.+)$/, function (m) { return m[1] + ' goals'; }],
+      [/^إنقاص (.+)$/, function (m) { return 'Decrease ' + trOr(m[1]); }],
+      [/^زيادة (.+)$/, function (m) { return 'Increase ' + trOr(m[1]); }],
+      [/^ر\.ت (.+)$/, function (m) { return 'pens ' + m[1]; }],
+      [/^\(ر\.ت (.+)\)$/, function (m) { return '(pens ' + m[1] + ')'; }],
+      [/^مثال: (.+)$/, function (m) { return 'e.g. ' + m[1]; }],
+      [/^(.+) \(إصابة\)$/, function (m) { return trOr(m[1]) + ' (injury)'; }]
+    ];
+    // data-i18n="key" for text that is not a 1:1 phrase
+    var KEYED = {};
+
+    function tr(t) {
+      if (Object.prototype.hasOwnProperty.call(D, t)) return D[t];
+      for (var i = 0; i < RX.length; i++) { var m = t.match(RX[i][0]); if (m) return RX[i][1](m); }
+      if (t.indexOf(' · ') > 0) {                                // "التوقع مغلق · 10 نقطة"
+        var parts = t.split(' · '), out = parts.map(trOr);
+        return out.some(function (x, j) { return x !== parts[j]; }) ? out.join(' · ') : null;
+      }
+      var c = t.match(/^([^:]+?)\s*:\s*([\s\S]*)$/);              // "الشوط الأول: 0 - 0", "المدرب: "
+      if (c && Object.prototype.hasOwnProperty.call(D, c[1])) return D[c[1]] + ': ' + trOr(c[2]);
+      return null;
+    }
+    function trOr(t) { var r = AR_RE.test(t) ? tr(t) : null; return r == null ? t : r; }
+
+    // ------------------------------------------------------------------ DOM pass
+    var textOrig = new Map();                                    // text node -> original Arabic value
+    var attrOrig = new Map();                                    // element -> { attr: original }
+    function skipped(el) { return !el || !!el.closest(SKIP); }
+    function doText(n) {
+      var v = n.nodeValue;
+      if (!v || !AR_RE.test(v) || skipped(n.parentElement)) return;
+      var core = v.replace(/\s+/g, ' ').trim();
+      var out = tr(core);
+      if (out == null) return;
+      textOrig.set(n, v);
+      var lead = v.match(/^\s*/)[0], trail = v.match(/\s*$/)[0];
+      n.nodeValue = lead + out + trail;
+    }
+    function doAttrs(el) {
+      if (skipped(el)) return;
+      for (var i = 0; i < ATTRS.length; i++) {
+        var a = ATTRS[i], v = el.getAttribute(a);
+        if (!v || !AR_RE.test(v)) continue;
+        var out = tr(v.replace(/\s+/g, ' ').trim());
+        if (out == null) continue;
+        var o = attrOrig.get(el) || {};
+        o[a] = v; attrOrig.set(el, o);
+        el.setAttribute(a, out);
+      }
+      var key = el.getAttribute('data-i18n');
+      if (key && KEYED[key]) {
+        if (!textOrig.has(el)) textOrig.set(el, el.textContent);
+        el.textContent = KEYED[key];
+      }
+    }
+    function walk(node) {
+      if (node.nodeType === 3) { doText(node); return; }
+      if (node.nodeType !== 1 || skipped(node)) return;
+      doAttrs(node);
+      var els = node.querySelectorAll('*');
+      for (var i = 0; i < els.length; i++) doAttrs(els[i]);
+      var it = document.createTreeWalker(node, NodeFilter.SHOW_TEXT, null), t;
+      while ((t = it.nextNode())) doText(t);
+    }
+    function restore() {
+      textOrig.forEach(function (v, n) {
+        if (!n.isConnected) return;
+        if (n.nodeType === 3) n.nodeValue = v; else n.textContent = v;
+      });
+      attrOrig.forEach(function (o, el) {
+        if (!el.isConnected) return;
+        for (var a in o) el.setAttribute(a, o[a]);
+      });
+      textOrig.clear(); attrOrig.clear();
+    }
+    function prune() {                                           // live pages replace nodes every few seconds
+      if (textOrig.size < 3000) return;
+      textOrig.forEach(function (v, n) { if (!n.isConnected) textOrig.delete(n); });
+      attrOrig.forEach(function (v, el) { if (!el.isConnected) attrOrig.delete(el); });
+    }
+    var observer = new MutationObserver(function (records) {
+      for (var i = 0; i < records.length; i++) {
+        var r = records[i];
+        if (r.type === 'childList') { for (var j = 0; j < r.addedNodes.length; j++) walk(r.addedNodes[j]); }
+        else if (r.type === 'characterData') doText(r.target);
+        else if (r.type === 'attributes') doAttrs(r.target);
+      }
+      prune();
+    });
+
+    // ------------------------------------------------------------------ switch
+    var btn = document.getElementById('lang-toggle');
+    function syncButton(lang) {
+      if (!btn) return;
+      var label = btn.querySelector('.lang-toggle__label');
+      if (label) label.textContent = lang === 'en' ? 'AR' : 'EN';
+      btn.setAttribute('aria-label', lang === 'en' ? 'التبديل إلى العربية' : 'Switch to English');
+      btn.setAttribute('lang', lang === 'en' ? 'ar' : 'en');
+      btn.setAttribute('title', lang === 'en' ? 'العربية' : 'English');
+    }
+    function apply(lang) {
+      root.setAttribute('lang', lang);
+      root.setAttribute('dir', lang === 'en' ? 'ltr' : 'rtl');
+      if (lang === 'en') {
+        walk(document.body);
+        observer.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ATTRS });
+      } else {
+        observer.disconnect();
+        restore();
+      }
+      syncButton(lang);
+      try { window.dispatchEvent(new CustomEvent('pxl:langchange', { detail: { lang: lang } })); } catch (e) {}
+    }
+    var switching = false;
+    function setLang(lang) {
+      if (switching || lang === window.pxlLang()) return;
+      switching = true;
+      try { localStorage.setItem('pxl-lang', lang); } catch (e) {}
+      var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      root.classList.add('is-lang-switching');
+      setTimeout(function () {
+        apply(lang);
+        requestAnimationFrame(function () { root.classList.remove('is-lang-switching'); switching = false; });
+      }, reduce ? 0 : 200);
+    }
+    window.pxlSetLang = setLang;
+    window.pxlT = function (ar) { return window.pxlLang() === 'en' ? trOr(ar) : ar; };
+    if (btn) btn.addEventListener('click', function () { setLang(window.pxlLang() === 'en' ? 'ar' : 'en'); });
+
+    // Initial state: Arabic needs nothing; English is translated now (everything above this
+    // script is parsed) and content rendered later is caught by the observer.
+    if (window.pxlLang() === 'en') apply('en'); else syncButton('ar');
+    requestAnimationFrame(function () { root.classList.remove('pxl-i18n-pending'); });
+  })();
+  //]]>
+  </script>
   <script>
   //<![CDATA[
   (function () {
@@ -3332,7 +3806,7 @@ body#layout .sidebar { width: 320px; }
       var i = chips.indexOf(document.activeElement);
       if (i === -1 || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return;
       e.preventDefault();
-      var step = e.key === 'ArrowLeft' ? 1 : -1;           // RTL: left = next
+      var step = (e.key === 'ArrowLeft') === (document.documentElement.dir !== 'ltr') ? 1 : -1;   // RTL: left = next, LTR: right = next
       var next = chips[(i + step + chips.length) % chips.length];
       next.focus();
       selectLeague(next, true);
@@ -3363,7 +3837,7 @@ body#layout .sidebar { width: 320px; }
 
     // ------------------------------------------------------------------ config
     var WORKER_BASE_URL = window.PXL_WORKER_BASE_URL || '';
-    var MATCH_FILTERS = '[]/[]/["8634"]';                  // same feed as the home page
+    var MATCH_FILTERS = window.PXL_MATCH_FILTERS;           // shared: SETTINGS script at the top
     var TEAM_LOGO_BASE = 'https://imgs.ysscores.com/teams/128/';
     var LEAGUE_LOGO_BASE = 'https://imgs.ysscores.com/championship/64/';
     var TZ = 'Africa/Cairo';
@@ -3435,22 +3909,11 @@ body#layout .sidebar { width: 320px; }
     function matchPageUrl(id) { return '/p/match.html?id=' + encodeURIComponent(id); }
 
     // ------------------------------------------------------------------ parsing (same rules as the home page)
-    function statusOf(raw) {
-      var s = Number(raw.status);
-      if (s === 0) return 'upcoming';
-      if (s === 4) return 'finished';
-      var kickoff = Number(raw.match_timestamp) * 1000, now = Date.now();
-      return kickoff && now >= kickoff - 10 * 60 * 1000 && now <= kickoff + LIVE_WINDOW_MS ? 'live' : 'other';
-    }
-    // ysscores 'minutes' = match clock in seconds; 2nd half (status 3) already includes 45:00.
-    function liveMinute(status, seconds) {
-      var secs = Number(seconds);
-      if (!(secs > 0)) return '';
-      var m = Math.floor(secs / 60) + 1, st = Number(status);
-      if (st === 1) return m > 45 ? '45+' + (m - 45) : String(m);
-      if (st === 3) { var t = secs >= 2700 ? m : 45 + m; return t > 90 ? '90+' + (t - 90) : String(t); }
-      return '';
-    }
+    // Shared rule (SETTINGS script at the top): live === 1 first (inside the kick-off window),
+    // then 0 upcoming, 4 finished, other codes live near kick-off.
+    function statusOf(raw) { return window.pxlMatchStatus(raw); }
+    // Phase / minute / badge: shared pxlLive helper (SETTINGS script at the top).
+    var LIVE_INFO_MAX_AGE_MS = 90 * 1000;                    // older match_info is not trusted for phase / minute
     function parseMatch(raw) {
       var cc = Array.isArray(raw.channel_commm) && raw.channel_commm.length ? raw.channel_commm[0] : {};
       var champ = raw.championship || {}, home = raw.home_team || {}, away = raw.away_team || {};
@@ -3463,7 +3926,8 @@ body#layout .sidebar { width: 320px; }
         timestamp: Number(raw.match_timestamp) || 0,
         time: cairoTime(raw.match_timestamp),
         status: statusOf(raw),
-        minute: liveMinute(raw.status, raw.minutes),
+        phase: statusOf(raw) === 'live' ? window.pxlLive.phase(raw, true) : '',   // from the list row
+        clock: null,                                          // filled from fresh match_info only
         home: { name: home.full_title || home.title || '', logo: imageUrl(TEAM_LOGO_BASE, home.image) },
         away: { name: away.full_title || away.title || '', logo: imageUrl(TEAM_LOGO_BASE, away.image) },
         scoreHome: raw.home_scores != null ? raw.home_scores : 0,
@@ -3495,7 +3959,7 @@ body#layout .sidebar { width: 320px; }
       return out + '<span class="match-card__more">التفاصيل <span aria-hidden="true">&#8592;</span></span>';
     }
     function badgeHtml(m) {
-      if (m.status === 'live') return 'مباشر' + (m.minute ? ` <span dir="ltr">${esc(m.minute)}'</span>` : '');
+      if (m.status === 'live') return window.pxlLive.badge(m.phase, m.clock);   // "استراحة" at half-time
       return esc(m.status === 'finished' ? 'انتهت' : m.status === 'other' ? 'غير محدد' : 'لم تبدأ');
     }
     function cardHtml(m) {
@@ -3556,7 +4020,7 @@ body#layout .sidebar { width: 320px; }
       if (dateInput && dateInput.value !== state.date) dateInput.value = state.date;
       if (dateLabel) {
         try {
-          dateLabel.textContent = new Intl.DateTimeFormat('ar-EG', { timeZone: 'UTC', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
+          dateLabel.textContent = new Intl.DateTimeFormat(window.pxlLocale(), { timeZone: 'UTC', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
             .format(new Date(state.date + 'T12:00:00Z'));
         } catch (e) { dateLabel.textContent = state.date; }
       }
@@ -3638,13 +4102,15 @@ body#layout .sidebar { width: 320px; }
         try {
           var d = ((await fetchJson(matchInfoUrl(m.id), 1)) || {}).data || {};
           var cc = Array.isArray(d.channel_commm) && d.channel_commm.length ? d.channel_commm[0] : {};
-          liveInfo[m.id] = { minute: liveMinute(d.status, d.minutes), round: d.round || '', channel: cc.channel_name || '', commentator: cc.commentator_name || '' };
-        } catch (e) { /* card stays without minute */ }
+          liveInfo[m.id] = { at: Date.now(), phase: window.pxlLive.phase(d, true), clock: window.pxlLive.clock(d), round: d.round || '', channel: cc.channel_name || '', commentator: cc.commentator_name || '' };
+        } catch (e) { /* card keeps the list phase, no minute */ }
       }));
       matches.forEach(function (m) {
         var i = liveInfo[m.id];
         if (!i || m.status !== 'live') return;
-        if (i.minute) m.minute = i.minute;
+        // Phase + clock only from a FRESH match_info (a failed refresh never leaves a 1st-half
+        // minute on a match that is now at half-time); otherwise the list row phase, no minute.
+        if (Date.now() - i.at < LIVE_INFO_MAX_AGE_MS) { m.phase = i.phase || m.phase; m.clock = i.clock; }
         if (i.round && !m.round) m.round = i.round;
         if (i.channel && !m.channel) m.channel = i.channel;
         if (i.commentator && !m.commentator) m.commentator = i.commentator;
@@ -3750,7 +4216,7 @@ body#layout .sidebar { width: 320px; }
 
     // ------------------------------------------------------------------ config
     var WORKER_BASE_URL = window.PXL_WORKER_BASE_URL || '';
-    var MATCH_FILTERS = '[]/[]/["8634"]';              // same feed filter as the home page
+    var MATCH_FILTERS = window.PXL_MATCH_FILTERS;       // shared: SETTINGS script at the top
     var TEAM_LOGO_BASE = 'https://imgs.ysscores.com/teams/128/';
     var LEAGUE_LOGO_BASE = 'https://imgs.ysscores.com/championship/64/';
     var TZ = 'Africa/Cairo';
@@ -3806,9 +4272,9 @@ body#layout .sidebar { width: 320px; }
     function initial(name) { return (String(name || '?').trim().charAt(0) || '?').toUpperCase(); }
 
     var dayKeyFmt = new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' });
-    var timeFmt = new Intl.DateTimeFormat('ar-EG-u-nu-latn', { timeZone: TZ, hour: 'numeric', minute: '2-digit' });
-    var dateFmt = new Intl.DateTimeFormat('ar-EG-u-nu-latn', { timeZone: TZ, weekday: 'long', day: 'numeric', month: 'long' });
-    var shortDayFmt = new Intl.DateTimeFormat('ar-EG-u-nu-latn', { timeZone: TZ, weekday: 'long', day: 'numeric', month: 'numeric' });
+    var timeFmt = new Intl.DateTimeFormat(window.pxlLocale(true), { timeZone: TZ, hour: 'numeric', minute: '2-digit' });
+    var dateFmt = new Intl.DateTimeFormat(window.pxlLocale(true), { timeZone: TZ, weekday: 'long', day: 'numeric', month: 'long' });
+    var shortDayFmt = new Intl.DateTimeFormat(window.pxlLocale(true), { timeZone: TZ, weekday: 'long', day: 'numeric', month: 'numeric' });
     function dayKey(ms) { return dayKeyFmt.format(new Date(ms)); }                 // YYYY-MM-DD, Cairo
     function dayLabel(key) {
       if (key === dayKey(Date.now())) return 'اليوم';
@@ -4473,7 +4939,8 @@ body#layout .sidebar { width: 320px; }
     var TEAM_LOGO_BASE = 'https://imgs.ysscores.com/teams/128/';
     var LEAGUE_LOGO_BASE = 'https://imgs.ysscores.com/championship/64/';
     var LIVE_WINDOW_MS = 3.5 * 60 * 60 * 1000;
-    var REFRESH_MS = 30 * 1000;
+    var REFRESH_MS = 10 * 1000;                                 // while live (Worker edge TTL for match_info: 15 s)
+    var PRE_MATCH_MS = 30 * 1000;                               // last 30 min before kick-off
 
     var page = document.getElementById('match-page');
     if (!page) return;
@@ -4495,7 +4962,7 @@ body#layout .sidebar { width: 320px; }
       return x.short_title || x.title || x.full_title || '';
     }
     function cairo(unix, opts) {
-      try { return new Intl.DateTimeFormat('ar-EG', Object.assign({ timeZone: 'Africa/Cairo' }, opts)).format(new Date(unix * 1000)); }
+      try { return new Intl.DateTimeFormat(window.pxlLocale(), Object.assign({ timeZone: 'Africa/Cairo' }, opts)).format(new Date(unix * 1000)); }
       catch (e) { return ''; }
     }
     function cairoTime(unix) {
@@ -4531,26 +4998,12 @@ body#layout .sidebar { width: 320px; }
       }
     }
 
-    // Same rules as the home cards: 0 upcoming, 4 finished, other codes live near kick-off
-    function statusOf(d) {
-      var s = Number(d.status);
-      if (s === 0) return 'upcoming';
-      if (s === 4) return 'finished';
-      var k = Number(d.match_timestamp) * 1000, now = Date.now();
-      return k && now >= k - 10 * 60 * 1000 && now <= k + LIVE_WINDOW_MS ? 'live' : 'other';
-    }
-    // 'minutes' = the MATCH CLOCK in seconds (verified live 2026-11-17): status 1 counts from
-    // kick-off, status 3 already includes the first 45:00 (2nd half 46:10 played -> 5467 s).
-    // It must not get another 45 added (that produced "90+45"). A 2nd-half value below 45:00
-    // is treated as time since the restart. Stoppage time: 45+N / 90+N.
-    function liveMinute(status, seconds) {
-      var secs = Number(seconds);
-      if (!(secs > 0)) return '';
-      var m = Math.floor(secs / 60) + 1, st = Number(status);
-      if (st === 1) return m > 45 ? '45+' + (m - 45) : String(m);
-      if (st === 3) { var t = secs >= 2700 ? m : 45 + m; return t > 90 ? '90+' + (t - 90) : String(t); }
-      return '';
-    }
+    // Shared rule (SETTINGS script at the top): live === 1 first (inside the kick-off window),
+    // then 0 upcoming, 4 finished, other codes live near kick-off.
+    function statusOf(raw) { return window.pxlMatchStatus(raw); }
+    // Match clock -> minute text: shared helper pxlLive.minute (SETTINGS script at the top).
+    // Kept as a local name for normalize(); returns '' for half-time (status 2) and unknown codes.
+    function liveMinute(status, seconds) { return window.pxlLive.minute(status, seconds); }
 
     // ------------------------------------------------------------------ icons
     var I = {
@@ -4564,12 +5017,223 @@ body#layout .sidebar { width: 320px; }
     };
     function cardIcon(kind) { return '<span class="card-ico card-ico--' + kind + '"></span>'; }
 
+    // ------------------------------------------------------------------ normalize (data layer)
+    // normalize(info, ev, lu) is the ONLY code that reads raw ysscores shapes. The renderers
+    // below use its result only. Raw shapes (verified on match 5702737, 2026-11-20):
+    //   info = match_info.data      events / lineup / statics are FLAGS (0|1), stats are in
+    //                               statics_match, shootout in penalties[teamId] = [{playerId: 0|1}]
+    //   ev   = matches_event.data   event / lineup / static are the flags, the list is "events",
+    //                               stats in statics, shootout in match_penalties[teamId]
+    //   lu   = matches_lineup.data  OBJECT: lu["0"] = header (home_team / away_team = numeric ids,
+    //                               *_team_info, *_formation, *_coach), lu.lineup[teamId] = { lineup, substitutions }
+    // Team ids are numbers in objects but STRING keys in maps (statics, penalties, lineup, agg_result).
+    // Any argument may be null (failed / not requested): the result then has empty parts.
+    var PLAYER_IMG_BASE = 'https://imgs.ysscores.com/player/128/';   // verified: player/128/{image} serves image/png
+    var PLACEHOLDER_PLAYER_ID = 9965324011;                       // "غير معروف", shared by many entries
+    var EVENT_KIND = { 1: 'goal', 4: 'own_goal', 5: 'pen_goal', 2: 'yellow', 3: 'red', 8: 'sub' };   // others (21, 22...) ignored
+    var ROW_ORDER = ['G', 'D', 'M', 'F', 'S'];                    // lineup item.position = pitch row (NOT player.position)
+
+    function num(v) {                                            // "6.8" -> 6.8, null/''/garbage -> null
+      if (v === null || v === undefined || v === '') return null;
+      var n = Number(v);
+      return isFinite(n) ? n : null;
+    }
+    function parseMaybeJson(v) {                                 // ex_time / score_time may be '[{"1":83}]'
+      if (typeof v !== 'string') return v ?? null;
+      try { return JSON.parse(v); } catch (e) { return null; }
+    }
+    function person(p) {
+      if (!p || typeof p !== 'object') return null;
+      var id = num(p.id ?? p.row_id);
+      var name = p.short_title || p.title || p.full_title || '';
+      return { id: id, name: name, placeholder: id === PLACEHOLDER_PLAYER_ID || name === 'غير معروف' };
+    }
+    function team(t, qualified, header, side) {
+      t = t || {};
+      return {
+        id: num(t.row_id),
+        name: t.full_title || t.title || '',
+        short: t.title || t.full_title || '',
+        logo: imageUrl(TEAM_LOGO_BASE, t.image),
+        qualified: Number(qualified) === 1,
+        formation: header?.[side + '_formation'] || '',
+        coach: person(header?.[side + '_coach'])?.name || ''
+      };
+    }
+    function halfScore(arr) {                                    // [{home_team:"6296",home_scores:"0"},{away_team:"10077",away_scores:"0"}]
+      if (!Array.isArray(arr)) return null;
+      var h = arr.find(function (x) { return x?.home_scores != null; });
+      var a = arr.find(function (x) { return x?.away_scores != null; });
+      return h && a ? { home: num(h.home_scores) ?? 0, away: num(a.away_scores) ?? 0 } : null;
+    }
+    // Shootout. Many kicks share the placeholder player_id, so entries are NEVER keyed by player id:
+    // the array order is the kick order, total = sum of scores.
+    function shootoutSide(evList, infoList) {
+      var kicks = [];
+      if (Array.isArray(evList) && evList.length) {               // matches_event: {player_id, player_name, score}
+        kicks = evList.map(function (k) { return { player: person(k?.player_name), scored: Number(k?.score) === 1 }; });
+      } else if (Array.isArray(infoList) && infoList.length) {    // match_info: [{ "<playerId>": 0|1 }]
+        kicks = infoList.map(function (k) {
+          var vals = k && typeof k === 'object' ? Object.values(k) : [];
+          return { player: null, scored: Number(vals[0]) === 1 };
+        });
+      }
+      return { kicks: kicks, total: kicks.reduce(function (s, k) { return s + (k.scored ? 1 : 0); }, 0) };
+    }
+    function stats(map, id) {
+      var s = map && typeof map === 'object' ? map[String(id)] : null;
+      if (!s || typeof s !== 'object') return null;
+      return { shots: num(s.total_shots), fouls: num(s.fouls), offsides: num(s.offsides), possession: num(s.ball_possession), xg: num(s.xg) };
+    }
+    function minuteLabel(m, plus) { return m == null ? '' : m + (plus > 0 ? '+' + plus : '') + "'"; }
+    function normEvents(list, homeId, awayId) {
+      if (!Array.isArray(list)) return [];
+      return list.slice().sort(function (a, b) {                 // newest first: minute, added time, event id
+        return (num(b?.time_minute) || 0) - (num(a?.time_minute) || 0) ||
+          (num(b?.time_plus) || 0) - (num(a?.time_plus) || 0) ||
+          (num(b?.event_id) || 0) - (num(a?.event_id) || 0);
+      }).map(function (e) {
+        var type = Number(e?.type);
+        if (type === 100) {                                      // phase marker: no player, its time_plus is not a minute
+          return { id: num(e.event_id), kind: 'phase', phase: Number(e.status), side: '' };
+        }
+        var kind = EVENT_KIND[type];
+        if (!kind) return null;
+        if (kind === 'red' && Number(e.status) === 7) kind = 'second_yellow';
+        // Side from the EVENT's team_id only (player_name.team_id can be another club: 162418 vs 6296)
+        var tid = String(e.team_id ?? '');
+        var side = tid === String(homeId) ? 'home' : tid === String(awayId) ? 'away' : '';
+        if (!side) return null;
+        var m = num(e.time_minute), plus = num(e.time_plus) || 0;
+        var p = person(e.player_name), a = person(e.assist_player_name);
+        var out = { id: num(e.event_id), kind: kind, side: side, minute: m, plus: plus, minuteText: minuteLabel(m, plus) };
+        if (kind === 'sub') {                                    // player_name = OUT, assist_player_name = IN
+          out.playerOut = p; out.playerIn = a; out.injury = Number(e.status) === 9;
+        } else {
+          out.player = p; out.assist = a;
+        }
+        return out;
+      }).filter(Boolean);
+    }
+    function lineupPlayer(item, bench) {
+      var pl = item?.player || {};
+      var p = person(pl) || { id: null, name: '', placeholder: true };
+      var subAt = num(item?.substitute_time), subPlus = num(item?.substitute_plus) || 0;
+      return {
+        id: p.id, name: p.name, placeholder: p.placeholder,
+        number: pl.player_number ?? '',
+        role: pl.position || '',                                 // real position ("GK", "CM"...), display only
+        image: imageUrl(PLAYER_IMG_BASE, pl.image),
+        country: pl.country?.title || '',
+        row: item?.position || '',                               // G|D|M|F|S
+        slot: num(item?.formation_position) || 0,
+        captain: Number(item?.captain) === 1,
+        rating: item?.rating ? String(item.rating) : '',
+        goals: num(item?.goal) || 0, ownGoals: num(item?.own_goal) || 0, assists: num(item?.assist) || 0,
+        yellow: Number(item?.yellow) === 1, red: Number(item?.red) === 1,
+        subbedOff: !bench && Number(item?.substitute) === 1,
+        cameOn: bench && subAt != null,
+        subMinute: subAt != null ? minuteLabel(subAt, subPlus) : ''
+      };
+    }
+    function teamLineup(block, injured) {
+      if (!block || typeof block !== 'object') return null;
+      var starters = (Array.isArray(block.lineup) ? block.lineup : []).map(function (x) { return lineupPlayer(x, false); });
+      var bench = (Array.isArray(block.substitutions) ? block.substitutions : []).map(function (x) { return lineupPlayer(x, true); });
+      if (!starters.length) return null;
+      // Pitch rows by item.position in G, D, M, F, S order, sorted by formation_position.
+      // Not derived from the formation string (4-2-3-1 = D4 M2 F3 S1, 4-3-3 has no S row).
+      var known = starters.every(function (p) { return ROW_ORDER.indexOf(p.row) !== -1; });
+      var rows = known ? ROW_ORDER.map(function (r) {
+        return starters.filter(function (p) { return p.row === r; }).sort(function (a, b) { return a.slot - b.slot; });
+      }).filter(function (r) { return r.length; }) : null;
+      return {
+        starters: starters, bench: bench, rows: rows,
+        injured: (Array.isArray(injured) ? injured : []).map(function (x) {
+          return { name: person(x?.player)?.name || '', note: [x?.type_name, x?.injury].filter(Boolean).join(' - ') };
+        }).filter(function (x) { return x.name; })
+      };
+    }
+
+    function normalize(info, ev, lu) {
+      var header = lu?.['0'] || null;
+      var src = info || ev || header || {};
+      var homeRaw = info?.home_team || ev?.home_team || header?.home_team_info || {};
+      var awayRaw = info?.away_team || ev?.away_team || header?.away_team_info || {};
+      var home = team(homeRaw, src.home_qualified, header, 'home');
+      var away = team(awayRaw, src.away_qualified, header, 'away');
+      var hk = String(home.id ?? header?.home_team ?? ''), ak = String(away.id ?? header?.away_team ?? '');
+      var st = statusOf(src);
+      var champ = src.championship || {};
+      var cc = Array.isArray(info?.channel_commm) && info.channel_commm.length ? info.channel_commm[0] : {};
+
+      var aggRaw = info?.agg_result || ev?.agg_result;
+      var agg = aggRaw && typeof aggRaw === 'object' && (aggRaw[hk] != null || aggRaw[ak] != null) ? {
+        home: num(aggRaw[hk]) ?? 0,
+        away: num(aggRaw[ak]) ?? 0,
+        winner: String(aggRaw.win_team ?? '') === hk ? 'home' : String(aggRaw.win_team ?? '') === ak ? 'away'
+          : home.qualified ? 'home' : away.qualified ? 'away' : ''
+      } : null;
+      var leg = info?.return;
+      var firstLeg = leg && typeof leg === 'object' && leg.match_id ? {
+        id: num(leg.match_id), home: leg.home_team || '', away: leg.away_team || '',       // home/away swapped vs this match
+        score: { home: num(leg.home_scores) ?? 0, away: num(leg.away_scores) ?? 0 }
+      } : null;
+
+      var ph = shootoutSide(ev?.match_penalties?.[hk], info?.penalties?.[hk]);
+      var pa = shootoutSide(ev?.match_penalties?.[ak], info?.penalties?.[ak]);
+      var penalties = ph.kicks.length || pa.kicks.length ? { home: ph, away: pa } : null;
+
+      var statMap = ev?.statics && typeof ev.statics === 'object' ? ev.statics
+        : info?.statics_match && typeof info.statics_match === 'object' ? info.statics_match : null;
+      var sh = stats(statMap, hk), sa = stats(statMap, ak);
+
+      var ts = num(src.match_timestamp) || 0;                    // UTC seconds; match_time (UTC+3) is never used
+      return {
+        id: num(src.match_id),
+        status: st,                                              // 'upcoming' | 'live' | 'finished' | 'other'
+        statusCode: num(src.status),
+        live: st === 'live',
+        phase: st === 'live' ? window.pxlLive.phase(info || src, true) : '',   // '1h' | 'ht' | '2h' | ''
+        clock: st === 'live' && info ? window.pxlLive.clock(info) : null,       // local tick between refreshes
+        minute: st === 'live' ? liveMinute(info?.status, info?.minutes) : '',
+        kickoff: ts,
+        exTime: parseMaybeJson(src.ex_time),
+        scoreTime: parseMaybeJson(src.score_time),
+        league: { id: num(src.championship_id), title: champ.title || '', logo: imageUrl(LEAGUE_LOGO_BASE, champ.image) },
+        round: info?.round || '',
+        venue: info?.Stadium || '',
+        referee: nameOf(info?.referees),
+        channel: cc.channel_name || '',
+        commentator: cc.commentator_name || '',
+        home: home,
+        away: away,
+        score: {
+          home: num(src.home_scores) ?? 0,                       // THIS match only (never the aggregate)
+          away: num(src.away_scores) ?? 0,
+          ht: halfScore(ev?.fh_scores),
+          sh: halfScore(ev?.sh_scores)
+        },
+        agg: agg,
+        firstLeg: firstLeg,
+        penalties: penalties,
+        stats: sh || sa ? { home: sh, away: sa } : null,
+        events: normEvents(ev?.events, hk, ak),
+        lineup: {
+          home: teamLineup(lu?.lineup?.[hk], lu?.lineup_injureds?.[hk]),
+          away: teamLineup(lu?.lineup?.[ak], lu?.lineup_injureds?.[ak])
+        },
+        stream: info?.stream || null,
+        hasEvents: Number(info?.events) === 1,
+        hasLineup: Number(info?.lineup) === 1
+      };
+    }
+    window.pxlNormalizeMatch = normalize;
+
     // ------------------------------------------------------------------ hero
     function teamInner(t) {
-      var logo = imageUrl(TEAM_LOGO_BASE, t.image);
-      var name = t.full_title || t.title || '';
-      return `<span class="mh__logo">${logo ? `<img src="${esc(logo)}" alt="${esc(name)}" decoding="async" referrerpolicy="no-referrer" onerror="this.replaceWith(document.createTextNode(''))">` : `<span>${esc(name.slice(0, 2))}</span>`}</span>
-          <span class="mh__name">${esc(name)}</span>`;
+      return `<span class="mh__logo">${t.logo ? `<img src="${esc(t.logo)}" alt="${esc(t.name)}" decoding="async" referrerpolicy="no-referrer" onerror="this.replaceWith(document.createTextNode(''))">` : `<span>${esc(t.name.slice(0, 2))}</span>`}</span>
+          <span class="mh__name">${esc(t.name)}</span>`;
     }
     // The hero skeleton is built once; each poll then patches only the region that changed
     // (in practice: the score/minute in .mh__center). Logos are never re-created.
@@ -4585,77 +5249,70 @@ body#layout .sidebar { width: 320px; }
       };
       return heroParts;
     }
-    function halfTimeScore(ev) {                                 // fh_scores: [{home_scores}, {away_scores}]
-      var fh = ev && Array.isArray(ev.fh_scores) ? ev.fh_scores : null;
-      if (!fh) return '';
-      var h = fh.find(function (x) { return x && x.home_scores != null; });
-      var a = fh.find(function (x) { return x && x.away_scores != null; });
-      return h && a ? h.home_scores + ' - ' + a.away_scores : '';
-    }
-    function renderHero(d, ev) {
-      var st = statusOf(d);
-      var minute = st === 'live' ? liveMinute(d.status, d.minutes) : '';
-      var champ = d.championship || {};
-      var champLogo = imageUrl(LEAGUE_LOGO_BASE, champ.image);
+    function pair(s) { return s ? s.home + ' - ' + s.away : ''; }
+    function penaltiesText(n) { return n.penalties ? n.penalties.home.total + ' - ' + n.penalties.away.total : ''; }
+    function renderHero(n) {
+      var st = n.status;
       var center = st === 'upcoming' || st === 'other'
-        ? `<span class="mh__time">${esc(cairoTime(Number(d.match_timestamp)))}</span>`
-        : `<span class="mh__score"><span>${esc(d.home_scores != null ? d.home_scores : 0)}</span><span class="sep">-</span><span>${esc(d.away_scores != null ? d.away_scores : 0)}</span></span>`;
+        ? `<span class="mh__time">${esc(cairoTime(n.kickoff))}</span>`
+        : `<span class="mh__score"><span>${esc(n.score.home)}</span><span class="sep">-</span><span>${esc(n.score.away)}</span></span>`;
       var badge = st === 'live'
-        ? `<span class="mh__badge mh__badge--live">مباشر${minute ? ` <span dir="ltr">${esc(minute)}'</span>` : ''}</span>`
+        ? `<span class="mh__badge mh__badge--live">${window.pxlLive.badge(n.phase, n.clock)}</span>`   // "استراحة" at half-time, same live style
         : `<span class="mh__badge">${st === 'finished' ? 'انتهت' : st === 'upcoming' ? 'لم تبدأ' : 'غير محدد'}</span>`;
-      var ht = st !== 'upcoming' ? halfTimeScore(ev) : '';
-      var cc = Array.isArray(d.channel_commm) && d.channel_commm.length ? d.channel_commm[0] : {};
-      var ts = Number(d.match_timestamp);
+      // Extra lines reuse the existing .mh__ht style (no new markup classes / CSS)
+      var lines = [];
+      if (st !== 'upcoming' && n.score.ht) lines.push('الشوط الأول: ' + pair(n.score.ht));
+      if (n.penalties) lines.push('ركلات الترجيح: ' + penaltiesText(n));
+      if (n.agg) {
+        var q = n.agg.winner ? n[n.agg.winner].name : '';
+        lines.push('مجموع المباراتين: ' + pair(n.agg) + (q ? ' · تأهل ' + q : ''));
+      }
+      var ts = n.kickoff;
       var meta = [
         ts ? [I.cal, cairo(ts, { weekday: 'long', day: 'numeric', month: 'long' }) + ' · ' + cairoTime(ts)] : null,
-        d.Stadium ? [I.pin, d.Stadium] : null,
-        nameOf(d.referees) ? [I.whistle, 'الحكم: ' + nameOf(d.referees)] : null,
-        cc.channel_name ? [I.tv, cc.channel_name] : null,
-        cc.commentator_name ? [I.mic, cc.commentator_name] : null
+        n.venue ? [I.pin, n.venue] : null,
+        n.referee ? [I.whistle, 'الحكم: ' + n.referee] : null,
+        n.channel ? [I.tv, n.channel] : null,
+        n.commentator ? [I.mic, n.commentator] : null
       ].filter(Boolean);
 
       var cls = 'match-hero' + (st === 'live' ? ' match-hero--live' : '');
       if (hero.className !== cls) hero.className = cls;
       var parts = heroShell();
-      setHtml(parts.league, `${champLogo ? `<img src="${esc(champLogo)}" alt="" decoding="async" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}
-          <b>${esc(champ.title || '')}</b>${d.round ? `<span>· ${esc(d.round)}</span>` : ''}`);
-      setHtml(parts.home, teamInner(d.home_team || {}));
-      setHtml(parts.center, `${center}${badge}${ht ? `<span class="mh__ht">الشوط الأول: ${esc(ht)}</span>` : ''}`);
-      setHtml(parts.away, teamInner(d.away_team || {}));
+      setHtml(parts.league, `${n.league.logo ? `<img src="${esc(n.league.logo)}" alt="" decoding="async" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}
+          <b>${esc(n.league.title)}</b>${n.round ? `<span>· ${esc(n.round)}</span>` : ''}`);
+      setHtml(parts.home, teamInner(n.home));
+      setHtml(parts.center, `${center}${badge}${lines.map(function (l) { return `<span class="mh__ht">${esc(l)}</span>`; }).join('')}`);
+      setHtml(parts.away, teamInner(n.away));
       setHtml(parts.meta, meta.length ? `<ul class="mh__meta">${meta.map(function (x) { return `<li>${x[0]}<span>${esc(x[1])}</span></li>`; }).join('')}</ul>` : '');
 
-      var home = (d.home_team && (d.home_team.full_title || d.home_team.title)) || '';
-      var away = (d.away_team && (d.away_team.full_title || d.away_team.title)) || '';
-      if (home && away) updateSeo(d, st, home, away, champ);
+      if (n.home.name && n.away.name) updateSeo(n);
       return st;
     }
 
     // SEO for /p/match.html?id=: title, description, canonical WITH the ?id= (one indexable
     // URL per match) and SportsEvent structured data. pxlSeo (head script) only writes the
-    // tags / JSON-LD when they changed, so the 30 s polls cost nothing.
-    function updateSeo(d, st, home, away, champ) {
+    // tags / JSON-LD when they changed, so the polls cost nothing.
+    function updateSeo(n) {
       if (!window.pxlSeo || !/^\d{1,12}$/.test(matchId)) return;
-      var ts = Number(d.match_timestamp) || 0;
-      var league = champ.title || '';
+      var st = n.status, ts = n.kickoff, home = n.home.name, away = n.away.name;
+      var league = n.league.title;
       var when = ts ? cairo(ts, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) + ' الساعة ' + cairoTime(ts) : '';
-      var score = (st === 'live' || st === 'finished') && d.home_scores != null && d.away_scores != null
-        ? d.home_scores + ' - ' + d.away_scores : '';
+      var score = st === 'live' || st === 'finished' ? n.score.home + ' - ' + n.score.away : '';
       var name = home + ' ضد ' + away;
       var title = name + (score ? ' (' + score + ')' : '') + (league ? ' - ' + league : '') + ' | PX League';
       var lead = st === 'live' ? 'مباشر: مباراة ' : st === 'finished' ? 'نتيجة مباراة ' : 'موعد مباراة ';
       var desc = lead + home + ' و' + away + (league ? ' في ' + league : '')
-        + (when ? '، ' + when + ' بتوقيت القاهرة' : '') + (d.Stadium ? '، على ملعب ' + d.Stadium : '')
+        + (when ? '، ' + when + ' بتوقيت القاهرة' : '') + (n.venue ? '، على ملعب ' + n.venue : '')
         + '. الأحداث والتشكيلات لحظة بلحظة على PX League.';
       var url = (window.PXL_SITE_URL || location.origin).replace(/\/+$/, '') + '/p/match.html?id=' + matchId;
-      var homeLogo = imageUrl(TEAM_LOGO_BASE, (d.home_team || {}).image);
-      var awayLogo = imageUrl(TEAM_LOGO_BASE, (d.away_team || {}).image);
-      window.pxlSeo.set({ title: title, description: desc, url: url, image: homeLogo || awayLogo });
+      window.pxlSeo.set({ title: title, description: desc, url: url, image: n.home.logo || n.away.logo });
 
       var homeTeam = { '@type': 'SportsTeam', name: home };
       var awayTeam = { '@type': 'SportsTeam', name: away };
-      if (homeLogo) homeTeam.logo = homeLogo;
-      if (awayLogo) awayTeam.logo = awayLogo;
-      var ev = {
+      if (n.home.logo) homeTeam.logo = n.home.logo;
+      if (n.away.logo) awayTeam.logo = n.away.logo;
+      var ld = {
         '@context': 'https://schema.org',
         '@type': 'SportsEvent',
         name: name,
@@ -4664,75 +5321,67 @@ body#layout .sidebar { width: 320px; }
         sport: 'Soccer',
         eventStatus: 'https://schema.org/EventScheduled',
         eventAttendanceMode: 'https://schema.org/OfflineEventAttendanceMode',
-        location: { '@type': 'Place', name: d.Stadium || league || name },
+        location: { '@type': 'Place', name: n.venue || league || name },
         homeTeam: homeTeam,
         awayTeam: awayTeam,
         competitor: [homeTeam, awayTeam]
       };
-      if (ts) ev.startDate = new Date(ts * 1000).toISOString();
-      if (league) ev.superEvent = { '@type': 'SportsEvent', name: league };
-      var images = [homeLogo, awayLogo].filter(Boolean);
-      if (images.length) ev.image = images;
-      window.pxlSeo.jsonLd('pxl-ld-match', ev);
+      if (ts) ld.startDate = new Date(ts * 1000).toISOString();
+      if (league) ld.superEvent = { '@type': 'SportsEvent', name: league };
+      var images = [n.home.logo, n.away.logo].filter(Boolean);
+      if (images.length) ld.image = images;
+      window.pxlSeo.jsonLd('pxl-ld-match', ld);
     }
 
     // ------------------------------------------------------------------ events tab
-    var PERIODS = { 1: 'انطلاق المباراة', 2: 'نهاية الشوط الأول', 3: 'بداية الشوط الثاني', 4: 'نهاية المباراة' };
-    function minuteText(e) {
-      var m = Number(e.time_minute), p = Number(e.time_plus);
-      if (!(m >= 0)) return '';
-      return m + (p > 0 ? '+' + p : '') + "'";
-    }
-    function eventHtml(e, homeId, awayId, ev) {
-      var type = Number(e.type);
-      if (type === 100) {
-        var label = PERIODS[e.status];
+    // Phase markers (type 100) by status. 11 is not labelled: on 5702737 it sits between the end
+    // of 90' and full-time of a match that went straight to penalties, so "extra time" is unproven.
+    var PERIODS = { 1: 'انطلاق المباراة', 2: 'نهاية الشوط الأول', 3: 'بداية الشوط الثاني', 5: 'نهاية الوقت الأصلي', 4: 'نهاية المباراة' };
+    function eventHtml(e, n) {
+      if (e.kind === 'phase') {
+        var label = PERIODS[e.phase];
         if (!label) return '';
         var score = '';
-        if (Number(e.status) === 2) score = halfTimeScore(ev);
-        if (Number(e.status) === 4) score = (ev.home_scores != null ? ev.home_scores : 0) + ' - ' + (ev.away_scores != null ? ev.away_scores : 0);
+        if (e.phase === 2) score = pair(n.score.ht);
+        if (e.phase === 4) score = pair(n.score) + (n.penalties ? ' (ر.ت ' + penaltiesText(n) + ')' : '');
         return `<li class="ev ev--period"><span class="ev__period">${esc(label)}${score ? `<b>${esc(score)}</b>` : ''}</span></li>`;
       }
-      var side = String(e.team_id) === String(homeId) ? 'home' : String(e.team_id) === String(awayId) ? 'away' : '';
-      if (!side) return '';
-      var player = nameOf(e.player_name), assist = nameOf(e.assist_player_name);
-      var icon = '', title = player, sub = '', cls = '';
-      if (type === 1 || type === 4 || type === 5) {
-        cls = ' ev--goal'; icon = I.ball;
-        sub = type === 4 ? 'هدف عكسي' : type === 5 ? 'ركلة جزاء' : assist ? 'صناعة: ' + assist : 'هدف';
-      } else if (type === 2) {
-        icon = cardIcon('y'); sub = 'بطاقة صفراء';
-      } else if (type === 3) {
-        var second = Number(e.status) === 7;
-        icon = cardIcon(second ? 'yr' : 'r'); sub = second ? 'إنذار ثانٍ' : 'بطاقة حمراء';
-      } else if (type === 8) {
+      var icon = '', title = '', sub = '', cls = '';
+      if (e.kind === 'sub') {
         icon = I.sub;
-        title = assist || player;                                // player coming on
-        sub = (assist ? 'خروج: ' + player : 'تبديل') + (Number(e.status) === 9 ? ' (إصابة)' : '');
+        title = e.playerIn?.name || e.playerOut?.name || '';      // player coming on
+        sub = (e.playerIn && e.playerOut ? 'خروج: ' + e.playerOut.name : 'تبديل') + (e.injury ? ' (إصابة)' : '');
       } else {
-        return '';                                               // unverified event code: not shown
+        title = e.player?.name || '';
+        if (e.kind === 'goal' || e.kind === 'own_goal' || e.kind === 'pen_goal') {
+          cls = ' ev--goal'; icon = I.ball;
+          sub = e.kind === 'own_goal' ? 'هدف عكسي' : e.kind === 'pen_goal' ? 'ركلة جزاء' : e.assist ? 'صناعة: ' + e.assist.name : 'هدف';
+        } else if (e.kind === 'yellow') {
+          icon = cardIcon('y'); sub = 'بطاقة صفراء';
+        } else {
+          var second = e.kind === 'second_yellow';
+          icon = cardIcon(second ? 'yr' : 'r'); sub = second ? 'إنذار ثانٍ' : 'بطاقة حمراء';
+        }
       }
       if (!title) return '';
-      return `<li class="ev ev--${side}${cls}">
+      return `<li class="ev ev--${e.side}${cls}">
           <div class="ev__body"><span class="ev__icon">${icon}</span><span class="ev__txt"><b>${esc(title)}</b>${sub ? `<small>${esc(sub)}</small>` : ''}</span></div>
-          <span class="ev__min" dir="ltr">${esc(minuteText(e))}</span>
+          <span class="ev__min" dir="ltr">${esc(e.minuteText)}</span>
         </li>`;
     }
-    // Events arrive newest first. When the previous list is an exact tail of the new one (the
+    // Events are newest first. When the previous list is an exact tail of the new one (the
     // normal live case: a goal/card was added), only the new <li> items are inserted at the top.
     var lastEvItems = null;
     function sameItems(a, b, offset) {
       for (var i = 0; i < b.length; i++) if (a[i + offset] !== b[i]) return false;
       return true;
     }
-    function renderEvents(ev, info) {
-      var list = ev && Array.isArray(ev.events) ? ev.events : [];
-      var homeId = (info.home_team || {}).row_id, awayId = (info.away_team || {}).row_id;
-      var items = list.map(function (e) { return eventHtml(e, homeId, awayId, ev); }).filter(Boolean);
+    function renderEvents(n) {
+      var items = n.events.map(function (e) { return eventHtml(e, n); }).filter(Boolean);
       var el = panels.events;
       if (!items.length) {
         lastEvItems = null;
-        setHtml(el, `<div class="match-message"><span>${statusOf(info) === 'upcoming' ? 'لم تبدأ المباراة بعد، ستظهر الأحداث هنا فور انطلاقها.' : 'لا توجد أحداث مسجلة لهذه المباراة.'}</span></div>`);
+        setHtml(el, `<div class="match-message"><span>${n.status === 'upcoming' ? 'لم تبدأ المباراة بعد، ستظهر الأحداث هنا فور انطلاقها.' : 'لا توجد أحداث مسجلة لهذه المباراة.'}</span></div>`);
         return;
       }
       var full = '<ol class="ev-list">' + items.join('') + '</ol>';
@@ -4748,72 +5397,49 @@ body#layout .sidebar { width: 320px; }
     }
 
     // ------------------------------------------------------------------ lineups tab
-    var LINE_ORDER = { G: 0, D: 1, M: 2, F: 3 };
     function tagsHtml(p) {
       var t = '';
-      var goals = Number(p.goal) || 0;
-      for (var i = 0; i < Math.min(goals, 3); i++) t += '<span class="tag-goal">⚽</span>';
-      if (Number(p.red)) t += cardIcon('r');
-      else if (Number(p.yellow)) t += cardIcon('y');
-      if (Number(p.substitute)) t += '<span class="tag-sub" title="تم استبداله">▼</span>';
+      for (var i = 0; i < Math.min(p.goals, 3); i++) t += '<span class="tag-goal">⚽</span>';
+      if (p.red) t += cardIcon('r');
+      else if (p.yellow) t += cardIcon('y');
+      if (p.subbedOff) t += `<span class="tag-sub" title="تم استبداله">▼${p.subMinute ? ` <span dir="ltr">${esc(p.subMinute)}</span>` : ''}</span>`;
+      if (p.cameOn) t += `<span class="tag-sub" title="دخل بديلًا">▲ <span dir="ltr">${esc(p.subMinute)}</span></span>`;
       return t;
     }
     function playerChip(p, isGk) {
-      var pl = p.player || {};
       return `<div class="pl${isGk ? ' pl--gk' : ''}">
-          <span class="pl__num">${esc(pl.player_number || '')}${p.rating ? `<span class="pl__rating">${esc(p.rating)}</span>` : ''}${Number(p.captain) ? '<span class="pl__cap">C</span>' : ''}</span>
-          <span class="pl__name">${esc(nameOf(pl))}</span>
+          <span class="pl__num">${esc(p.number)}${p.rating ? `<span class="pl__rating">${esc(p.rating)}</span>` : ''}${p.captain ? '<span class="pl__cap">C</span>' : ''}</span>
+          <span class="pl__name">${esc(p.name)}</span>
           <span class="pl__tags">${tagsHtml(p)}</span>
         </div>`;
     }
-    // Formation "4-4-1-1" -> rows: [GK], [4], [4], [1], [1]; players ordered G, D, M, F then formation_position
-    function pitchHtml(starters, formation) {
-      var sorted = starters.slice().sort(function (a, b) {
-        var la = LINE_ORDER[a.position] != null ? LINE_ORDER[a.position] : 9, lb = LINE_ORDER[b.position] != null ? LINE_ORDER[b.position] : 9;
-        return la - lb || (Number(a.formation_position) || 0) - (Number(b.formation_position) || 0);
-      });
-      var gk = sorted.filter(function (p) { return p.position === 'G'; });
-      var field = sorted.filter(function (p) { return p.position !== 'G'; });
-      var lines = String(formation || '').split('-').map(Number).filter(function (n) { return n > 0; });
-      var total = lines.reduce(function (a, b) { return a + b; }, 0);
-      if (gk.length !== 1 || !lines.length || total !== field.length) return '';   // unknown shape: list only
-      var rows = [gk], i = 0;
-      lines.forEach(function (n) { rows.push(field.slice(i, i + n)); i += n; });
+    function pitchHtml(rows) {                                   // rows from normalize(): G, D, M, F, S
+      if (!rows || !rows.length || rows[0][0].row !== 'G') return '';   // unknown shape: list only
       return `<div class="pitch">${rows.map(function (r, idx) {
         return `<div class="pitch__line">${r.map(function (p) { return playerChip(p, idx === 0); }).join('')}</div>`;
       }).join('')}</div>`;
     }
     function listHtml(players) {
       return `<ul class="lu-list">${players.map(function (p) {
-        var pl = p.player || {};
-        return `<li><span class="n">${esc(pl.player_number || '-')}</span><span>${esc(nameOf(pl))}</span>
+        return `<li><span class="n">${esc(p.number || '-')}</span><span>${esc(p.name)}</span>
           <span class="meta">${tagsHtml(p)}${p.rating ? `<span class="r">${esc(p.rating)}</span>` : ''}</span></li>`;
       }).join('')}</ul>`;
     }
-    function teamLineupHtml(team, data, side) {
-      var tid = String(team.row_id || '');
-      var lu = (data.lineup || {})[tid] || {};
-      var starters = Array.isArray(lu.lineup) ? lu.lineup : [];
-      var subs = Array.isArray(lu.substitutions) ? lu.substitutions : [];
-      var injured = ((data.lineup_injureds || {})[tid]) || [];
-      var meta = data['0'] || {};
-      var formation = meta[side + '_formation'] || '';
-      var coach = nameOf(meta[side + '_coach']);
-      var logo = imageUrl(TEAM_LOGO_BASE, team.image);
-      if (!starters.length) return '';
-      var pitch = pitchHtml(starters, formation);
+    function teamLineupHtml(n, side) {
+      var L = n.lineup[side], t = n[side];
+      if (!L) return '';
       return `<section class="lu-team">
-          <div class="lu-head">${logo ? `<img src="${esc(logo)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}<span>${esc(team.full_title || team.title || '')}</span>${formation ? `<span class="lu-formation">${esc(formation)}</span>` : ''}</div>
-          ${pitch || listHtml(starters)}
-          ${coach ? `<p class="lu-coach">المدرب: <b>${esc(coach)}</b></p>` : ''}
-          ${subs.length ? `<h3 class="lu-sub-title">البدلاء</h3>${listHtml(subs)}` : ''}
-          ${injured.length ? `<h3 class="lu-sub-title">الغيابات</h3><ul class="lu-list">${injured.map(function (x) {
-            return `<li><span class="n">✚</span><span>${esc(nameOf(x.player))}</span><span class="meta">${esc([x.type_name, x.injury].filter(Boolean).join(' - '))}</span></li>`;
+          <div class="lu-head">${t.logo ? `<img src="${esc(t.logo)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}<span>${esc(t.name)}</span>${t.formation ? `<span class="lu-formation">${esc(t.formation)}</span>` : ''}</div>
+          ${pitchHtml(L.rows) || listHtml(L.starters)}
+          ${t.coach ? `<p class="lu-coach">المدرب: <b>${esc(t.coach)}</b></p>` : ''}
+          ${L.bench.length ? `<h3 class="lu-sub-title">البدلاء</h3>${listHtml(L.bench)}` : ''}
+          ${L.injured.length ? `<h3 class="lu-sub-title">الغيابات</h3><ul class="lu-list">${L.injured.map(function (x) {
+            return `<li><span class="n">✚</span><span>${esc(x.name)}</span><span class="meta">${esc(x.note)}</span></li>`;
           }).join('')}</ul>` : ''}
         </section>`;
     }
-    function renderLineups(data, info) {
-      var html = data ? teamLineupHtml(info.home_team || {}, data, 'home') + teamLineupHtml(info.away_team || {}, data, 'away') : '';
+    function renderLineups(n) {
+      var html = teamLineupHtml(n, 'home') + teamLineupHtml(n, 'away');
       setHtml(panels.lineups, html
         ? `<div class="lu-grid">${html}</div>`
         : '<div class="match-message"><span>لم يتم الإعلان عن التشكيلات بعد.</span></div>');
@@ -4837,6 +5463,7 @@ body#layout .sidebar { width: 320px; }
     var nextDelay = REFRESH_MS; // interval chosen after the last fetch (never the remaining time)
     var lastFetch = 0;
     var failures = 0;           // consecutive failed refreshes -> exponential backoff
+    var lastGood = { ev: null, lu: null };   // last valid events / lineup: a failed poll never blanks the UI
     var MAX_TIMER_MS = 6 * 60 * 60 * 1000;
     var MAX_BACKOFF_MS = 5 * 60 * 1000;
     var NO_KICKOFF_MS = 5 * 60 * 1000;                           // upcoming match without a usable timestamp
@@ -4874,7 +5501,7 @@ body#layout .sidebar { width: 320px; }
         if (now > kick + LIVE_WINDOW_MS) { polling = false; pause(); return; }   // still "not started" 3.5 h after kick-off: postponed / stale, stop
         var untilWindow = kick - 30 * 60 * 1000 - now;
         polling = true;
-        schedule(untilWindow > REFRESH_MS ? untilWindow : REFRESH_MS);  // wake 30 min before kick-off
+        schedule(untilWindow > PRE_MATCH_MS ? untilWindow : PRE_MATCH_MS);  // wake 30 min before kick-off
         return;
       }
       polling = false;                                         // finished / other: no more polling
@@ -4921,18 +5548,20 @@ body#layout .sidebar { width: 320px; }
             return d;
           }) : Promise.resolve(null)
         ]);
-        var ev = results[0].status === 'fulfilled' ? results[0].value : null;
-        var lu = results[1].status === 'fulfilled' ? results[1].value : null;
+        if (results[0].status === 'fulfilled') lastGood.ev = results[0].value;
+        if (results[1].status === 'fulfilled') lastGood.lu = results[1].value;
+        // A failed endpoint falls back to its last good copy, so shootout / halves / pitch stay on screen
+        var n = normalize(info, lastGood.ev, lastGood.lu);
 
-        st = renderHero(info, ev);                               // a throw here counts as a failed refresh
+        st = renderHero(n);                                      // a throw here counts as a failed refresh
         // Panels: a failed or malformed response keeps what is on screen (silent) or offers a retry
         try {
-          if (results[0].status === 'rejected') { if (!silent) message(panels.events, 'تعذّر تحميل الأحداث.', true); }
-          else renderEvents(ev || {}, info);
+          if (results[0].status === 'rejected' && !lastGood.ev) { if (!silent) message(panels.events, 'تعذّر تحميل الأحداث.', true); }
+          else renderEvents(n);
         } catch (e) { console.warn('[PX League] render events:', e); }
         try {
-          if (results[1].status === 'rejected') { if (!silent) message(panels.lineups, 'تعذّر تحميل التشكيلات.', true); }
-          else renderLineups(lu, info);
+          if (results[1].status === 'rejected' && !lastGood.lu) { if (!silent) message(panels.lineups, 'تعذّر تحميل التشكيلات.', true); }
+          else renderLineups(n);
         } catch (e) { console.warn('[PX League] render lineups:', e); }
         ok = true;
       } catch (err) {
@@ -4956,7 +5585,7 @@ body#layout .sidebar { width: 320px; }
           planNext(st, info);
         } else if (polling) {
           failures++;                                            // 60 s, 120 s, 240 s, then 5 min
-          schedule(Math.min(REFRESH_MS * Math.pow(2, failures), MAX_BACKOFF_MS));
+          schedule(Math.min(PRE_MATCH_MS * Math.pow(2, failures), MAX_BACKOFF_MS));
         }
       }
     }
@@ -4982,7 +5611,8 @@ body#layout .sidebar { width: 320px; }
       var i = tabs.indexOf(document.activeElement);
       if (i === -1) return;
       e.preventDefault();
-      selectTab(tabs[(i + (e.key === 'ArrowLeft' ? 1 : -1) + tabs.length) % tabs.length], true);   // RTL
+      var fwd = (e.key === 'ArrowLeft') === (document.documentElement.dir !== 'ltr');   // RTL: left = next, LTR: right = next
+      selectTab(tabs[(i + (fwd ? 1 : -1) + tabs.length) % tabs.length], true);
     });
     var initialTab = tabs.filter(function (t) { return '#' + t.getAttribute('data-tab') === location.hash; })[0];
     if (initialTab) selectTab(initialTab, false);
@@ -5020,6 +5650,32 @@ body#layout .sidebar { width: 320px; }
       streamBox.hidden = false;
     }
     function applyStream(s) { showStream(s && typeof s === 'object' ? streamUrl(s) : ''); }
+
+    // ------------------------------------------------------------------ self-test
+    // Console: pxlSelfTest() (defaults to 5702737), or open /p/match.html?id=5702737&selftest=1
+    window.pxlSelfTest = async function (id) {
+      id = String(id || 5702737);
+      var raw = await Promise.all([api('match_info', id), api('matches_event', id), api('matches_lineup', id)]
+        .map(function (u) { return fetchJson(u, 2).catch(function () { return null; }); }));
+      var n = normalize(raw[0], raw[1], raw[2]);
+      console.log('[PX League] normalize(' + id + '):', n);
+      if (id !== '5702737') return n;
+      var goal = n.events.find(function (e) { return e.kind === 'goal'; });
+      var subs = n.events.filter(function (e) { return e.kind === 'sub'; });
+      var rows = function (s) { return (n.lineup[s]?.rows || []).map(function (r) { return r[0].row + r.length; }).join(' '); };
+      console.table([
+        ['score 1-0', n.score.home === 1 && n.score.away === 0],
+        ['agg 1-1, Boca (away) qualified', n.agg?.home === 1 && n.agg?.away === 1 && n.agg?.winner === 'away'],
+        ['shootout 3-4', n.penalties?.home.total === 3 && n.penalties?.away.total === 4],
+        ['goal 72\x27 home', !!goal && goal.minute === 72 && goal.side === 'home'],
+        ['subs at 57/63/78/78', subs.map(function (e) { return e.minute; }).sort().join('/') === '57/63/78/78'],
+        ['sub OUT=player, IN=assist', subs.every(function (e) { return e.playerOut && e.playerIn; })],
+        ['home 4-2-3-1 rows G1 D4 M2 F3 S1', n.home.formation === '4-2-3-1' && rows('home') === 'G1 D4 M2 F3 S1'],
+        ['away 4-3-3 rows G1 D4 M3 F3', n.away.formation === '4-3-3' && rows('away') === 'G1 D4 M3 F3']
+      ].map(function (c) { return { check: c[0], ok: c[1] }; }));
+      return n;
+    };
+    if (new URLSearchParams(location.search).get('selftest') === '1') window.pxlSelfTest(matchId);
 
     window.fetchMatchDetails = fetchMatchDetails;
     fetchMatchDetails(false);
@@ -5121,7 +5777,7 @@ body#layout .sidebar { width: 320px; }
 
     // ------------------------------------------------------------------ configuration
     var WORKER_BASE_URL = window.PXL_WORKER_BASE_URL || '';    // set once at the top of the file (SETTINGS)
-    var MATCH_FILTERS = '[]/[]/["8634"]';
+    var MATCH_FILTERS = window.PXL_MATCH_FILTERS;               // shared: SETTINGS script at the top
     var TEAM_LOGO_BASE = 'https://imgs.ysscores.com/teams/128/';
     var LEAGUE_LOGO_BASE = 'https://imgs.ysscores.com/championship/64/';
     var MAX_ATTEMPTS = 3;                                       // tries before an error is shown
@@ -5154,7 +5810,7 @@ body#layout .sidebar { width: 320px; }
 
     var dateEl = document.getElementById('fixtures-date');
     try {
-      dateEl.textContent = new Intl.DateTimeFormat('ar-EG', { timeZone: 'Africa/Cairo', weekday: 'long', day: 'numeric', month: 'long' }).format(new Date());
+      dateEl.textContent = new Intl.DateTimeFormat(window.pxlLocale(), { timeZone: 'Africa/Cairo', weekday: 'long', day: 'numeric', month: 'long' }).format(new Date());
     } catch (e) { /* old browser: no date label */ }
 
     async function fetchJson(url, attempts) {
@@ -5187,36 +5843,22 @@ body#layout .sidebar { width: 320px; }
     }
 
     // ------------------------------------------------------------------ parsing
-    function statusOf(raw) {
-      var s = Number(raw.status);
-      if (s === 0) return 'upcoming';
-      if (s === 4) return 'finished';
-      var kickoff = Number(raw.match_timestamp) * 1000;
-      var now = Date.now();
-      return kickoff && now >= kickoff - 10 * 60 * 1000 && now <= kickoff + LIVE_WINDOW_MS ? 'live' : 'other';
-    }
+    // Shared rule (SETTINGS script at the top): live === 1 first (inside the kick-off window),
+    // then 0 upcoming, 4 finished, other codes live near kick-off.
+    function statusOf(raw) { return window.pxlMatchStatus(raw); }
 
     // ysscores 'minutes' (match_info) = the MATCH CLOCK in seconds, verified live 2026-11-17:
     // status 1 = 1st half, counted from kick-off; status 3 = 2nd half and the value already
     // includes the first 45:00 (46:10 into the 2nd half -> 5467 s). Adding another 45 produced
     // "90+45". A 2nd-half value below 45:00 is treated as time since the restart.
     // Any other live code (half-time, extra time...) gets no minute rather than a wrong one.
-    function liveMinute(status, seconds) {
-      var secs = Number(seconds);
-      if (!(secs > 0)) return '';
-      var m = Math.floor(secs / 60) + 1;
-      var st = Number(status);
-      if (st === 1) return m > 45 ? '45+' + (m - 45) : String(m);
-      if (st === 3) { var t = secs >= 2700 ? m : 45 + m; return t > 90 ? '90+' + (t - 90) : String(t); }
-      return '';
-    }
+    // Now in the shared pxlLive helper (SETTINGS script at the top): pxlLive.minute / clock / phase.
+    var LIVE_INFO_MAX_AGE_MS = 90 * 1000;                       // older match_info is not trusted for phase / minute
 
     // Status badge HTML. Live: "مباشر" + ONLY the minute (never the status code), with the
     // minute isolated as LTR so "61'" / "45+2'" render correctly inside the RTL page.
     function liveBadgeHtml(m) {
-      if (m.status === 'live') {
-        return 'مباشر' + (m.minute ? ` <span dir="ltr">${esc(m.minute)}'</span>` : '');
-      }
+      if (m.status === 'live') return window.pxlLive.badge(m.phase, m.clock);   // "استراحة" at half-time
       return esc(m.status === 'finished' ? 'انتهت' : m.status === 'other' ? 'غير محدد' : 'لم تبدأ');
     }
 
@@ -5234,7 +5876,8 @@ body#layout .sidebar { width: 320px; }
         timestamp: Number(raw.match_timestamp) || 0,
         time: cairoTime(raw.match_timestamp),
         status: statusOf(raw),
-        minute: liveMinute(raw.status, raw.minutes),
+        phase: statusOf(raw) === 'live' ? window.pxlLive.phase(raw, true) : '',   // from the list row
+        clock: null,                                          // filled from fresh match_info only
         home: { name: home.full_title || home.title || '', logo: imageUrl(TEAM_LOGO_BASE, home.image) },
         away: { name: away.full_title || away.title || '', logo: imageUrl(TEAM_LOGO_BASE, away.image) },
         scoreHome: raw.home_scores != null ? raw.home_scores : 0,
@@ -5420,7 +6063,9 @@ body#layout .sidebar { width: 320px; }
     function withLiveInfo(m) {
       var info = liveInfo[m.id];
       if (!info) return m;
-      if (info.minute) m.minute = info.minute;
+      // Phase + clock only from a FRESH match_info (a failed refresh never leaves a 1st-half
+      // minute on a match that is now at half-time); otherwise the list row phase, no minute.
+      if (m.status === 'live' && Date.now() - info.at < LIVE_INFO_MAX_AGE_MS) { m.phase = info.phase || m.phase; m.clock = info.clock; }
       if (info.round && !m.round) m.round = info.round;
       if (info.channel && !m.channel) m.channel = info.channel;
       if (info.commentator && !m.commentator) m.commentator = info.commentator;
@@ -5435,12 +6080,14 @@ body#layout .sidebar { width: 320px; }
           var d = (json && json.data) || {};
           var cc = Array.isArray(d.channel_commm) && d.channel_commm.length ? d.channel_commm[0] : {};
           liveInfo[m.id] = {
-            minute: liveMinute(d.status, d.minutes),
+            at: Date.now(),
+            phase: window.pxlLive.phase(d, true),
+            clock: window.pxlLive.clock(d),
             round: d.round || '',
             channel: cc.channel_name || '',
             commentator: cc.commentator_name || ''
           };
-        } catch (e) { /* card stays without minute */ }
+        } catch (e) { /* card keeps the list phase, no minute */ }
       }));
       return matches.map(withLiveInfo);
     }
