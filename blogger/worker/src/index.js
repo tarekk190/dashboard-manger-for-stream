@@ -57,9 +57,10 @@ const LOCAL_DASHBOARD_ORIGINS = [
 //      (cacheTtlByStatus), so a 403/429/5xx burst reaches upstream once per few seconds.
 //   3. Last-good copy (STALE_TTL): when upstream fails, the last good RAW body is served with
 //      "X-PXL-Stale: 1" (filtered on the way out, so hidden matches stay hidden).
-// Layers 1 and 3 use the Cache API, which only works when the Worker runs on a custom domain
-// or route of a Cloudflare zone. On *.workers.dev they are silent no-ops (requests still work,
-// they just always go upstream). See wrangler.toml for the custom-domain setup.
+// Layers 1 and 3 use the Cache API, which only works on a custom domain or route of a Cloudflare
+// zone: the site uses https://data.px-league.site (wrangler.toml). The *.workers.dev address is
+// kept for old clients only; there the Cache API is a silent no-op (requests still work, they
+// just always go upstream).
 // Note: every request still INVOKES the Worker (and counts toward the plan's request quota);
 // the cache removes the upstream/Supabase work, not the invocation.
 //

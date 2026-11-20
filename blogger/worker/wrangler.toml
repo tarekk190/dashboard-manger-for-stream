@@ -4,34 +4,22 @@ name = "px-league-proxy"
 main = "src/index.js"
 compatibility_date = "2026-10-01"
 
-# Keep the *.workers.dev address while the theme (PXL_WORKER_BASE_URL) and cached pages still
-# point at it. Set to false only after the custom domain below serves all traffic.
-workers_dev = true
-
 # -----------------------------------------------------------------------------
-# Custom domain: api.px-league.site
-# The Cache API (edge response cache + last-good fallback in src/index.js) does nothing on
-# *.workers.dev; it needs the Worker on a custom domain of a Cloudflare zone.
-#
-# PREREQUISITE: px-league.site must be an active zone in THIS Cloudflare account. Today its DNS
-# is at the registrar (dns1/dns2.registrar-servers.com), so a deploy with this block enabled
-# fails. Steps:
-#   1. Cloudflare dashboard > Add a domain > px-league.site (Free plan is enough). Check the
-#      imported records: www CNAME ghs.google.com and the apex A records for Blogger must be
-#      "DNS only" (grey cloud), or Blogger's custom domain and its certificate break.
-#      Remove any existing "api" record (api.px-league.site currently resolves elsewhere).
-#   2. At the registrar, switch the nameservers to the two Cloudflare gives you; wait for
-#      the zone to become "Active".
-#   3. Uncomment the routes block below and run `npx wrangler deploy` (Wrangler creates the
-#      DNS record and certificate for api.px-league.site).
-#   4. Test: curl -H "Origin: https://www.px-league.site" https://api.px-league.site/api/health
-#      and twice https://api.px-league.site/api/standings/<id>  -> second answer X-PXL-Edge: HIT
-#   5. In the theme set window.PXL_WORKER_BASE_URL = 'https://api.px-league.site'.
-#   6. A few days later (old cached pages gone) set workers_dev = false and deploy again.
-#
-# routes = [
-#   { pattern = "api.px-league.site", custom_domain = true }
-# ]
+# Custom domain: https://data.px-league.site  (zone px-league.site, active on Cloudflare)
+# The theme (PXL_WORKER_BASE_URL) and the stream-manager dashboard call this address. The
+# Cache API (edge response cache + last-good fallback in src/index.js) only works here, not on
+# *.workers.dev. Wrangler manages the DNS record and certificate of a custom domain; if the
+# domain was attached in the dashboard first, the deploy adopts it.
+# Check after a deploy (second answer must say X-PXL-Edge: HIT):
+#   curl -sI -H "Origin: https://www.px-league.site" https://data.px-league.site/api/standings/<id>
+routes = [
+  { pattern = "data.px-league.site", custom_domain = true }
+]
+
+# The old px-league-proxy.pxleague.workers.dev address stays reachable for clients that may
+# still use it (pages cached before the switch, older app builds). It has no edge cache.
+# Set to false (and deploy) once its traffic in the Worker analytics has dropped to zero.
+workers_dev = true
 #
 # Match-day traffic: every request invokes the Worker even when it is answered from the edge
 # cache. A live match page polls 3 endpoints every 10 s (18 requests/min per viewer), so

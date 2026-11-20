@@ -635,7 +635,7 @@
        1. Configuration
        ===================================================================== */
     const CONFIG = Object.freeze({
-      API_ORIGIN: 'https://px-league-proxy.pxleague.workers.dev',
+      API_ORIGIN: 'https://data.px-league.site',
       TEAM_IMG: 'https://imgs.ysscores.com/teams/64/',          // team crests (verified)
       CHAMP_IMG: 'https://imgs.ysscores.com/championship/48/',  // competition crests (verified)
       REQUEST_TIMEOUT_MS: 15000,     // no request may hang the page

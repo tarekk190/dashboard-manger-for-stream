@@ -145,7 +145,9 @@
        Apply the saved theme before the first paint (no light/dark flash). -->
   <script>
   //<![CDATA[
-  window.PXL_WORKER_BASE_URL = 'https://px-league-proxy.pxleague.workers.dev';   // e.g. 'https://px-api.your-name.workers.dev'
+  // Worker on its custom domain (edge cache + rate limiting). The old *.workers.dev address
+  // still answers, but its edge cache is a no-op: do not point the theme back at it.
+  window.PXL_WORKER_BASE_URL = 'https://data.px-league.site';
   // The Worker answers only the origins in its ALLOWED_ORIGINS list (blogger/worker/src/index.js):
   // https://www.px-league.site and https://px-league.site. A new domain must be added there too.
   window.PXL_SITE_URL = 'https://www.px-league.site';
