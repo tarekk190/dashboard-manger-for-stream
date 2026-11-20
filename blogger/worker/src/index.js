@@ -1,7 +1,9 @@
 // =============================================================================
 // PX League - Cloudflare Worker: API proxy (ysscores matches + standings) with strict CORS,
-// per-IP rate limiting, an edge response cache and edge filtering from the Master Match
+// per-IP rate limiting, an edge response cache and show/hide filtering from the Master Match
 // Controller (Supabase table "match_settings").
+// px-league.site carries NO live streams: the Worker never attaches stream data to a match,
+// and any "stream" field is stripped from the match responses it serves.
 // -----------------------------------------------------------------------------
 // >>> YOUR BLOG ORIGIN(S) <<<
 // Exact origins: scheme + host only. A trailing slash is tolerated (it is removed below),
@@ -29,14 +31,13 @@ const LOCAL_DASHBOARD_ORIGINS = [
 //   /api/matches/...            -> https://api-ar.ysscores.com/api/matches/...
 //       e.g. /api/matches/matches_date_get/{YYYY-MM-DD}/[]/[]/["8634"]/D/60
 //            /api/matches/match_info/{match_id}/D/60
-//       matches_date_get: matches with is_visible = false are removed, and a match with a
-//                         stream gets  "stream": { "channel": "b4", "r2_slug": "..." }
-//       match_info:       data.stream is added the same way (hidden matches stay reachable)
-//       A FINISHED match (status 4) never gets a stream, even if match_settings still has one.
-//       ?raw=1 (dashboard origins only): no filtering, no injection, no edge cache
+//       matches_date_get: matches with is_visible = false are removed
+//       match_info:       passed through (hidden matches stay reachable by id)
+//       Both: any "stream" field is removed (the site carries no stream data).
+//       ?raw=1 (dashboard origins only): no filtering, no edge cache
 //   /api/standings/{id}?include=results
 //                               -> https://football-poster-generator.vercel.app/api/standings/{id}?include=results
-//   /api/active-streams         -> { streams: [ { match_id, channel, r2_slug } ] }   (legacy)
+//   /api/active-streams         -> 410 Gone (the site no longer carries streams)
 //   /api/health                 -> {"status":"ok"}
 //
 // Secrets / vars / bindings:
@@ -84,11 +85,7 @@ const FILTERED_MAX_AGE = 10;          // browser cache for filtered match respon
 const EDGE_FRESH_FILTERED = 5;        // seconds a filtered match response is fresh in the edge cache
 const EDGE_SWR_MAX = 30;              // longest stale-while-revalidate window (seconds)
 const SETTINGS_STALE_MS = 10 * 60 * 1000;   // last known settings used while Supabase is failing
-const STREAM_KEY_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const MATCH_ID_RE = /^\d{1,12}$/;
-// ysscores match status codes that mean "over" (verified: 4 = finished). A match in one of these
-// states never gets a stream attached, whatever match_settings says.
-const FINISHED_STATUSES = new Set([4]);
 
 const ROUTES = [
   {
@@ -154,7 +151,7 @@ export default {
       return json({ status: "ok" }, 200, cors);
     }
     if (url.pathname === "/api/active-streams") {
-      return activeStreams(request, env, cors);
+      return json({ error: "GONE", message: "Streams are not available on this site" }, 410, cors);
     }
 
     // --- Route lookup -------------------------------------------------------
@@ -362,7 +359,8 @@ async function buildResponse({ upstreamUrl, ttl, filterKind, pathId, raw, staleK
 }
 
 // =============================================================================
-// Match settings (Supabase "match_settings": match_id, is_visible, channel, r2_slug)
+// Match settings (Supabase "match_settings": match_id, is_visible). The table's channel and
+// r2_slug columns are never read: the site does not attach streams.
 // =============================================================================
 const settingsMemo = new Map();   // query URL -> { at, map }   (per isolate, best effort)
 
@@ -375,24 +373,13 @@ function supabaseConfig(env) {
   return { base, headers };
 }
 
-function cleanStream(row) {
-  const channel = STREAM_KEY_RE.test(String(row && row.channel || "")) ? String(row.channel) : "";
-  const r2_slug = STREAM_KEY_RE.test(String(row && row.r2_slug || "")) ? String(row.r2_slug) : "";
-  return channel || r2_slug ? { channel, r2_slug } : null;
-}
-
-// A finished match never carries a stream (match object from ysscores: { status, ... })
-function isFinished(match) {
-  return FINISHED_STATUSES.has(Number(match && match.status));
-}
-
-// Settings for the given match ids -> Map(id -> { visible, stream }) or null if unavailable.
+// Settings for the given match ids -> Map(id -> { visible }) or null if unavailable.
 async function loadSettings(ids, env) {
   const cfg = supabaseConfig(env);
   if (!cfg) return { map: null, state: "off" };
   const list = [...new Set(ids.filter((id) => MATCH_ID_RE.test(id)))].sort().slice(0, 400);
   if (!list.length) return { map: new Map(), state: "ok" };
-  const q = `${cfg.base}/rest/v1/match_settings?select=match_id,is_visible,channel,r2_slug&match_id=in.(${list.join(",")})`;
+  const q = `${cfg.base}/rest/v1/match_settings?select=match_id,is_visible&match_id=in.(${list.join(",")})`;
 
   const memo = settingsMemo.get(q);
   if (memo && Date.now() - memo.at < SETTINGS_TTL * 1000) return { map: memo.map, state: "ok" };
@@ -407,7 +394,7 @@ async function loadSettings(ids, env) {
     const map = new Map();
     for (const r of Array.isArray(rows) ? rows : []) {
       const id = String(r && r.match_id != null ? r.match_id : "");
-      if (MATCH_ID_RE.test(id)) map.set(id, { visible: r.is_visible !== false, stream: cleanStream(r) });
+      if (MATCH_ID_RE.test(id)) map.set(id, { visible: r.is_visible !== false });
     }
     if (settingsMemo.size > 200) settingsMemo.clear();
     settingsMemo.set(q, { at: Date.now(), map });
@@ -419,7 +406,8 @@ async function loadSettings(ids, env) {
   }
 }
 
-// Filter / annotate a match response. Any parse problem returns the body untouched.
+// Filter a match response: hidden matches are dropped from the day list, and any "stream"
+// field is removed (list and match_info). Any parse problem returns the body untouched.
 async function applyMatchSettings(kind, body, pathId, env) {
   let doc;
   try { doc = JSON.parse(new TextDecoder().decode(body)); } catch { return { body, state: "unparsed" }; }
@@ -427,52 +415,19 @@ async function applyMatchSettings(kind, body, pathId, env) {
 
   if (kind === "matches_date_get") {
     if (!Array.isArray(doc.data)) return { body, state: "unparsed" };
+    for (const m of doc.data) if (m && typeof m === "object") delete m.stream;
     const { map, state } = await loadSettings(doc.data.map((m) => String(m && m.match_id != null ? m.match_id : "")), env);
-    if (!map) return { body, state };
-    doc.data = doc.data
-      .filter((m) => { const s = map.get(String(m && m.match_id)); return !(s && !s.visible); })
-      .map((m) => {
-        const s = map.get(String(m && m.match_id));
-        if (s && s.stream && !isFinished(m)) m.stream = s.stream;
-        return m;
-      });
+    // Supabase off/unavailable: everything is shown (state tells the caller not to cache long)
+    if (map) doc.data = doc.data.filter((m) => { const s = map.get(String(m && m.match_id)); return !(s && !s.visible); });
     return { body: JSON.stringify(doc), state };
   }
 
-  // match_info
+  // match_info: needs no settings (hidden matches stay reachable by id)
   if (!doc.data || typeof doc.data !== "object" || Array.isArray(doc.data) || !MATCH_ID_RE.test(pathId)) {
     return { body, state: "unparsed" };
   }
-  const { map, state } = await loadSettings([pathId], env);
-  if (!map) return { body, state };
-  const s = map.get(pathId);
-  if (s && s.stream && !isFinished(doc.data)) doc.data.stream = s.stream;
-  return { body: JSON.stringify(doc), state };
-}
-
-// Legacy: GET /api/active-streams -> { streams: [ { match_id, channel, r2_slug } ] }
-// (themes from before the edge merge poll this; new themes read match_info.stream)
-// This list has no match status, so it cannot drop finished matches: clear the stream in the
-// dashboard when a match ends (current themes are covered by the status check above).
-async function activeStreams(request, env, cors) {
-  const cfg = supabaseConfig(env);
-  if (!cfg) return json({ error: "NOT_CONFIGURED", message: "SUPABASE_URL / SUPABASE_ANON_KEY missing" }, 503, cors);
-  const q = `${cfg.base}/rest/v1/match_settings?select=match_id,channel,r2_slug&or=(channel.not.is.null,r2_slug.not.is.null)&order=updated_at.desc&limit=200`;
-  let rows;
-  try {
-    const res = await fetch(q, { headers: cfg.headers, signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS), cf: { cacheEverything: true, cacheTtl: 20 } });
-    if (!res.ok) return json({ error: "UPSTREAM_ERROR", message: `Supabase returned ${res.status}` }, 502, cors);
-    rows = await res.json();
-  } catch {
-    return json({ error: "UPSTREAM_UNREACHABLE", message: "Supabase request failed" }, 504, cors);
-  }
-  const streams = (Array.isArray(rows) ? rows : [])
-    .map((r) => ({ match_id: String(r && r.match_id != null ? r.match_id : ""), ...(cleanStream(r) || {}) }))
-    .filter((s) => MATCH_ID_RE.test(s.match_id) && (s.channel || s.r2_slug));
-  return new Response(request.method === "HEAD" ? null : JSON.stringify({ streams }), {
-    status: 200,
-    headers: { ...cors, "Content-Type": "application/json; charset=utf-8", "Cache-Control": "public, max-age=20", "X-Content-Type-Options": "nosniff" },
-  });
+  delete doc.data.stream;
+  return { body: JSON.stringify(doc), state: "ok" };
 }
 
 function corsHeaders(origin) {
