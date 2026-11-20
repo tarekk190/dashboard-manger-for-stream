@@ -913,10 +913,13 @@ a.match-card:focus-visible { outline-offset: 3px; border-radius: var(--radius); 
 /* ==========================================================================
    5. POST: ad slots (ad-top, ad-in-article, ad-bottom) - editorial views only
    ========================================================================== */
-/* A slot is display:none unless its widget holds ad code (JS adds .is-filled), so an empty
-   widget never leaves a box. A filled slot reserves its height BEFORE the ad loads (no layout
+/* A slot is display:none unless its widget holds ad code, so an empty widget never leaves a
+   box. "Filled" is decided by CSS (:has) at the FIRST paint, so a filled slot never pops in
+   later and pushes the article down; .is-filled (set by the post-view script) is the fallback
+   for browsers without :has. A filled slot reserves its height before the ad loads (no layout
    shift), is labelled "إعلان" and keeps at least 24px of clear space from content, links,
-   buttons and navigation (no accidental clicks). */
+   buttons and navigation (no accidental clicks). The rules are written twice on purpose: a
+   browser that does not know :has drops only the :has copy. */
 .post-ad--top { padding-top: 16px; }
 .ad-slot {
   display: none; position: relative; width: 100%;
@@ -925,16 +928,20 @@ a.match-card:focus-visible { outline-offset: 3px; border-radius: var(--radius); 
 }
 .ad-slot::before {
   content: 'إعلان'; position: absolute; top: 0; inset-inline-start: 0;
-  font-size: .72rem; line-height: 18px; letter-spacing: .02em; color: var(--text-muted);
+  font-size: .72rem; line-height: 18px; color: var(--text-muted);   /* no letter-spacing: it breaks Arabic joining */
 }
 html[lang="en"] .ad-slot::before { content: 'Advertisement'; }
 .ad-slot .widget, .ad-slot .widget-content { width: 100%; display: block; margin: 0; }
 .ad-slot ins.adsbygoogle { display: block; width: 100%; }
-.ad-slot.is-filled { display: block; }
 /* Reserved heights = the usual rendered size of the unit at that width */
+.ad-slot.is-filled { display: block; }
 .ad-slot--h.is-filled { min-height: calc(100px + 22px); }                    /* 320x100 mobile */
-@media (min-width: 768px) { .ad-slot--h.is-filled { min-height: calc(90px + 22px); } }   /* 728x90 */
 .ad-slot--in.is-filled { min-height: calc(250px + 22px); }                   /* in-article 300x250 */
+@media (min-width: 768px) { .ad-slot--h.is-filled { min-height: calc(90px + 22px); } }   /* 728x90 */
+.ad-slot:has(ins.adsbygoogle, iframe, img) { display: block; }
+.ad-slot--h:has(ins.adsbygoogle, iframe, img) { min-height: calc(100px + 22px); }
+.ad-slot--in:has(ins.adsbygoogle, iframe, img) { min-height: calc(250px + 22px); }
+@media (min-width: 768px) { .ad-slot--h:has(ins.adsbygoogle, iframe, img) { min-height: calc(90px + 22px); } }
 .post-body .ad-slot--in { clear: both; }
 body#layout .ad-slot::before { content: none; }
 
@@ -2860,9 +2867,10 @@ body#layout .sidebar { width: 320px; }
         </b:widget>
       </b:section>
       <b:if cond='data:view.isPost'>
-      <!-- Bottom ad slot (below the article) -->
-      <!-- In-article ad slot: rendered here, moved after the 3rd paragraph of the article by
-           the post-view script (articles with at least 6 paragraphs only, else removed). -->
+      <!-- In-article ad slot: rendered here (hidden), then moved after the 3rd paragraph of
+           the article by the inline script right below, while the page is still being parsed,
+           so it is in place before the first paint (no layout shift). Articles with fewer
+           than 6 paragraphs get no in-article slot. -->
       <div class='post-ad post-ad--in' hidden='hidden' id='px-ad-in-holder'>
         <b:section class='ad-slot ad-slot--in' id='ad-in-article' maxwidgets='1' showaddelement='yes'>
           <b:widget id='HTML14' locked='false' title='' type='HTML' version='2' visible='true'>
@@ -2873,6 +2881,28 @@ body#layout .sidebar { width: 320px; }
           </b:widget>
         </b:section>
       </div>
+      <script>
+      //<![CDATA[
+      (function () {
+        // Only between two plain paragraphs of the article (never next to a heading, image,
+        // embed or link list), after the 3rd of at least 6 paragraphs; otherwise removed.
+        var body = document.getElementById('px-post-body');
+        var holder = document.getElementById('px-ad-in-holder');
+        var slot = holder && holder.querySelector('.ad-slot');
+        if (slot) {
+          var paras = body ? Array.prototype.filter.call(body.children, function (el) {
+            return el.tagName === 'P' && el.textContent.trim().length > 40;
+          }) : [];
+          var anchor = paras.length >= 6 ? paras[2] : null;
+          var next = anchor && anchor.nextElementSibling;
+          if (anchor && next && next.tagName === 'P') anchor.parentNode.insertBefore(slot, next);
+          else slot.remove();
+        }
+        if (holder) holder.remove();
+      })();
+      //]]>
+      </script>
+      <!-- Bottom ad slot (below the article) -->
       <div class='post-ad post-ad--bottom'>
         <b:section class='ad-slot ad-slot--h' id='ad-bottom' maxwidgets='1' showaddelement='yes'>
           <b:widget id='HTML12' locked='false' title='' type='HTML' version='2' visible='true'>
@@ -5601,31 +5631,16 @@ body#layout .sidebar { width: 320px; }
 
   <b:if cond='data:view.isPost'>
   <!-- ======================================================================
-       POST VIEW: ad slots (ad-top above the article, ad-in-article inside it, ad-bottom
-       below it). A slot is shown only when its widget holds ad code (<ins>, <iframe> or
-       <img>). The in-article slot goes after the 3rd paragraph-level block of the article
-       when the article has at least 6 of them (never next to a heading, image or embed:
-       it is inserted between two plain paragraphs), else it is removed.
-       adsbygoogle is pushed only after a slot is visible and in place: a push into a hidden
-       slot fails for good ("availableWidth=0"), so the widgets must not push themselves.
+       POST VIEW: ad push (ad-top above the article, ad-in-article inside it - placed by
+       the inline script after the Blog section -, ad-bottom below it). Filled slots are
+       already visible from the first paint (CSS :has); .is-filled is the fallback for
+       browsers without :has. adsbygoogle is pushed only once slots are visible and in place:
+       a push into a hidden slot fails for good ("availableWidth=0"), so the widgets must
+       not push themselves.
        ====================================================================== -->
   <script>
   //<![CDATA[
   (function () {
-    var body = document.getElementById('px-post-body');
-    var holder = document.getElementById('px-ad-in-holder');
-    var inSlot = holder && holder.querySelector('.ad-slot');
-    if (inSlot) {
-      var paras = body ? Array.prototype.filter.call(body.children, function (el) {
-        return el.tagName === 'P' && el.textContent.trim().length > 40;
-      }) : [];
-      var anchor = paras.length >= 6 ? paras[2] : null;
-      var next = anchor && anchor.nextElementSibling;
-      if (anchor && next && next.tagName === 'P') anchor.parentNode.insertBefore(inSlot, next);
-      else inSlot.remove();
-    }
-    if (holder) holder.remove();
-
     var slots = document.querySelectorAll('.ad-slot');
     var any = false;
     for (var i = 0; i < slots.length; i++) {

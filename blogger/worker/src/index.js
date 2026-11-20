@@ -18,7 +18,7 @@ const ALLOWED_ORIGINS = [
   "https://powerdoflearn.blogspot.com",
 ].map((o) => o.trim().replace(/\/+$/, ""));
 // The dashboard's origin(s) come from the DASHBOARD_ORIGINS variable (comma separated),
-// e.g. "https://px-stream-manager.vercel.app". Only they may ask for ?raw=1.
+// e.g. "https://dashboard.example.com". Only they may ask for ?raw=1.
 // The local dashboard (VS Code Live Server on port 5500) is always a dashboard origin too.
 // Only a browser page served from this machine's port 5500 sends this Origin, so other sites
 // gain nothing from it (an Origin header is forgeable by non-browser clients anyway).
