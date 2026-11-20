@@ -329,10 +329,13 @@
     var url = base + location.pathname;
     var robots = null;
     if (window.PXL_ROUTE === 'match') {
-      // /p/match.html?id=123 is one page per match: the id stays in the canonical URL.
-      // Without a valid id the page has no content of its own and is kept out of the index.
+      // /p/match.html?id=123 renders third-party match data client-side: an unlimited number
+      // of thin URLs, so EVERY match URL is kept out of the index ("follow" keeps the links to
+      // teams, news and other pages crawlable). The id stays in the canonical URL.
+      // Set here, in the head, before any other script; updateSeo() never overrides robots.
       var id = new URLSearchParams(location.search).get('id') || '';
-      if (/^\d{1,12}$/.test(id)) url += '?id=' + id; else robots = 'noindex, follow';
+      if (/^\d{1,12}$/.test(id)) url += '?id=' + id;
+      robots = 'noindex, follow';
     }
     if (window.PXL_ROUTE === 'news') {
       // /p/news.html?page=N: every archive page is its own canonical URL (page 1 has no parameter).
@@ -5292,8 +5295,8 @@ body#layout .sidebar { width: 320px; }
       return st;
     }
 
-    // SEO for /p/match.html?id=: title, description, canonical WITH the ?id= (one indexable
-    // URL per match) and SportsEvent structured data. pxlSeo (head script) only writes the
+    // SEO for /p/match.html?id=: title, description, canonical WITH the ?id= and SportsEvent
+    // structured data (match pages are noindex: the head script sets robots for this route). pxlSeo (head script) only writes the
     // tags / JSON-LD when they changed, so the polls cost nothing.
     function updateSeo(n) {
       if (!window.pxlSeo || !/^\d{1,12}$/.test(matchId)) return;
