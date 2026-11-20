@@ -1,6 +1,7 @@
 // =============================================================================
-// PX League - Cloudflare Worker: API proxy (ysscores matches + standings) with strict CORS
-// and edge filtering from the Master Match Controller (Supabase table "match_settings").
+// PX League - Cloudflare Worker: API proxy (ysscores matches + standings) with strict CORS,
+// per-IP rate limiting, an edge response cache and edge filtering from the Master Match
+// Controller (Supabase table "match_settings").
 // -----------------------------------------------------------------------------
 // >>> YOUR BLOG ORIGIN(S) <<<
 // Exact origins: scheme + host only. A trailing slash is tolerated (it is removed below),
@@ -31,29 +32,40 @@ const LOCAL_DASHBOARD_ORIGINS = [
 //       matches_date_get: matches with is_visible = false are removed, and a match with a
 //                         stream gets  "stream": { "channel": "b4", "r2_slug": "..." }
 //       match_info:       data.stream is added the same way (hidden matches stay reachable)
-//       ?raw=1 (dashboard origins only): no filtering, no injection
+//       A FINISHED match (status 4) never gets a stream, even if match_settings still has one.
+//       ?raw=1 (dashboard origins only): no filtering, no injection, no edge cache
 //   /api/standings/{id}?include=results
 //                               -> https://football-poster-generator.vercel.app/api/standings/{id}?include=results
 //   /api/active-streams         -> { streams: [ { match_id, channel, r2_slug } ] }   (legacy)
 //   /api/health                 -> {"status":"ok"}
 //
-// Secrets / vars:
+// Secrets / vars / bindings:
 //   wrangler secret put SUPABASE_URL        https://<project>.supabase.co
 //   wrangler secret put SUPABASE_ANON_KEY   anon JWT or sb_publishable_... key (RLS: read-only)
 //   DASHBOARD_ORIGINS (var)                 https://your-dashboard.vercel.app
 //   ALLOWED_ORIGINS (var, optional)         extra blog origins, added to the list above
+//   RATE_LIMITER (ratelimit binding)        per-IP limit, see wrangler.toml (absent = no limit)
 // Without Supabase settings the proxy works as before (no filtering).
 //
-// Responses are cached at Cloudflare's edge, so many visitors share one upstream request.
-// Upstream errors are cached briefly too (cacheTtlByStatus), and the last good response of
-// each URL is kept for STALE_TTL seconds: when upstream fails (timeout, 403/429, 5xx) the
-// Worker serves that copy with "X-PXL-Stale: 1" instead of an error. The stale copy is
-// stored RAW and filtered on the way out, so hidden matches stay hidden during an outage.
-// (The Cache API needs the Worker on a custom domain/route; on *.workers.dev it is a no-op.)
+// Caching, three layers (all keyed per URL, shared by every visitor of a data centre):
+//   1. Edge response cache (Cache API): the FINAL, filtered body is stored for a few seconds
+//      (EDGE_FRESH_FILTERED for match endpoints, the route TTL otherwise). Within that time a
+//      request is answered from the edge without touching upstream or Supabase. After it, the
+//      copy is still served for a short stale-while-revalidate window while ONE background
+//      request per isolate refreshes it, so visitors never wait on upstream at expiry.
+//   2. Subrequest cache (fetch cf.cacheEverything): upstream responses, errors included
+//      (cacheTtlByStatus), so a 403/429/5xx burst reaches upstream once per few seconds.
+//   3. Last-good copy (STALE_TTL): when upstream fails, the last good RAW body is served with
+//      "X-PXL-Stale: 1" (filtered on the way out, so hidden matches stay hidden).
+// Layers 1 and 3 use the Cache API, which only works when the Worker runs on a custom domain
+// or route of a Cloudflare zone. On *.workers.dev they are silent no-ops (requests still work,
+// they just always go upstream). See wrangler.toml for the custom-domain setup.
+// Note: every request still INVOKES the Worker (and counts toward the plan's request quota);
+// the cache removes the upstream/Supabase work, not the invocation.
 //
 // CORS: only the origins above get Access-Control-Allow-Origin. Any other Origin (and
 // requests without an Origin header) get 403. An Origin header can be forged by non-browser
-// clients (curl, servers); for hard limits add a Cloudflare rate-limiting rule.
+// clients (curl, servers); the per-IP RATE_LIMITER is what limits those.
 // =============================================================================
 
 // Honest identification of this proxy (no browser impersonation)
@@ -68,9 +80,14 @@ const SETTINGS_TIMEOUT_MS = 4000;     // Supabase must never hold the match list
 const STALE_TTL = 900;                // seconds a last-good copy may be served while upstream is failing
 const SETTINGS_TTL = 5;               // seconds match_settings are cached (edge + isolate memory)
 const FILTERED_MAX_AGE = 10;          // browser cache for filtered match responses (hide/show shows within ~15 s)
+const EDGE_FRESH_FILTERED = 5;        // seconds a filtered match response is fresh in the edge cache
+const EDGE_SWR_MAX = 30;              // longest stale-while-revalidate window (seconds)
 const SETTINGS_STALE_MS = 10 * 60 * 1000;   // last known settings used while Supabase is failing
 const STREAM_KEY_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const MATCH_ID_RE = /^\d{1,12}$/;
+// ysscores match status codes that mean "over" (verified: 4 = finished). A match in one of these
+// states never gets a stream attached, whatever match_settings says.
+const FINISHED_STATUSES = new Set([4]);
 
 const ROUTES = [
   {
@@ -94,6 +111,9 @@ const ROUTES = [
   },
 ];
 
+// Background edge-cache refreshes in progress (per isolate): one refresh per URL at a time
+const refreshing = new Set();
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -104,13 +124,21 @@ export default {
     const isDashboard = dashboardOrigins.includes(origin);
     const siteOrigins = ALLOWED_ORIGINS.concat(String(env.ALLOWED_ORIGINS || "")
       .split(",").map((o) => o.trim().replace(/\/+$/, "")).filter(Boolean));
+    const originAllowed = siteOrigins.includes(origin) || isDashboard;
+    const cors = originAllowed ? corsHeaders(origin) : {};
+
+    // --- Rate limit (per client IP, every method except preflight) ---------
+    // Runs before the Origin check so forged-Origin scrapers are throttled as well. Allowed
+    // origins get CORS headers on the 429, so the page's script can see it and back off.
+    if (request.method !== "OPTIONS" && !(await withinRateLimit(request, env))) {
+      return json({ error: "RATE_LIMITED", message: "Too many requests" }, 429, { ...cors, "Retry-After": "60" });
+    }
 
     // --- CORS gate ----------------------------------------------------------
-    if (!siteOrigins.includes(origin) && !isDashboard) {
+    if (!originAllowed) {
       // No CORS headers: the browser blocks the response for foreign pages.
       return json({ error: "FORBIDDEN_ORIGIN", message: "Origin not allowed" }, 403, {});
     }
-    const cors = corsHeaders(origin);
 
     // --- Preflight / methods ------------------------------------------------
     if (request.method === "OPTIONS") {
@@ -155,87 +183,182 @@ export default {
     const raw = isDashboard && url.searchParams.get("raw") === "1";
     const filterKind = route.filtered && !raw && (kind === "matches_date_get" || kind === "match_info") ? kind : "";
     const pathId = kind === "match_info" ? decoded.split("/")[1] : "";
+    const edgeFresh = filterKind ? EDGE_FRESH_FILTERED : ttl;
+    const edgeSwr = Math.min(EDGE_SWR_MAX, Math.max(10, edgeFresh * 2));
 
-    // Final response: filter (if needed) and add our own headers. Used for fresh AND stale bodies.
-    const finish = async (body, contentType, extra) => {
-      let out = body, settingsState = "";
-      if (filterKind) {
-        const r = await applyMatchSettings(filterKind, body, pathId, env);
-        out = r.body;
-        settingsState = r.state;
-      }
-      return new Response(request.method === "HEAD" ? null : out, {
-        status: 200,
-        headers: {
-          ...cors,
-          "Content-Type": contentType,
-          // Filtered bodies depend on Supabase: keep them short-lived, and never cache a body
-          // that could not be filtered (settings off/unavailable), so it is not stuck in browsers.
-          "Cache-Control": !filterKind ? `public, max-age=${Math.min(ttl, 60)}`
-            : (settingsState === "ok" ? `public, max-age=${Math.min(ttl, FILTERED_MAX_AGE)}` : "no-store"),
-          "X-Content-Type-Options": "nosniff",
-          ...(settingsState ? { "X-PXL-Settings": settingsState } : {}),
-          ...(raw ? { "X-PXL-Raw": "1" } : {}),
-          ...extra,
-        },
-      });
-    };
+    // Cache keys on this Worker's own host (never requested by clients). The query string is
+    // the whitelisted one, so ?raw=1 and junk parameters never split or poison the cache.
+    const keyPath = url.pathname + (qs ? "?" + qs : "");
+    const staleKey = new Request(url.origin + "/__pxl_stale" + keyPath);
+    const edgeKey = new Request(url.origin + "/__pxl_edge" + keyPath);
 
-    // Cache key for the last-good copy (on this Worker's own host, never requested by clients)
-    const staleKey = new Request(url.origin + "/__pxl_stale" + url.pathname + (qs ? "?" + qs : ""));
-    const staleOr = async (fallback) => {
-      try {
-        const hit = await caches.default.match(staleKey);
-        if (hit) {
-          return finish(await hit.arrayBuffer(), hit.headers.get("Content-Type") || "application/json; charset=utf-8",
-            { "Cache-Control": "no-store", "X-PXL-Stale": "1" });
+    // Builds the response from upstream (no CORS headers; they are added per request below).
+    const build = () => buildResponse({ upstreamUrl, ttl, filterKind, pathId, raw, staleKey, env, ctx });
+
+    // --- Edge response cache (filtered bodies; skipped for ?raw=1) ----------
+    if (!raw) {
+      const hit = await edgeGet(edgeKey);
+      if (hit) {
+        const age = (Date.now() - hit.storedAt) / 1000;
+        if (age > edgeFresh && !refreshing.has(edgeKey.url)) {
+          // Stale-while-revalidate: answer now, refresh once in the background
+          refreshing.add(edgeKey.url);
+          ctx.waitUntil(build()
+            .then((res) => edgePut(edgeKey, res, edgeFresh, edgeSwr))
+            .catch(() => {})
+            .finally(() => refreshing.delete(edgeKey.url)));
         }
-      } catch { /* cache unavailable: fall through */ }
-      return fallback();
-    };
-
-    let upstream;
-    try {
-      upstream = await fetch(upstreamUrl, {
-        method: "GET",
-        headers: UPSTREAM_HEADERS,
-        signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
-        // Errors are cached briefly as well, so a 403/429/5xx burst reaches upstream once per
-        // data centre per few seconds instead of once per visitor poll.
-        cf: {
-          cacheEverything: true,
-          cacheTtlByStatus: { "200-299": ttl, "404": 60, "403": 15, "429": 15, "500-599": 5 },
-        },
-      });
-    } catch (err) {
-      const timedOut = err && err.name === "TimeoutError";
-      return staleOr(() => json({ error: timedOut ? "UPSTREAM_TIMEOUT" : "UPSTREAM_UNREACHABLE", message: "Upstream request failed" }, 504, cors));
-    }
-
-    if (!upstream.ok) {
-      // 404 from upstream (e.g. unknown standings id) stays 404; other failures become 502
-      if (upstream.status === 404) {
-        return json({ error: "NOT_FOUND", message: "Upstream returned 404" }, 404, cors);
+        return respond(request, hit.response, cors, { "X-PXL-Edge": age > edgeFresh ? "STALE" : "HIT" });
       }
-      return staleOr(() => json({ error: "UPSTREAM_ERROR", message: `Upstream returned ${upstream.status}` }, 502, cors));
     }
 
-    const contentType = upstream.headers.get("Content-Type") || "application/json; charset=utf-8";
-    const body = await upstream.arrayBuffer();
-    // Refresh the last-good copy (raw) only when the edge actually went upstream
-    if (upstream.headers.get("CF-Cache-Status") !== "HIT") {
-      ctx.waitUntil(
-        caches.default.put(staleKey, new Response(body.slice(0), {
-          headers: { "Content-Type": contentType, "Cache-Control": `public, max-age=${STALE_TTL}` },
-        })).catch(() => {})
-      );
-    }
-
-    // Pass the JSON body through (filtered for the match endpoints); only our own headers
-    // go back to the browser (no upstream cookies or server headers).
-    return finish(body, contentType, {});
+    const res = await build();
+    if (!raw) ctx.waitUntil(edgePut(edgeKey, res.clone(), edgeFresh, edgeSwr).catch(() => {}));
+    return respond(request, res, cors, raw ? {} : { "X-PXL-Edge": "MISS" });
   },
 };
+
+// =============================================================================
+// Rate limiting (Workers Rate Limiting binding "RATE_LIMITER", configured in wrangler.toml)
+// Key = client IP. The binding counts per Cloudflare location and is eventually consistent,
+// so it is a brake on abusive clients, not an exact quota. Mobile carriers put many users
+// behind one IP (CGNAT): keep the limit well above one viewer's polling rate (a live match
+// page makes up to 3 requests every 10 s = 18/min).
+// A missing binding (local dev) or a binding error never blocks traffic.
+// =============================================================================
+async function withinRateLimit(request, env) {
+  if (!env.RATE_LIMITER || typeof env.RATE_LIMITER.limit !== "function") return true;
+  const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+  try {
+    const { success } = await env.RATE_LIMITER.limit({ key: ip });
+    return success !== false;
+  } catch {
+    return true;
+  }
+}
+
+// =============================================================================
+// Edge response cache helpers (Cache API; no-ops on *.workers.dev)
+// Stored copies carry X-PXL-Stored-At so the age can be computed, and a Cache-Control
+// max-age of fresh + swr seconds, after which Cloudflare evicts them.
+// =============================================================================
+async function edgeGet(key) {
+  try {
+    const hit = await caches.default.match(key);
+    if (!hit) return null;
+    const storedAt = Number(hit.headers.get("X-PXL-Stored-At"));
+    if (!Number.isFinite(storedAt)) return null;
+    return { response: hit, storedAt };
+  } catch {
+    return null;
+  }
+}
+
+async function edgePut(key, res, fresh, swr) {
+  // Only good, cacheable bodies: no errors, no outage copies, no unfiltered ("no-store") bodies
+  if (res.status !== 200 || res.headers.get("X-PXL-Stale") === "1") return;
+  if (/no-store/i.test(res.headers.get("Cache-Control") || "")) return;
+  const headers = new Headers(res.headers);
+  headers.delete("Vary");   // the key is per URL only; respond() re-adds Vary: Origin with the CORS headers
+  headers.set("X-PXL-Browser-Cache", headers.get("Cache-Control") || "no-store");
+  headers.set("Cache-Control", `public, max-age=${fresh + swr}`);
+  headers.set("X-PXL-Stored-At", String(Date.now()));
+  await caches.default.put(key, new Response(await res.arrayBuffer(), { status: 200, headers }));
+}
+
+// Final response for one visitor: the (cached or fresh) body + this request's CORS headers.
+// Internal cache bookkeeping headers never reach the browser.
+function respond(request, res, cors, extra) {
+  const headers = new Headers(res.headers);
+  const browserCache = headers.get("X-PXL-Browser-Cache");
+  if (browserCache) headers.set("Cache-Control", browserCache);
+  headers.delete("X-PXL-Browser-Cache");
+  headers.delete("X-PXL-Stored-At");
+  for (const [k, v] of Object.entries({ ...cors, ...extra })) headers.set(k, v);
+  return new Response(request.method === "HEAD" ? null : res.body, { status: res.status, headers });
+}
+
+// =============================================================================
+// Upstream fetch + filtering. Returns a Response WITHOUT CORS headers.
+// =============================================================================
+async function buildResponse({ upstreamUrl, ttl, filterKind, pathId, raw, staleKey, env, ctx }) {
+  // Final response: filter (if needed) and add our own headers. Used for fresh AND stale bodies.
+  const finish = async (body, contentType, extra) => {
+    let out = body, settingsState = "";
+    if (filterKind) {
+      const r = await applyMatchSettings(filterKind, body, pathId, env);
+      out = r.body;
+      settingsState = r.state;
+    }
+    return new Response(out, {
+      status: 200,
+      headers: {
+        "Content-Type": contentType,
+        // Filtered bodies depend on Supabase: keep them short-lived, and never cache a body
+        // that could not be filtered (settings off/unavailable), so it is not stuck in browsers.
+        "Cache-Control": !filterKind ? `public, max-age=${Math.min(ttl, 60)}`
+          : (settingsState === "ok" ? `public, max-age=${Math.min(ttl, FILTERED_MAX_AGE)}` : "no-store"),
+        "X-Content-Type-Options": "nosniff",
+        "Vary": "Origin",
+        ...(settingsState ? { "X-PXL-Settings": settingsState } : {}),
+        ...(raw ? { "X-PXL-Raw": "1" } : {}),
+        ...extra,
+      },
+    });
+  };
+
+  const staleOr = async (fallback) => {
+    try {
+      const hit = await caches.default.match(staleKey);
+      if (hit) {
+        return finish(await hit.arrayBuffer(), hit.headers.get("Content-Type") || "application/json; charset=utf-8",
+          { "Cache-Control": "no-store", "X-PXL-Stale": "1" });
+      }
+    } catch { /* cache unavailable: fall through */ }
+    return fallback();
+  };
+
+  let upstream;
+  try {
+    upstream = await fetch(upstreamUrl, {
+      method: "GET",
+      headers: UPSTREAM_HEADERS,
+      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+      // Errors are cached briefly as well, so a 403/429/5xx burst reaches upstream once per
+      // data centre per few seconds instead of once per visitor poll.
+      cf: {
+        cacheEverything: true,
+        cacheTtlByStatus: { "200-299": ttl, "404": 60, "403": 15, "429": 15, "500-599": 5 },
+      },
+    });
+  } catch (err) {
+    const timedOut = err && err.name === "TimeoutError";
+    return staleOr(() => json({ error: timedOut ? "UPSTREAM_TIMEOUT" : "UPSTREAM_UNREACHABLE", message: "Upstream request failed" }, 504, {}));
+  }
+
+  if (!upstream.ok) {
+    // 404 from upstream (e.g. unknown standings id) stays 404; other failures become 502
+    if (upstream.status === 404) {
+      return json({ error: "NOT_FOUND", message: "Upstream returned 404" }, 404, {});
+    }
+    return staleOr(() => json({ error: "UPSTREAM_ERROR", message: `Upstream returned ${upstream.status}` }, 502, {}));
+  }
+
+  const contentType = upstream.headers.get("Content-Type") || "application/json; charset=utf-8";
+  const body = await upstream.arrayBuffer();
+  // Refresh the last-good copy (raw) only when the edge actually went upstream
+  if (upstream.headers.get("CF-Cache-Status") !== "HIT") {
+    ctx.waitUntil(
+      caches.default.put(staleKey, new Response(body.slice(0), {
+        headers: { "Content-Type": contentType, "Cache-Control": `public, max-age=${STALE_TTL}` },
+      })).catch(() => {})
+    );
+  }
+
+  // Pass the JSON body through (filtered for the match endpoints); only our own headers
+  // go back to the browser (no upstream cookies or server headers).
+  return finish(body, contentType, {});
+}
 
 // =============================================================================
 // Match settings (Supabase "match_settings": match_id, is_visible, channel, r2_slug)
@@ -255,6 +378,11 @@ function cleanStream(row) {
   const channel = STREAM_KEY_RE.test(String(row && row.channel || "")) ? String(row.channel) : "";
   const r2_slug = STREAM_KEY_RE.test(String(row && row.r2_slug || "")) ? String(row.r2_slug) : "";
   return channel || r2_slug ? { channel, r2_slug } : null;
+}
+
+// A finished match never carries a stream (match object from ysscores: { status, ... })
+function isFinished(match) {
+  return FINISHED_STATUSES.has(Number(match && match.status));
 }
 
 // Settings for the given match ids -> Map(id -> { visible, stream }) or null if unavailable.
@@ -302,7 +430,11 @@ async function applyMatchSettings(kind, body, pathId, env) {
     if (!map) return { body, state };
     doc.data = doc.data
       .filter((m) => { const s = map.get(String(m && m.match_id)); return !(s && !s.visible); })
-      .map((m) => { const s = map.get(String(m && m.match_id)); if (s && s.stream) m.stream = s.stream; return m; });
+      .map((m) => {
+        const s = map.get(String(m && m.match_id));
+        if (s && s.stream && !isFinished(m)) m.stream = s.stream;
+        return m;
+      });
     return { body: JSON.stringify(doc), state };
   }
 
@@ -313,12 +445,14 @@ async function applyMatchSettings(kind, body, pathId, env) {
   const { map, state } = await loadSettings([pathId], env);
   if (!map) return { body, state };
   const s = map.get(pathId);
-  if (s && s.stream) doc.data.stream = s.stream;
+  if (s && s.stream && !isFinished(doc.data)) doc.data.stream = s.stream;
   return { body: JSON.stringify(doc), state };
 }
 
 // Legacy: GET /api/active-streams -> { streams: [ { match_id, channel, r2_slug } ] }
 // (themes from before the edge merge poll this; new themes read match_info.stream)
+// This list has no match status, so it cannot drop finished matches: clear the stream in the
+// dashboard when a match ends (current themes are covered by the status check above).
 async function activeStreams(request, env, cors) {
   const cfg = supabaseConfig(env);
   if (!cfg) return json({ error: "NOT_CONFIGURED", message: "SUPABASE_URL / SUPABASE_ANON_KEY missing" }, 503, cors);
@@ -345,7 +479,7 @@ function corsHeaders(origin) {
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
     "Access-Control-Allow-Headers": "Accept, Content-Type",
-    "Access-Control-Expose-Headers": "X-PXL-Stale, X-PXL-Settings, X-PXL-Raw",
+    "Access-Control-Expose-Headers": "X-PXL-Stale, X-PXL-Settings, X-PXL-Raw, X-PXL-Edge, Retry-After",
     "Vary": "Origin",
   };
 }

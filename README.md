@@ -132,9 +132,10 @@ Optional:
 | Variable | Default | Meaning |
 | :--- | :--- | :--- |
 | `ENABLE_AUTH_ON_PLAYLISTS` | `true` | Require a viewer token on every edge playlist (`.css`). Segments are never token-checked. `false` makes `/auth` allow everything (debug only). |
-| `TOKEN_EXPIRATION_SECONDS` | `60` | Viewer token lifetime |
-| `TOKEN_RENEW_GRACE_SECONDS` | `15` | How long after expiry `POST /api/token` still renews a token |
-| `ALLOWED_ORIGINS` | empty | Comma-separated origins allowed to call `/api/stream` and `/api/token` cross-origin. `*` is refused when `NODE_ENV=production`. |
+| `TOKEN_EXPIRATION_SECONDS` | `45` | Viewer token lifetime (25-3600; the player renews 15 s before expiry) |
+| `TOKEN_RENEW_GRACE_SECONDS` | `10` | How long after expiry `POST /api/token` still renews a token |
+| `VIEWER_TOKEN_BIND` | `ua` | What a viewer token is tied to: `off`, `ua` (User-Agent; skipped for native AppleCoreMedia HLS) or `ua+ip` (also the client IP: stricter, but a viewer changing networks stalls briefly until the player fetches a new token) |
+| `ALLOWED_ORIGINS` | empty | Comma-separated origins allowed to call `/api/stream`, `/api/token` and `/api/r2/:slug` cross-origin. These endpoints also refuse (403) any request whose `Origin`/`Referer` is neither `https://EDGE_DOMAIN` (the bundled player) nor one of these origins. `*` is refused when `NODE_ENV=production`. |
 | `ADMIN_ALLOWED_ORIGINS` | empty | Extra origins allowed to call the admin API (`/api/admin`, `/api/channels`, `/api/stats`, `/api/config`) from a browser, e.g. an external control panel. Exact origins or `scheme://host:*` for any port (`http://localhost:*,http://127.0.0.1:*`). `*` is refused. No cookies are involved: the panel sends the admin Bearer token. |
 | `RESTREAM_PROFILE` | `480p` | `480p` = every restream is transcoded to 854x480 H.264 (max 30 fps, keyframe every 2s) + AAC 128k stereo. `copy` = relay the source untouched (video copied) |
 | `RESTREAM_VIDEO_KBPS` | `900` | Video bitrate of the `480p` profile (maxrate +10%, buffer 2x). Range 300-4000 |

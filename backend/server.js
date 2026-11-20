@@ -86,10 +86,34 @@ const DATA_FILE = path.resolve(process.env.DATA_FILE || path.join(__dirname, 'da
 const MAX_SEGMENT_AGE_SECONDS = parseInt(process.env.MAX_SEGMENT_AGE_SECONDS || '120', 10);
 // Viewer auth on edge playlists AND segments. Enabled unless explicitly set to 'false'.
 const ENABLE_AUTH_ON_PLAYLISTS = process.env.ENABLE_AUTH_ON_PLAYLISTS !== 'false';
-const TOKEN_EXPIRATION_SECONDS = parseInt(process.env.TOKEN_EXPIRATION_SECONDS || '60', 10);
-const TOKEN_RENEW_GRACE_SECONDS = parseInt(process.env.TOKEN_RENEW_GRACE_SECONDS || '15', 10);
+// Short-lived viewer tokens: the player renews them 15 s before expiry (POST /api/token).
+// Values outside 25..3600 are clamped (with a warning) rather than refused, so an old .env with
+// multi-hour tokens does not keep the stream server from starting.
+const TOKEN_EXPIRATION_SECONDS = (() => {
+    const requested = parseInt(process.env.TOKEN_EXPIRATION_SECONDS || '45', 10);
+    const value = Number.isFinite(requested) ? Math.min(Math.max(requested, 25), 3600) : 45;
+    if (value !== requested) {
+        console.warn(`[SECURITY] TOKEN_EXPIRATION_SECONDS=${process.env.TOKEN_EXPIRATION_SECONDS} is outside 25..3600; using ${value}. Set 45 in .env.`);
+    }
+    return value;
+})();
+const TOKEN_RENEW_GRACE_SECONDS = parseInt(process.env.TOKEN_RENEW_GRACE_SECONDS || '10', 10);
 const ADMIN_TOKEN_TTL = '12h';
 const JWT_ALGORITHMS = ['HS256'];
+
+// Viewer token binding: what a token is tied to besides its channel.
+//   off   - nothing (any client holding the token may use it)
+//   ua    - the User-Agent that requested it (default)
+//   ua+ip - User-Agent and client IP. Stricter, but a viewer whose IP changes (Wi-Fi <-> mobile,
+//           IPv6 privacy addresses) loses the playlist until the player fetches a new token
+//           (it does so automatically on the next failed renewal), i.e. a short stall.
+// Native HLS stacks (AppleCoreMedia on older iOS/Safari) send their own User-Agent on playlist
+// requests, so the UA check is skipped for them; that is no weaker than the check itself, since
+// a script can send any User-Agent.
+const VIEWER_TOKEN_BIND = String(process.env.VIEWER_TOKEN_BIND || 'ua').trim().toLowerCase();
+if (!['off', 'ua', 'ua+ip'].includes(VIEWER_TOKEN_BIND)) {
+    fatal("VIEWER_TOKEN_BIND must be 'off', 'ua' or 'ua+ip'.");
+}
 
 // Cross-origin access for the public viewer API only (/api/stream, /api/token).
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -1810,7 +1834,7 @@ const viewerCors = cors({
     // Lets allow-listed third-party pages receive/send the stream_auth cookie (never with '*' in production)
     credentials: true
 });
-app.use(['/api/stream', '/api/token'], viewerCors);
+app.use(['/api/stream', '/api/token', '/api/r2'], viewerCors);
 
 // Admin endpoints: same-origin, plus the external control panels listed in ADMIN_ALLOWED_ORIGINS.
 // Entries are exact origins ("https://panel.example.com") or "scheme://host:*" for any port
@@ -1946,19 +1970,32 @@ app.get('/api/health', (req, res) => {
     });
 });
 
-// Public configuration (unauthenticated: read by the player and the admin dashboard).
-// Never put the origin/ingest IP or bucket name here: SERVER_IP is the VPS address behind Cloudflare,
-// and publishing it lets anyone bypass the CDN. Admins get the RTMP URL from the authenticated
-// /api/channels links (obsRtmpUrl).
+// True when the request carries a valid admin Bearer token (no response is sent either way)
+function isAdminRequest(req) {
+    const header = req.headers.authorization || '';
+    if (!header.startsWith('Bearer ')) return false;
+    try {
+        return jwt.verify(header.slice(7).trim(), ADMIN_JWT_SECRET, { algorithms: JWT_ALGORITHMS }).role === 'admin';
+    } catch {
+        return false;
+    }
+}
+
+// Configuration for the admin dashboard. Anonymous callers get only harmless flags; the R2
+// domain is added for authenticated admins only (the player gets its R2 URL from the gated
+// /api/r2/:slug instead). Never put the origin/ingest IP or bucket name here: SERVER_IP is the
+// VPS address behind Cloudflare, and publishing it lets anyone bypass the CDN. Admins get the
+// RTMP URL from the authenticated /api/channels links (obsRtmpUrl).
 app.get('/api/config', (req, res) => {
     const hostHeader = req.headers.host || '';
     const currentDomain = hostHeader.split(':')[0] || EDGE_DOMAIN;
+    const admin = isAdminRequest(req);
 
-    // Identical for every caller and rarely changes: browsers may reuse it for 5 minutes
-    res.set('Cache-Control', 'public, max-age=300');
+    // The answer depends on the caller now: never shared by caches
+    res.set('Cache-Control', 'private, no-store');
     res.json({
         edgeDomain: EDGE_DOMAIN || currentDomain,
-        r2CustomDomain: R2_CUSTOM_DOMAIN,
+        ...(admin ? { r2CustomDomain: R2_CUSTOM_DOMAIN } : {}),
         rtmpPort: MEDIAMTX_RTMP_PORT,
         r2Configured: isR2Configured,
         enableAuthOnPlaylists: ENABLE_AUTH_ON_PLAYLISTS,
@@ -2302,12 +2339,89 @@ app.get('/api/viewers', verifyAdminAuth, (req, res) => {
 
 const CHANNEL_RE = /^[a-z0-9_-]{1,64}$/;
 
-function signViewerToken(channelKey) {
+// Keyed hash of a client attribute (HMAC, so the token payload, which is only base64, never
+// reveals the viewer's IP and cannot be precomputed). 16 bytes is plenty for an equality check.
+function bindingHash(kind, value) {
+    return crypto.createHmac('sha256', VIEWER_JWT_SECRET).update(`${kind}|${value}`).digest('base64url').slice(0, 22);
+}
+
+function clientUserAgent(req) {
+    return String(req.headers['user-agent'] || '').slice(0, 512);
+}
+
+// AppleCoreMedia = the native HLS stack of iOS/macOS, which uses its own UA for playlist loads
+function isNativeHlsAgent(ua) {
+    return /^AppleCoreMedia\//.test(ua);
+}
+
+// Binding claims for a new token (req = the /api/stream or /api/token request)
+function bindingClaims(req) {
+    const claims = {};
+    if (VIEWER_TOKEN_BIND === 'ua' || VIEWER_TOKEN_BIND === 'ua+ip') claims.uah = bindingHash('ua', clientUserAgent(req));
+    if (VIEWER_TOKEN_BIND === 'ua+ip') claims.iph = bindingHash('ip', req.ip || '');
+    return claims;
+}
+
+// Does this request come from the client the token was issued to?
+function bindingMatches(decoded, req) {
+    if (VIEWER_TOKEN_BIND === 'off') return true;
+    const ua = clientUserAgent(req);
+    if (!isNativeHlsAgent(ua) && decoded.uah !== bindingHash('ua', ua)) return false;
+    if (VIEWER_TOKEN_BIND === 'ua+ip' && decoded.iph !== bindingHash('ip', req.ip || '')) return false;
+    return true;
+}
+
+function signViewerToken(channelKey, req) {
     return jwt.sign(
-        { sub: crypto.randomBytes(8).toString('hex'), channel: channelKey, role: 'viewer' },
+        { sub: crypto.randomBytes(8).toString('hex'), channel: channelKey, role: 'viewer', ...bindingClaims(req) },
         VIEWER_JWT_SECRET,
         { algorithm: 'HS256', expiresIn: TOKEN_EXPIRATION_SECONDS }
     );
+}
+
+// ------------------------------------------------------------------------------
+// Viewer page gate for /api/stream, /api/token and /api/r2/:slug
+// Only pages served from the edge itself (the bundled player at /player/) or from an origin in
+// ALLOWED_ORIGINS may call these. The page origin comes from Origin, else Referer (browsers
+// omit Origin on same-origin GET requests, so the player is recognised by its Referer).
+// Direct navigations (URL typed or opened in a tab) are refused via Sec-Fetch-* headers.
+// Limits: Origin, Referer and Sec-Fetch-* are set by browsers, and a script can forge all of
+// them. This stops casual harvesting (a bare curl, a link opened in a browser, other sites'
+// pages); the short token lifetime and the UA/IP binding limit what a harvested token is worth.
+// ------------------------------------------------------------------------------
+function normalizeOrigin(value) {
+    try {
+        const u = new URL(value);
+        return u.protocol === 'https:' || u.protocol === 'http:' ? u.origin.toLowerCase() : '';
+    } catch {
+        return '';
+    }
+}
+
+const VIEWER_PAGE_ORIGINS = new Set(
+    [`https://${EDGE_DOMAIN}`, ...(NODE_ENV === 'production' ? [] : [`http://${EDGE_DOMAIN}`]), ...ALLOWED_ORIGINS]
+        .map(normalizeOrigin)
+        .filter(Boolean)
+);
+
+function requireViewerPage(req, res, next) {
+    if (ALLOWED_ORIGINS.includes('*')) return next();   // non-production only (refused at startup otherwise)
+    if (req.method === 'OPTIONS') return next();         // CORS preflight, answered by viewerCors
+
+    const fetchSite = String(req.headers['sec-fetch-site'] || '');
+    const fetchMode = String(req.headers['sec-fetch-mode'] || '');
+    const rawOrigin = req.headers.origin && req.headers.origin !== 'null' ? req.headers.origin : req.headers.referer;
+    const origin = normalizeOrigin(rawOrigin || '');
+    // The host this request was sent to also counts as the player's own origin (nginx only
+    // serves its server_name, so this is the edge domain even if EDGE_DOMAIN is out of date)
+    const sameHost = normalizeOrigin(`https://${String(req.headers.host || '').split(':')[0]}`);
+
+    if (fetchSite === 'none' || fetchMode === 'navigate' || !origin ||
+        !(VIEWER_PAGE_ORIGINS.has(origin) || (sameHost && origin === sameHost))) {
+        res.set('Cache-Control', 'no-store');
+        return res.status(403).json({ error: 'Forbidden' });
+    }
+    return next();
 }
 
 // Viewer token cookie for playlist auth (needed by native Safari HLS, which reloads the same
@@ -2365,7 +2479,7 @@ function tokenFromOriginalUri(uri) {
 }
 
 // Generate dynamic viewer token for Edge CDN playback
-app.get('/api/stream', (req, res) => {
+app.get('/api/stream', requireViewerPage, (req, res) => {
     const requested = String(req.query.channel || '').trim().toLowerCase();
     if (!requested) {
         return res.status(400).json({ error: 'channel query parameter is required' });
@@ -2378,8 +2492,9 @@ app.get('/api/stream', (req, res) => {
         return res.status(404).json({ error: 'Channel not found' });
     }
 
-    const token = signViewerToken(channel.streamKey);
+    const token = signViewerToken(channel.streamKey, req);
     setViewerCookie(res, channel.streamKey, token);
+    res.set('Cache-Control', 'no-store');
     res.json({
         channel: channel.streamKey,
         token,
@@ -2388,8 +2503,26 @@ app.get('/api/stream', (req, res) => {
     });
 });
 
+// R2 source for the player (?r2={slug}): the playlist base URL of a known channel.
+// Replaces the old practice of reading the R2 domain from the public /api/config. The
+// domain is still visible to anyone who watches the player's network requests: this keeps
+// it out of an anonymous, cacheable endpoint, it is not access control (R2 delivery is public).
+const R2_SLUG_RE = /^[A-Za-z0-9_-]{1,64}$/;
+app.get('/api/r2/:slug', requireViewerPage, (req, res) => {
+    const slug = String(req.params.slug || '');
+    res.set('Cache-Control', 'no-store');
+    if (!R2_SLUG_RE.test(slug) || !isR2Configured) {
+        return res.status(404).json({ error: 'Not found' });
+    }
+    const channel = channelManager.getByR2Slug(slug);
+    if (!channel) {
+        return res.status(404).json({ error: 'Not found' });
+    }
+    res.json({ base: `https://${R2_CUSTOM_DOMAIN}/hd/${encodeURIComponent(channel.r2_slug)}/` });
+});
+
 // Token Renewal: accepts a valid token or one expired by at most TOKEN_RENEW_GRACE_SECONDS
-app.post('/api/token', (req, res) => {
+app.post('/api/token', requireViewerPage, (req, res) => {
     const token = (req.body && req.body.token) || bearerToken(req);
     if (!token) {
         return res.status(400).json({ error: 'Token is required' });
@@ -2408,9 +2541,14 @@ app.post('/api/token', (req, res) => {
     if (decoded.role !== 'viewer' || !decoded.channel || !channelManager.getByStreamKey(decoded.channel)) {
         return res.status(401).json({ error: 'Invalid token' });
     }
+    // A token is only renewed for the client it was issued to (the player then requests a new one)
+    if (!bindingMatches(decoded, req)) {
+        return res.status(401).json({ error: 'Invalid token' });
+    }
 
-    const renewed = signViewerToken(decoded.channel);
+    const renewed = signViewerToken(decoded.channel, req);
     setViewerCookie(res, decoded.channel, renewed);
+    res.set('Cache-Control', 'no-store');
     res.json({ token: renewed, expiresIn: TOKEN_EXPIRATION_SECONDS });
 });
 
@@ -2439,6 +2577,10 @@ function handleEdgeAuth(req, res) {
     if (decoded.role !== 'viewer' || !requestedChannel || typeof decoded.channel !== 'string' ||
         decoded.channel.toLowerCase() !== requestedChannel) {
         return res.status(403).send('Forbidden: Token not valid for requested channel');
+    }
+    // Same client as the one the token was issued to (User-Agent, and IP with VIEWER_TOKEN_BIND=ua+ip)
+    if (!bindingMatches(decoded, req)) {
+        return res.status(403).send('Forbidden: Token bound to another client');
     }
 
     return res.status(200).send('OK');

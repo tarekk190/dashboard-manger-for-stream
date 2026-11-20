@@ -3,7 +3,41 @@
 name = "px-league-proxy"
 main = "src/index.js"
 compatibility_date = "2026-10-01"
+
+# Keep the *.workers.dev address while the theme (PXL_WORKER_BASE_URL) and cached pages still
+# point at it. Set to false only after the custom domain below serves all traffic.
 workers_dev = true
+
+# -----------------------------------------------------------------------------
+# Custom domain: api.px-league.site
+# The Cache API (edge response cache + last-good fallback in src/index.js) does nothing on
+# *.workers.dev; it needs the Worker on a custom domain of a Cloudflare zone.
+#
+# PREREQUISITE: px-league.site must be an active zone in THIS Cloudflare account. Today its DNS
+# is at the registrar (dns1/dns2.registrar-servers.com), so a deploy with this block enabled
+# fails. Steps:
+#   1. Cloudflare dashboard > Add a domain > px-league.site (Free plan is enough). Check the
+#      imported records: www CNAME ghs.google.com and the apex A records for Blogger must be
+#      "DNS only" (grey cloud), or Blogger's custom domain and its certificate break.
+#      Remove any existing "api" record (api.px-league.site currently resolves elsewhere).
+#   2. At the registrar, switch the nameservers to the two Cloudflare gives you; wait for
+#      the zone to become "Active".
+#   3. Uncomment the routes block below and run `npx wrangler deploy` (Wrangler creates the
+#      DNS record and certificate for api.px-league.site).
+#   4. Test: curl -H "Origin: https://www.px-league.site" https://api.px-league.site/api/health
+#      and twice https://api.px-league.site/api/standings/<id>  -> second answer X-PXL-Edge: HIT
+#   5. In the theme set window.PXL_WORKER_BASE_URL = 'https://api.px-league.site'.
+#   6. A few days later (old cached pages gone) set workers_dev = false and deploy again.
+#
+# routes = [
+#   { pattern = "api.px-league.site", custom_domain = true }
+# ]
+#
+# Match-day traffic: every request invokes the Worker even when it is answered from the edge
+# cache. A live match page polls 3 endpoints every 10 s (18 requests/min per viewer), so
+# 10,000 viewers make ~3.6M requests in a 2-hour match: the Free plan (100k/day) is not
+# enough; use Workers Paid (10M requests/month included).
+# -----------------------------------------------------------------------------
 
 [vars]
 # Blog origins (added to the list hard-coded in src/index.js; scheme + host, comma separated)
@@ -11,11 +45,15 @@ ALLOWED_ORIGINS = "https://www.px-league.site,https://px-league.site,https://pow
 # Origins allowed to use ?raw=1 (scheme + host only, no path; comma separated)
 DASHBOARD_ORIGINS = "https://tarekk190.github.io"
 
-# Rate-limit binding that exists on the live Worker (not used by src/index.js yet)
+# Per-IP rate limit, used by src/index.js on every endpoint (429 + Retry-After: 60 when hit).
+# period must be 10 or 60 seconds. One live viewer makes ~18 requests/min; mobile carriers
+# share one IP between many users (CGNAT), so 600/min (~30 live viewers per IP) leaves room
+# for them while still cutting off scrapers polling in a loop. Counted per Cloudflare
+# location, eventually consistent: a brake, not an exact quota.
 [[ratelimits]]
 name = "RATE_LIMITER"
 namespace_id = "7001"
-simple = { limit = 120, period = 60 }
+simple = { limit = 600, period = 60 }
 
 # Secrets (set once, kept across deploys):
 #   npx wrangler secret put SUPABASE_URL

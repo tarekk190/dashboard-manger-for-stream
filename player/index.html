@@ -596,19 +596,23 @@
             // Case 2: Cloudflare R2 Direct Mode (?r2={random_slug})
             if (r2SlugParam) {
 
-                // Fetch R2 Custom Domain from backend config if accessible
-                let r2Domain = 'r2-custom-domain.shop';
+                // Playlist base URL of this slug (gated endpoint: only the player page may ask)
+                let r2Base = '';
                 try {
-                    const cfgRes = await fetch('/api/config');
-                    if (cfgRes.ok) {
-                        const cfg = await cfgRes.json();
-                        if (cfg.r2CustomDomain) r2Domain = cfg.r2CustomDomain;
-                    }
+                    const srcRes = await fetch(`/api/r2/${encodeURIComponent(r2SlugParam)}`, {
+                        headers: { 'Accept': 'application/json' }
+                    });
+                    if (srcRes.ok) r2Base = (await srcRes.json()).base || '';
                 } catch (e) {
-                    // Fallback to configured domain
+                    // network error: retried below
+                }
+                if (!/^https:\/\//.test(r2Base)) {
+                    setStatus('البث غير متاح حاليًا. جاري إعادة المحاولة...', { spinner: true });
+                    setTimeout(resolveStream, 5000);
+                    return;
                 }
 
-                streamManifestUrl = `https://${r2Domain}/hd/${r2SlugParam}/index.html`;
+                streamManifestUrl = `${r2Base}index.html`;
                 return initHls(streamManifestUrl);
             }
 
