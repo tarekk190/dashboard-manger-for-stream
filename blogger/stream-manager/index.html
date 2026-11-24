@@ -45,7 +45,9 @@
     SUPABASE_ANON_KEY: 'sb_publishable_JQ2_pUrEt77qkesiITm01w_RkL3PpMo',  // public key, RLS-protected; anon JWT or 'sb_publishable_...'
     PLAYER_BASE: 'https://live.smarterwho.site/player/',
     BLOG_MATCH_PAGE: 'https://www.px-league.site/p/match.html?id=',
-    MATCH_FILTERS: '[]/[]/["8634"]',                           // same feed as the site
+    // MUST equal the site's PXL_MATCH_FILTERS (px-league-theme.xml, SETTINGS script): the site
+    // lists the matches of these championships, so a match missing here can never be hidden.
+    MATCH_FILTERS: JSON.stringify(["901130","41019","79123","47821","47037","90322","573139","308191","138192","252344","13178","970117","888111","75166","560100","797102","78989","799154","30067","160110","154108","41480","26232","91130","784120","751343","38371","690345","796368","370347"]) + '/[]/["8634"]',
     // Fixed channels: picking one in the form fills its R2 slug (the slug stays editable).
     // A slug changes only if the channel is recreated in the admin panel: update it here then.
     CHANNELS: {
