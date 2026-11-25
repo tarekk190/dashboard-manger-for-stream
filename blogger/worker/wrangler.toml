@@ -35,6 +35,9 @@ ALLOWED_ORIGINS = "https://www.px-league.site,https://px-league.site,https://pow
 STREAM_ORIGINS = "https://www.px-league.site,https://px-league.site,https://tariq-live.blogspot.com"
 # Origins allowed to use ?raw=1 (scheme + host only, no path; comma separated)
 DASHBOARD_ORIGINS = "https://tarekk190.github.io"
+# R2 public domain of the HLS files (the backend's R2_CUSTOM_DOMAIN). /api/channel-status reads
+# hd/{slug}/index.html there to tell the dashboard which channels are broadcasting.
+R2_PUBLIC_BASE = "https://cdn.vsbskl.site"
 
 # Per-IP rate limit, used by src/index.js on every endpoint (429 + Retry-After: 60 when hit).
 # period must be 10 or 60 seconds. One live viewer makes ~18 requests/min; mobile carriers

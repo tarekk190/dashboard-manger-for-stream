@@ -51,6 +51,7 @@ const LOCAL_DASHBOARD_ORIGINS = [
 //   /api/standings/{id}?include=results
 //                               -> https://football-poster-generator.vercel.app/api/standings/{id}?include=results
 //   /api/active-streams         -> 410 Gone (themes read match_info.stream instead)
+//   /api/channel-status?slugs=a,b  (dashboard origins only) -> { channels: { slug: { live, ageSec } } }
 //   /api/health                 -> {"status":"ok"}
 //
 // Secrets / vars / bindings:
@@ -59,6 +60,7 @@ const LOCAL_DASHBOARD_ORIGINS = [
 //   DASHBOARD_ORIGINS (var)                 https://your-dashboard.vercel.app
 //   ALLOWED_ORIGINS (var, optional)         extra blog origins, added to the list above
 //   STREAM_ORIGINS (var, optional)          extra stream-enabled origins, added to STREAM_ORIGINS
+//   R2_PUBLIC_BASE (var)                    R2 public domain of the HLS files, for /api/channel-status
 //   RATE_LIMITER (ratelimit binding)        per-IP limit, see wrangler.toml (absent = no limit)
 // Without Supabase settings the proxy works as before (no filtering).
 //
@@ -173,6 +175,10 @@ export default {
     }
     if (url.pathname === "/api/active-streams") {
       return json({ error: "GONE", message: "Streams are not available on this site" }, 410, cors);
+    }
+    if (url.pathname === "/api/channel-status") {
+      if (!isDashboard) return json({ error: "FORBIDDEN_ORIGIN", message: "Dashboard only" }, 403, cors);
+      return channelStatus(url, env, cors);
     }
 
     // --- Route lookup -------------------------------------------------------
@@ -499,6 +505,43 @@ async function applyMatchSettings(kind, body, pathId, withStreams, env) {
   const s = map && map.get(pathId);
   if (s && s.stream && !isFinished(doc.data)) doc.data.stream = s.stream;
   return { body: JSON.stringify(doc), state };
+}
+
+// =============================================================================
+// GET /api/channel-status?slugs=a,b,c   (dashboard origins only)
+// Is each R2 channel broadcasting right now? Reads hd/{slug}/index.html from the R2 public
+// domain (R2_PUBLIC_BASE var) server-side, because R2's CORS only allows the player's origin.
+//   live   = playlist written within LIVE_MAX_AGE_S seconds and not marked ended
+//   ageSec = seconds since the playlist was last written (null if unknown)
+// A channel that is not live shows a frozen picture or keeps buffering in the player.
+// =============================================================================
+const LIVE_MAX_AGE_S = 30;
+
+async function channelStatus(url, env, cors) {
+  const base = String(env.R2_PUBLIC_BASE || "").replace(/\/+$/, "");
+  if (!/^https:\/\/[a-z0-9.-]+$/i.test(base)) {
+    return json({ error: "NOT_CONFIGURED", message: "R2_PUBLIC_BASE missing" }, 503, cors);
+  }
+  const slugs = [...new Set(String(url.searchParams.get("slugs") || "").split(","))]
+    .map((s) => s.trim()).filter((s) => STREAM_KEY_RE.test(s)).slice(0, 20);
+  const now = Date.now();
+  const entries = await Promise.all(slugs.map(async (slug) => {
+    try {
+      const res = await fetch(`${base}/hd/${slug}/index.html?_t=${Math.floor(now / 1000)}`, {
+        signal: AbortSignal.timeout(5000),
+        cf: { cacheTtl: 0 },
+      });
+      if (!res.ok) return [slug, { live: false, ageSec: null, status: res.status }];
+      const text = await res.text();
+      const modified = Date.parse(res.headers.get("Last-Modified") || "");
+      const ageSec = Number.isFinite(modified) ? Math.max(0, Math.round((now - modified) / 1000)) : null;
+      const ended = /#PXL-STREAM-ENDED|#EXT-X-ENDLIST/.test(text);
+      return [slug, { live: !ended && ageSec !== null && ageSec <= LIVE_MAX_AGE_S, ageSec, ended }];
+    } catch {
+      return [slug, { live: false, ageSec: null, error: "unreachable" }];
+    }
+  }));
+  return json({ channels: Object.fromEntries(entries) }, 200, cors);
 }
 
 function corsHeaders(origin) {

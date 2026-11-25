@@ -157,6 +157,7 @@
             <label class="grid gap-1 text-xs font-semibold text-slate-400">Channel
               <select name="channel" dir="ltr" class="rounded-xl border border-ink-700 bg-ink-900 px-3 py-2.5 font-mono text-sm text-slate-100 transition focus:border-brand"></select>
             </label>
+            <p id="chan-status" class="hidden text-xs"></p>
             <label class="grid gap-1 text-xs font-semibold text-slate-400">R2 Slug
               <input name="r2_slug" placeholder="iwkksjrvle3u" dir="ltr" autocomplete="off" class="rounded-xl border border-ink-700 bg-ink-900 px-3 py-2.5 font-mono text-sm text-slate-100 transition focus:border-brand">
             </label>
@@ -348,7 +349,54 @@
     vis.setAttribute('aria-checked', on ? 'true' : 'false');
     $('#vis-hint').textContent = on ? 'تظهر في الرئيسية وصفحة المباريات' : 'مخفية من قوائم الموقع';
   }
-  function updatePreview() { $('#preview').textContent = playerUrl(form.channel.value.trim(), form.r2_slug.value.trim()) || '—'; }
+  function updatePreview() {
+    $('#preview').textContent = playerUrl(form.channel.value.trim(), form.r2_slug.value.trim()) || '—';
+    renderChannelStatus();
+  }
+
+  // ---------------------------------------------------------------- channel status
+  // Is the channel broadcasting? The Worker reads each R2 playlist (/api/channel-status,
+  // dashboard origins only). A stopped channel shows a frozen picture / endless buffering on
+  // the site, so the panel says so before and after saving. Refreshed every 20 s.
+  const chanStatus = new Map();   // r2 slug -> { live, ageSec }
+  function ago(sec) {
+    if (sec == null) return '';
+    if (sec < 120) return `${sec} ث`;
+    if (sec < 7200) return `${Math.round(sec / 60)} د`;
+    if (sec < 172800) return `${Math.round(sec / 3600)} س`;
+    return `${Math.round(sec / 86400)} يوم`;
+  }
+  function slugStatus(slug) { return slug ? chanStatus.get(slug) : undefined; }
+  function renderChannelStatus() {
+    const el = $('#chan-status');
+    if (!el) return;
+    const slug = form.r2_slug.value.trim(), st = slugStatus(slug);
+    if (!slug || !st) { el.className = 'hidden text-xs'; el.textContent = ''; return; }
+    el.className = 'text-xs font-semibold ' + (st.live ? 'text-brand' : 'text-amber-300');
+    el.textContent = st.live
+      ? '● القناة تبث الآن'
+      : `○ القناة متوقفة${st.ageSec != null ? ` (آخر تحديث قبل ${ago(st.ageSec)})` : ''}: شغّل البث عليها من لوحة الخادم (/admin) وإلا سيظهر المشغّل متجمّدًا.`;
+  }
+  function relabelChannels() {
+    [...channelSelect.options].forEach((o) => {
+      const slug = (CONFIG.CHANNELS || {})[o.value];
+      if (!slug) return;
+      const st = chanStatus.get(slug);
+      o.textContent = `${o.value}  ·  ${slug}${st ? (st.live ? '  ● تبث' : '  ○ متوقفة') : ''}`;
+    });
+  }
+  async function refreshChannelStatus() {
+    const slugs = Object.values(CONFIG.CHANNELS || {}).filter((s) => KEY_RE.test(s));
+    if (!slugs.length || !CONFIG.WORKER_URL) return;
+    try {
+      const res = await fetch(`${CONFIG.WORKER_URL}/api/channel-status?slugs=${slugs.join(',')}`, { headers: { Accept: 'application/json' }, cache: 'no-store' });
+      if (!res.ok) return;                                    // older Worker / not configured: no badges
+      const data = await res.json();
+      Object.entries((data && data.channels) || {}).forEach(([slug, st]) => chanStatus.set(slug, st));
+      relabelChannels();
+      renderChannelStatus();
+    } catch { /* offline: keep the last known status */ }
+  }
   function openPanel(id) {
     const m = state.matches.find((x) => x.id === id);
     if (!m) return;
@@ -424,7 +472,9 @@
     btn.disabled = true;
     try {
       await persist([{ match_id: state.selected, is_visible: vis.getAttribute('aria-checked') === 'true', channel: channel || null, r2_slug: slug || null }]);
-      flash('تم الحفظ ✓', true);
+      const st = slugStatus(slug);
+      if (slug && st && !st.live) flash('تم الحفظ ✓ — تنبيه: هذه القناة لا تبث الآن، شغّل البث عليها من لوحة الخادم.', false);
+      else flash('تم الحفظ ✓', true);
       renderList();
     } catch (err) { flash('فشل الحفظ: ' + (err.message || err), false); }
     finally { btn.disabled = false; }
@@ -511,7 +561,12 @@
       $('#user-email').textContent = (session.user && session.user.email) || '';
       $('#user-email').classList.remove('hidden');
     }
-    if (!started) { started = true; load(); }
+    if (!started) {
+      started = true;
+      load();
+      refreshChannelStatus();
+      if (!window.__pxlChanTimer) window.__pxlChanTimer = setInterval(() => { if (!document.hidden) refreshChannelStatus(); }, 20000);
+    }
   }
   function showLogin(message) {
     started = false;
