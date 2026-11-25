@@ -320,7 +320,8 @@ async function buildResponse({ upstreamUrl, ttl, filterKind, pathId, raw, stream
         // Filtered bodies depend on Supabase: keep them short-lived, and never cache a body
         // that could not be filtered (settings off/unavailable), so it is not stuck in browsers.
         "Cache-Control": !filterKind ? `public, max-age=${Math.min(ttl, 60)}`
-          : (settingsState === "ok" ? `public, max-age=${Math.min(ttl, FILTERED_MAX_AGE)}` : "no-store"),
+          : (settingsState === "ok" || settingsState === "no-stream-access"
+            ? `public, max-age=${Math.min(ttl, FILTERED_MAX_AGE)}` : "no-store"),
         "X-Content-Type-Options": "nosniff",
         "Vary": "Origin",
         ...(settingsState ? { "X-PXL-Settings": settingsState } : {}),
@@ -389,6 +390,8 @@ async function buildResponse({ upstreamUrl, ttl, filterKind, pathId, raw, stream
 // blogger/stream-manager/migrations/2026-11-25-stream-columns-for-stream-origins.sql).
 // =============================================================================
 const settingsMemo = new Map();   // query URL -> { at, map }   (per isolate, best effort)
+const STREAM_DENIED_RETRY_MS = 60 * 1000;
+let streamColumnsDeniedAt = -Infinity;   // last time anon was refused channel / r2_slug (per isolate)
 
 function supabaseConfig(env) {
   const base = String(env.SUPABASE_URL || "").replace(/\/+$/, "");
@@ -415,6 +418,12 @@ function isFinished(match) {
 async function loadSettings(ids, withStreams, env) {
   const cfg = supabaseConfig(env);
   if (!cfg) return { map: null, state: "off" };
+  // Stream columns were refused recently: skip straight to the show/hide query (re-checked
+  // every STREAM_DENIED_RETRY_MS, so running the migration takes effect within a minute).
+  if (withStreams && Date.now() - streamColumnsDeniedAt < STREAM_DENIED_RETRY_MS) {
+    const fallback = await loadSettings(ids, false, env);
+    return fallback.state === "ok" ? { map: fallback.map, state: "no-stream-access" } : fallback;
+  }
   const list = [...new Set(ids.filter((id) => MATCH_ID_RE.test(id)))].sort().slice(0, 400);
   if (!list.length) return { map: new Map(), state: "ok" };
   const cols = withStreams ? "match_id,is_visible,channel,r2_slug" : "match_id,is_visible";
@@ -428,7 +437,17 @@ async function loadSettings(ids, withStreams, env) {
       signal: AbortSignal.timeout(SETTINGS_TIMEOUT_MS),
       cf: { cacheEverything: true, cacheTtl: SETTINGS_TTL },
     });
-    if (!res.ok) throw new Error(`Supabase ${res.status}`);
+    if (!res.ok) {
+      // 401/403 for the stream columns = the anon column grant is missing (42501; migration
+      // 2026-11-25-stream-columns-for-stream-origins.sql not run). Fall back to the show/hide
+      // columns, so hidden matches stay hidden; the page just gets no streams.
+      if (withStreams && (res.status === 401 || res.status === 403)) {
+        streamColumnsDeniedAt = Date.now();
+        const fallback = await loadSettings(ids, false, env);
+        return fallback.state === "ok" ? { map: fallback.map, state: "no-stream-access" } : fallback;
+      }
+      throw new Error(`Supabase ${res.status}`);
+    }
     const rows = await res.json();
     const map = new Map();
     for (const r of Array.isArray(rows) ? rows : []) {
