@@ -30,6 +30,9 @@ workers_dev = true
 [vars]
 # Blog origins (added to the list hard-coded in src/index.js; scheme + host, comma separated)
 ALLOWED_ORIGINS = "https://www.px-league.site,https://px-league.site,https://powerdoflearn.blogspot.com"
+# Stream-enabled origins: match data for these carries "stream": { channel, r2_slug } (pages that
+# embed our player, live.smarterwho.site/player/). They are allowed origins as well.
+STREAM_ORIGINS = "https://www.px-league.site,https://px-league.site,https://tariq-live.blogspot.com"
 # Origins allowed to use ?raw=1 (scheme + host only, no path; comma separated)
 DASHBOARD_ORIGINS = "https://tarekk190.github.io"
 

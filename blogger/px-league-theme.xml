@@ -19,8 +19,18 @@
 
   2. POST (data:view.isPost)
      Article with two ad slots: "ad-top" above the article and "ad-bottom" below it
-     (Layout page widgets, 728x90 / responsive). The site does not host or embed live
-     match streams: an iframe in a post (e.g. a YouTube highlight) is ordinary content.
+     (Layout page widgets, 728x90 / responsive).
+     LIVE PLAYER (this edition only; the -clean edition has none). Works on px-league.site and
+     tariq-live.blogspot.com (Worker STREAM_ORIGINS + nginx frame-ancestors):
+     a post plays its own stream from our player (PXL_STREAM_PLAYER_BASE). In the post
+     editor (HTML view) add ONE of these:
+       a) <div data-stream-src="https://live.smarterwho.site/player/?channel=b1&r2=SLUG"></div>
+       b) <iframe src="https://live.smarterwho.site/player/?..."></iframe>
+     The theme moves it into the 16:9 player box above the article. Only URLs on
+     PXL_STREAM_PLAYER_BASE are used; any other iframe (e.g. a YouTube highlight) stays
+     where it is in the article.
+     The match page (/p/match.html?id=...) shows the stream the dashboard attached to the
+     match (match_info.stream, merged by the Worker for stream-enabled origins only).
 
   Static pages (About, Privacy...) use a plain layout. Label/search pages show post cards.
   Legal pages linked from the footer (create them in Blogger with these exact URLs):
@@ -145,14 +155,92 @@
   // still answers, but its edge cache is a no-op: do not point the theme back at it.
   window.PXL_WORKER_BASE_URL = 'https://data.px-league.site';
   // The Worker answers only the origins in its ALLOWED_ORIGINS list (blogger/worker/src/index.js):
-  // https://www.px-league.site and https://px-league.site. A new domain must be added there too.
+  // https://www.px-league.site, https://px-league.site and https://tariq-live.blogspot.com (all three also get stream data, STREAM_ORIGINS). A new domain must be added there too.
   window.PXL_SITE_URL = 'https://www.px-league.site';
+  // Our own live player (nginx on live.smarterwho.site lets px-league.site and tariq-live frame it).
+  // The post player and the match-page stream only ever load URLs under this base.
+  window.PXL_STREAM_PLAYER_BASE = 'https://live.smarterwho.site/player/';
   // matches_date_get/{YYYY-MM-DD}/{CHAMPIONSHIP_IDS_JSON}/[]/["8634"]/D/60 - shared by the home
   // block, /p/matches.html and the predictions page. An empty [] drops leagues such as the
   // Egyptian Premier League (941513) and the Egypt Cup (62474482): 32 matches instead of 48.
   // Every builder passes this through encodeURI(), giving %5B%22...%22%5D like the original URL.
   window.PXL_CHAMP_IDS = ["901130","41019","79123","47821","47037","90322","573139","308191","138192","252344","13178","970117","888111","75166","560100","797102","78989","799154","30067","160110","154108","41480","26232","91130","784120","751343","38371","690345","796368","370347"];
   window.PXL_MATCH_FILTERS = JSON.stringify(window.PXL_CHAMP_IDS) + '/[]/["8634"]';
+  // ysscores images: the ONLY place that knows the CDN paths (verified live 2026-11-24).
+  //   pxlImg('team', f)   -> https://imgs.ysscores.com/teams/128/f   (64 also works, 256 does NOT)
+  //   pxlImg('league', f) -> https://imgs.ysscores.com/championship/64/f
+  //   pxlImg('player', f) -> https://imgs.ysscores.com/player/128/f
+  // f must be a plain file name like "17755615199879.png"; anything else returns '' and the
+  // caller shows its own fallback. pxlImg.tag() builds the <img>; pxlImg.fail() is its onerror.
+  window.pxlImg = (function () {
+    var BASE = 'https://imgs.ysscores.com/';
+    var PATH = { team: 'teams/128/', league: 'championship/64/', player: 'player/128/' };
+    var FILE = /^[\w.-]+\.(png|jpe?g|webp|gif|svg)$/i;
+    var DEBUG = /[?&]debug=1(?:&|$)/.test(location.search);
+    function esc(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) { return '&#' + c.charCodeAt(0) + ';'; }); }
+    function initials(name) { return String(name || '').trim().slice(0, 2) || '?'; }
+    function pxlImg(kind, file) {
+      var f = file == null ? '' : String(file).trim();
+      return PATH[kind] && FILE.test(f) ? BASE + PATH[kind] + encodeURIComponent(f) : '';
+    }
+    // File name out of a full imgs.ysscores.com URL (the standings upstream sends
+    // "https://imgs.ysscores.com/teams/64/123.png"). A plain file name passes; anything else -> ''.
+    pxlImg.fileOf = function (value) {
+      var v = String(value || '').trim();
+      var m = /^https:\/\/imgs\.ysscores\.com\/(?:[\w-]+\/)*([\w.-]+)$/i.exec(v);
+      return m ? m[1] : (FILE.test(v) ? v : '');
+    };
+    // Neutral initials badge (inline SVG) that takes the place of a logo that failed, same box.
+    pxlImg.badge = function (name) {
+      var t = esc(initials(name));
+      return 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">' +
+        '<circle cx="32" cy="32" r="31" fill="#334155"/><text x="32" y="32" dy=".35em" text-anchor="middle" ' +
+        'font-family="system-ui,sans-serif" font-size="22" font-weight="700" fill="#e2e8f0">' + t + '</text></svg>');
+    };
+    // <img> for a URL from pxlImg(): width/height set (no layout shift), no-referrer, async decode,
+    // lazy unless o.eager (first 4 cards, match hero). '' when there is no URL.
+    // o = { size, alt, name (badge initials, defaults to alt), eager, cls }
+    pxlImg.tag = function (src, o) {
+      if (!src) return '';
+      o = o || {};
+      var n = Number(o.size) || 40;
+      return '<img' + (o.cls ? ' class="' + esc(o.cls) + '"' : '') + ' src="' + esc(src) + '" alt="' + esc(o.alt || '') +
+        '" width="' + n + '" height="' + n + '"' + (o.eager ? '' : ' loading="lazy"') +
+        ' decoding="async" referrerpolicy="no-referrer" data-ph="' + esc(initials(o.name != null ? o.name : o.alt)) +
+        '" onerror="pxlImg.fail(this)">';
+    };
+    pxlImg.fail = function (img) {
+      img.onerror = null;                                   // the badge itself can never loop
+      if (DEBUG) console.warn('[pxl debug] logo failed:', img.currentSrc || img.src);
+      img.src = pxlImg.badge(img.getAttribute('data-ph'));
+    };
+    // ?debug=1 -> console.table of the first 10 matches_date_get items with the exact logo URLs
+    // the cards use (once per source). Failed logos are logged by pxlImg.fail() above.
+    pxlImg.debug = DEBUG;
+    var logged = {};
+    pxlImg.debugList = function (source, items) {
+      if (!DEBUG || logged[source]) return;
+      logged[source] = 1;
+      if (!Array.isArray(items)) { console.warn('[pxl debug] ' + source + ': response has no data array', items); return; }
+      var rows = items.map(function (r) {
+        var c = r.championship || {}, h = r.home_team || {}, a = r.away_team || {};
+        return {
+          id: r.match_id,
+          league: c.title,
+          home: h.full_title || h.title,
+          away: a.full_title || a.title,
+          homeLogo: pxlImg('team', h.image),
+          awayLogo: pxlImg('team', a.image),
+          leagueLogo: pxlImg('league', c.image)
+        };
+      });
+      var bad = rows.filter(function (x) { return !x.homeLogo || !x.awayLogo || !x.leagueLogo; });
+      console.log('[pxl debug] ' + source + ': ' + items.length + ' matches, ' + bad.length + ' with a missing / invalid image');
+      console.table(rows.slice(0, 10));
+      if (bad.length) console.table(bad);
+    };
+    return pxlImg;
+  })();
   // Shared match state for matches_date_get items and match_info: 'live' | 'upcoming' | 'finished' | 'other'.
   // live === 1 is checked FIRST (status stays 4 during a penalty shootout), but only from 10 min
   // before kick-off to 3.5 h after it: the API also sets live: 1 on matches 12-16 h away
@@ -911,6 +999,59 @@ a.match-card:focus-visible { outline-offset: 3px; border-radius: var(--radius); 
 .ad-slot ins.adsbygoogle { display: block; width: 100%; }
 .ad-slot.is-filled { display: grid; min-height: 100px; }   /* 320x100 mobile */
 @media (min-width: 768px) { .ad-slot.is-filled { min-height: 90px; } }   /* 728x90 */
+
+/* Live player (post arena + match page stream): 16:9 box, never taller than the viewport */
+.arena { padding-block: 16px 4px; }
+.arena[hidden] { display: none; }
+.arena-center { min-width: 0; display: grid; gap: 14px; }
+.player-frame {
+  position: relative; width: 100%; aspect-ratio: 16 / 9;
+  width: min(100%, calc((100vh - var(--header-h) - 24px) * 16 / 9));
+  width: min(100%, calc((100svh - var(--header-h) - 24px) * 16 / 9));
+  margin-inline: auto; contain: layout paint;
+  border-radius: var(--radius); overflow: hidden; background: #000;
+  box-shadow: var(--shadow); border: 1px solid var(--border);
+}
+[data-theme="dark"] .player-frame { box-shadow: 0 0 0 1px rgba(62, 230, 62, .25), 0 0 40px rgba(62, 230, 62, .12); }
+@supports not (aspect-ratio: 16 / 9) { .player-frame { height: 0; padding-top: 56.25%; } }
+.player-frame iframe, .player-frame video, .player-placeholder {
+  position: absolute; inset: 0; width: 100%; height: 100%; border: 0;
+}
+.player-placeholder {
+  display: grid; place-items: center; align-content: center; gap: 10px; text-align: center;
+  color: #cfd6dd; font-weight: 700;
+  background: radial-gradient(ellipse at center, #10161d 0%, #000 75%);
+}
+.player-placeholder svg { width: 54px; height: 54px; color: var(--brand); filter: drop-shadow(0 0 12px rgba(50, 205, 50, .5)); }
+
+/* Social channels banner directly under the post player */
+.stream-social {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 16px;
+  padding: 14px 16px; border-radius: var(--radius);
+  background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow);
+}
+.stream-social__text { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.stream-social__icon {
+  width: 40px; height: 40px; flex-shrink: 0; display: grid; place-items: center; border-radius: 12px;
+  background: var(--brand-soft); color: var(--brand-strong);
+}
+[data-theme="dark"] .stream-social__icon { color: var(--brand); }
+.stream-social__icon svg { width: 22px; height: 22px; }
+.stream-social__title { margin: 0; font-size: 1rem; font-weight: 800; line-height: 1.5; color: var(--text); }
+.stream-social__sub { margin: 0; font-size: .82rem; color: var(--text-muted); }
+.stream-social__actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.stream-social .btn-social { min-height: 44px; justify-content: center; }
+@media (max-width: 600px) {
+  .stream-social { padding: 12px; }
+  .stream-social__actions { width: 100%; }
+}
+
+/* Match page: live stream block (match_info.stream, merged by the Worker) */
+.match-stream { display: grid; gap: 10px; animation: px-fade-in .35s ease both; }
+.match-stream[hidden] { display: none; }
+.match-stream__head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.match-stream__title { margin: 0; display: flex; align-items: center; gap: 8px; font-size: 1.05rem; font-weight: 800; }
+.match-stream__title::before { content: ''; width: 4px; height: 18px; border-radius: 3px; background: var(--live); }
 
 /* Cookie notice (Blogger's cookienotice.js: #cookieChoiceInfo.cookie-choices-info).
    Blogger's own stylesheet pins a grey bar over the header (top: 0, full width, left-aligned
@@ -2220,7 +2361,7 @@ body { overflow-x: clip; }
 <b:template-skin><![CDATA[
 body#layout { background: #f6f7f9; font-family: Arial, sans-serif; }
 body#layout .header-inner, body#layout .main-nav, body#layout .header-actions,
-body#layout .fixtures { display: none; }
+body#layout .fixtures, body#layout .arena { display: none; }
 body#layout .content-wrap, body#layout .footer-grid { display: flex; gap: 8px; }
 body#layout .content-main, body#layout .footer-grid > * { flex: 1; }
 body#layout .ad-slot { display: block; }
@@ -2303,6 +2444,37 @@ body#layout .sidebar { width: 320px; }
       </b:widget>
     </b:section>
   </div>
+
+  <!-- Live player arena: hidden until the post holds a stream of our player
+       (<div data-stream-src="..."> or an <iframe> on PXL_STREAM_PLAYER_BASE).
+       Filled by the POST VIEW script at the end of the body. -->
+  <section aria-label='البث المباشر' class='arena' hidden='hidden' id='px-arena'>
+    <div class='container'>
+      <div class='arena-center'>
+        <div class='player-frame' id='px-player-slot'>
+          <div class='player-placeholder'>
+            <svg aria-hidden='true' fill='currentColor' viewBox='0 0 24 24'><path d='M8 5.14v13.72a1 1 0 0 0 1.52.85l10.9-6.86a1 1 0 0 0 0-1.7L9.52 4.29A1 1 0 0 0 8 5.14z'/></svg>
+            <span>سيبدأ البث قريبًا</span>
+          </div>
+        </div>
+
+        <!-- Social channels banner, directly under the player -->
+        <aside aria-label='قنواتنا على تيليجرام وواتساب' class='stream-social'>
+          <div class='stream-social__text'>
+            <span class='stream-social__icon'><svg aria-hidden='true' fill='none' stroke='currentColor' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' viewBox='0 0 24 24'><path d='M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9'/><path d='M13.7 21a2 2 0 0 1-3.4 0'/></svg></span>
+            <div>
+              <p class='stream-social__title'>تابع قنواتنا الرسمية</p>
+              <p class='stream-social__sub'>روابط البث والأهداف والنتائج لحظة بلحظة</p>
+            </div>
+          </div>
+          <div class='stream-social__actions'>
+            <a aria-label='قناتنا على تيليجرام' class='btn-social btn-social--telegram' href='https://t.me/+VZ8Lb4i2iXRkNTdk' rel='noopener' target='_blank'><svg aria-hidden='true' fill='currentColor' viewBox='0 0 24 24'><path d='M21.9 4.6 18.8 19c-.2 1-.8 1.3-1.7.8l-4.6-3.4-2.2 2.1c-.2.2-.5.5-1 .5l.3-4.7 8.6-7.8c.4-.3-.1-.5-.6-.2L7 12.9l-4.6-1.4c-1-.3-1-1 .2-1.5l18-6.9c.8-.3 1.6.2 1.3 1.5z'/></svg><span>تيليجرام</span></a>
+            <a aria-label='قناتنا على واتساب' class='btn-social btn-social--whatsapp' href='https://whatsapp.com/channel/0029Vb72JBO6GcGMQKCaP51G' rel='noopener' target='_blank'><svg aria-hidden='true' fill='currentColor' viewBox='0 0 24 24'><path d='M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2zm0 18.2c-1.5 0-3-.4-4.3-1.2l-.3-.2-3 .8.8-2.9-.2-.3A8.2 8.2 0 1 1 12 20.2z'/><path d='M8.6 7.3c.2-.4.4-.4.7-.4h.5c.2 0 .4 0 .6.4l.8 1.9c.1.2.1.4 0 .5l-.5.7c-.1.1-.2.3 0 .5.6 1 1.4 1.8 2.4 2.4.2.1.4.1.5 0l.7-.6c.2-.1.4-.2.6-.1l1.9.9c.3.1.5.3.5.5v.6c0 .4-.1.7-.6.9-.6.3-1.4.5-2.2.3-2.8-.7-5.1-3-5.8-5.8-.2-.8 0-1.6.4-2.2z'/></svg><span>واتساب</span></a>
+          </div>
+        </aside>
+      </div>
+    </div>
+  </section>
   </b:if>
 
   <!-- ======================================================================
@@ -2412,6 +2584,20 @@ body#layout .sidebar { width: 320px; }
       <section aria-label='تفاصيل المباراة' class='match-page' hidden='hidden' id='match-page'>
         <div class='match-hero' id='match-hero'>
           <div class='px-loader' role='status'><span class='px-spinner'>&#160;</span><span>جاري تحميل المباراة...</span></div>
+        </div>
+        <!-- Live stream: shown when the dashboard attached one to this match
+             (match_info.stream, merged by the Worker). Filled by applyStream(). -->
+        <div aria-labelledby='match-stream-title' class='match-stream' hidden='hidden' id='match-stream'>
+          <div class='match-stream__head'>
+            <h2 class='match-stream__title' id='match-stream-title'>البث المباشر</h2>
+            <span class='badge badge--live'>مباشر</span>
+          </div>
+          <div class='player-frame' id='match-player-slot'>
+            <div class='player-placeholder'>
+              <svg aria-hidden='true' fill='currentColor' viewBox='0 0 24 24'><path d='M8 5.14v13.72a1 1 0 0 0 1.52.85l10.9-6.86a1 1 0 0 0 0-1.7L9.52 4.29A1 1 0 0 0 8 5.14z'/></svg>
+              <span>جاري تحميل البث...</span>
+            </div>
+          </div>
         </div>
         <div aria-label='أقسام المباراة' class='match-tabs' role='tablist'>
           <button aria-controls='match-tab-events' aria-selected='true' class='match-tab is-active' data-tab='events' id='match-tabbtn-events' role='tab' type='button'>أحداث اللقاء</button>
@@ -3159,8 +3345,11 @@ body#layout .sidebar { width: 320px; }
       'صُمم بعناية لعشاق كرة القدم': 'Crafted with care for football fans',
       'PX League منصة عربية لمتابعة مباريات كرة القدم لحظة بلحظة: جدول المباريات اليومي، النتائج المباشرة، ترتيب الدوريات، الأخبار والتوقعات، بتجربة سريعة ونظيفة على الويب وتطبيقات أندرويد وآيفون.':
         'PX League is an Arabic platform for following football as it happens: the daily match schedule, live scores, league standings, news and predictions, with a fast, clean experience on the web and on Android and iPhone.',
-      // community
-      'مباشر': 'LIVE',
+      // stream arena / community
+      'مباشر': 'LIVE', 'سيبدأ البث قريبًا': 'The stream will start soon', 'البث المباشر': 'Live stream',
+      'جاري تحميل البث...': 'Loading the stream...',
+      'تابع قنواتنا الرسمية': 'Follow our official channels',
+      'روابط البث والأهداف والنتائج لحظة بلحظة': 'Stream links, goals and scores as they happen',
       'انضم لمجتمعنا': 'Join our community',
       'انضم لمجتمعنا على تليجرام وواتساب لمتابعة أحدث التوقعات': 'Join our Telegram and WhatsApp community for the latest predictions',
       'تنبيهات المباريات، الأهداف والتوقعات أولًا بأول.': 'Match alerts, goals and predictions as they drop.',
@@ -3535,7 +3724,6 @@ body#layout .sidebar { width: 320px; }
 
     var WORKER_BASE_URL = window.PXL_WORKER_BASE_URL || '';
     var STANDINGS_PATH = '/api/standings/{id}?include=results';
-    var TEAM_LOGO_BASE = 'https://imgs.ysscores.com/teams/128/';
 
     var board = document.getElementById('standings-board');
     var filter = document.getElementById('league-filter');
@@ -3548,11 +3736,9 @@ body#layout .sidebar { width: 320px; }
       for (var i = 0; i < arguments.length; i++) if (arguments[i] != null && arguments[i] !== '') return arguments[i];
       return '';
     }
-    function imgUrl(value) {
-      var v = String(value || '').trim();
-      if (/^https:\/\//i.test(v)) return v;
-      return /^[\w.-]+\.(png|jpe?g|webp|gif|svg)$/i.test(v) ? TEAM_LOGO_BASE + encodeURIComponent(v) : '';
-    }
+    // The upstream sends full imgs.ysscores.com URLs (teams/64, championship/128): keep only the
+    // file name and rebuild the URL with the shared helper.
+    function logoUrl(kind, value) { return window.pxlImg(kind, window.pxlImg.fileOf(value)); }
     function safeColor(c) { return /^#[0-9a-f]{3,8}$/i.test(String(c || '')) ? c : ''; }
 
     // ------------------------------------------------------------------ parsing
@@ -3563,7 +3749,7 @@ body#layout .sidebar { width: 320px; }
       return {
         rank: Number(pick(r.rank, r.position, i + 1)) || i + 1,
         name: pick(r.teamName, r.team_name && r.team_name.short_title, r.name),
-        logo: imgUrl(pick(r.teamLogo, r.team_name && r.team_name.image, r.logo)),
+        logo: logoUrl('team', pick(r.teamLogo, r.team_name && r.team_name.image, r.logo)),
         played: pick(r.played, r.play, 0),
         won: pick(r.won, r.win, 0),
         drawn: pick(r.drawn, r.draw, 0),
@@ -3580,7 +3766,7 @@ body#layout .sidebar { width: 320px; }
       var groups = Array.isArray(json && json.groups) ? json.groups : [];
       return {
         league: (json && json.league) || '',
-        logo: imgUrl(json && json.leagueLogo),
+        logo: logoUrl('league', json && json.leagueLogo),
         groups: groups.map(function (g) {
           return {
             name: g.name || g.title || '',
@@ -3597,7 +3783,7 @@ body#layout .sidebar { width: 320px; }
       var style = '--i:' + Math.min(i || 0, 24) + (t.zoneColor ? ';--zone:' + esc(t.zoneColor) : '');
       return `<tr style="${style}"${t.zoneColor ? ` data-zone title="${esc(t.zoneLabel)}"` : ''}>
         <td class="pos"><span class="pos-badge">${esc(t.rank)}</span></td>
-        <td><span class="team-cell">${t.logo ? `<img src="${esc(t.logo)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}<span>${esc(t.name)}</span></span></td>
+        <td><span class="team-cell">${window.pxlImg.tag(t.logo, { size: 24, name: t.name, eager: i < 4 })}<span>${esc(t.name)}</span></span></td>
         <td>${esc(t.played)}</td>
         <td class="col-optional">${esc(t.won)}</td>
         <td class="col-optional">${esc(t.drawn)}</td>
@@ -3626,7 +3812,7 @@ body#layout .sidebar { width: 320px; }
         return `
           <article class="standings-card">
             <div class="standings-card__head">
-              ${data.logo ? `<img src="${esc(data.logo)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}
+              ${window.pxlImg.tag(data.logo, { size: 26, name: data.league, eager: true })}
               <span>${esc(multi && g.name ? data.league + ' – ' + g.name : data.league)}</span>
               <small>${g.rows.length} فريقًا</small>
             </div>
@@ -3771,8 +3957,6 @@ body#layout .sidebar { width: 320px; }
     // ------------------------------------------------------------------ config
     var WORKER_BASE_URL = window.PXL_WORKER_BASE_URL || '';
     var MATCH_FILTERS = window.PXL_MATCH_FILTERS;           // shared: SETTINGS script at the top
-    var TEAM_LOGO_BASE = 'https://imgs.ysscores.com/teams/128/';
-    var LEAGUE_LOGO_BASE = 'https://imgs.ysscores.com/championship/64/';
     var TZ = 'Africa/Cairo';
     var REFRESH_LIVE_MS = 30 * 1000;                         // today with a live match
     var REFRESH_IDLE_MS = 2 * 60 * 1000;                     // today, nothing live
@@ -3806,10 +3990,6 @@ body#layout .sidebar { width: 320px; }
     function cairoTime(unix) {
       var n = Number(unix);
       return n ? new Intl.DateTimeFormat('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(n * 1000)) : '--:--';
-    }
-    function imageUrl(base, file) {
-      var f = file ? String(file).trim() : '';
-      return /^[\w.-]+\.(png|jpe?g|webp|gif|svg)$/i.test(f) ? base + encodeURIComponent(f) : '';
     }
     // Arabic-insensitive search: strip diacritics/tatweel, unify alef / ya / ta marbuta.
     function norm(s) {
@@ -3852,17 +4032,17 @@ body#layout .sidebar { width: 320px; }
       var champ = raw.championship || {}, home = raw.home_team || {}, away = raw.away_team || {};
       return {
         id: raw.match_id,
-        leagueId: String(raw.championship_id != null ? raw.championship_id : ''),
+        leagueId: String(raw.championship_id != null ? raw.championship_id : (champ.id != null ? champ.id : '')),
         league: champ.title || 'مباريات',
-        leagueLogo: imageUrl(LEAGUE_LOGO_BASE, champ.image),
+        leagueLogo: window.pxlImg('league', champ.image),
         round: raw.round || '',
         timestamp: Number(raw.match_timestamp) || 0,
         time: cairoTime(raw.match_timestamp),
         status: statusOf(raw),
         phase: statusOf(raw) === 'live' ? window.pxlLive.phase(raw, true) : '',   // from the list row
         clock: null,                                          // filled from fresh match_info only
-        home: { name: home.full_title || home.title || '', logo: imageUrl(TEAM_LOGO_BASE, home.image) },
-        away: { name: away.full_title || away.title || '', logo: imageUrl(TEAM_LOGO_BASE, away.image) },
+        home: { name: home.full_title || home.title || '', logo: window.pxlImg('team', home.image) },
+        away: { name: away.full_title || away.title || '', logo: window.pxlImg('team', away.image) },
         scoreHome: raw.home_scores != null ? raw.home_scores : 0,
         scoreAway: raw.away_scores != null ? raw.away_scores : 0,
         channel: cc.channel_name || '',
@@ -3873,9 +4053,9 @@ body#layout .sidebar { width: 320px; }
     // ------------------------------------------------------------------ card templates (home layout)
     var ICON_MIC = '<svg aria-hidden="true" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2" viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 11a7 7 0 0 1-14 0M12 18v4M8 22h8"/></svg>';
     var ICON_TV = '<svg aria-hidden="true" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="m17 2-5 5-5-5"/></svg>';
-    function teamHtml(team) {
+    function teamHtml(team, eager) {
       return `<div class="team">
-          <span class="team__logo"><span class="team__initials">${esc(String(team.name || '').trim().slice(0, 2))}</span>${team.logo ? `<img src="${esc(team.logo)}" alt="${esc(team.name)}" loading="lazy" decoding="async" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}</span>
+          <span class="team__logo"><span class="team__initials">${esc(String(team.name || '').trim().slice(0, 2))}</span>${window.pxlImg.tag(team.logo, { size: 42, alt: team.name, eager: eager })}</span>
           <span class="team__name">${esc(team.name)}</span>
         </div>`;
     }
@@ -3895,16 +4075,16 @@ body#layout .sidebar { width: 320px; }
       if (m.status === 'live') return window.pxlLive.badge(m.phase, m.clock);   // "استراحة" at half-time
       return esc(m.status === 'finished' ? 'انتهت' : m.status === 'other' ? 'غير محدد' : 'لم تبدأ');
     }
-    function cardHtml(m) {
+    function cardHtml(m, eager) {
       var center = m.status === 'live' || m.status === 'finished'
         ? `<span class="match-score"><span>${esc(m.scoreHome)}</span><span class="sep">-</span><span>${esc(m.scoreAway)}</span></span>`
         : `<span class="match-time">${esc(m.time)}</span>`;
       return `<a class="match-card match-card--${m.status === 'other' ? 'upcoming' : m.status}" href="${esc(matchPageUrl(m.id))}">
           <div class="match-card__top"><span class="match-card__league">${esc(m.league)}</span><span class="match-card__round">${esc(m.round)}</span></div>
           <div class="match-card__body">
-            ${teamHtml(m.home)}
+            ${teamHtml(m.home, eager)}
             <div class="match-center">${center}<span class="badge badge--${m.status === 'live' ? 'live' : m.status === 'finished' ? 'finished' : 'upcoming'}">${badgeHtml(m)}</span></div>
-            ${teamHtml(m.away)}
+            ${teamHtml(m.away, eager)}
           </div>
           <div class="match-card__bottom">${coverageHtml(m)}</div>
         </a>`;
@@ -4016,13 +4196,20 @@ body#layout .sidebar { width: 320px; }
         g.items.push(m);
         if (m.status === 'live') g.live++;
       });
+      // Inside a league: by match_timestamp (no kick-off time last; the id keeps ties stable).
+      // Sorted before the groups so items[0] is really the league's first kick-off.
+      order.forEach(function (g) {
+        g.items.sort(function (a, b) {
+          var ta = a.timestamp || Number.MAX_SAFE_INTEGER, tb = b.timestamp || Number.MAX_SAFE_INTEGER;
+          return ta - tb || String(a.id).localeCompare(String(b.id));
+        });
+      });
       order.sort(function (a, b) { return (b.live > 0) - (a.live > 0) || leagueRank(a.id) - leagueRank(b.id) || a.items[0].timestamp - b.items[0].timestamp; });
-      var rank = { live: 0, upcoming: 1, other: 2, finished: 3 };
-      listEl.innerHTML = order.map(function (g) {
-        g.items.sort(function (a, b) { return rank[a.status] - rank[b.status] || a.timestamp - b.timestamp; });
+      var shown = 0;                                          // the first 4 cards load logos eagerly
+      listEl.innerHTML = order.map(function (g, gi) {
         return `<section class="league-group mc-group">
-            <h2 class="league-group__title">${g.logo ? `<img class="league-group__logo" src="${esc(g.logo)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}<span>${esc(g.name)}</span>${g.live ? '<span class="mc-live-dot" title="مباريات مباشرة">مباشر</span>' : ''}<span class="league-group__count">${g.items.length}</span></h2>
-            <div class="match-list">${g.items.map(cardHtml).join('')}</div>
+            <h2 class="league-group__title">${window.pxlImg.tag(g.logo, { cls: 'league-group__logo', size: 24, name: g.name, eager: gi === 0 })}<span>${esc(g.name)}</span>${g.live ? '<span class="mc-live-dot" title="مباريات مباشرة">مباشر</span>' : ''}<span class="league-group__count">${g.items.length}</span></h2>
+            <div class="match-list">${g.items.map(function (m) { return cardHtml(m, shown++ < 4); }).join('')}</div>
           </section>`;
       }).join('');
     }
@@ -4064,6 +4251,7 @@ body#layout .sidebar { width: 320px; }
       if (!silent) { state.loading = true; state.error = ''; renderAll(); }
       try {
         var json = await fetchJson(matchesUrl(date), silent ? 1 : 3);
+        window.pxlImg.debugList('matches ' + date, json && json.data);
         var matches = (Array.isArray(json && json.data) ? json.data : []).map(parseMatch);
         if (date === today) matches = await loadLiveInfo(matches);
         if (mySeq !== seq) return;                            // the user picked another day meanwhile
@@ -4150,8 +4338,6 @@ body#layout .sidebar { width: 320px; }
     // ------------------------------------------------------------------ config
     var WORKER_BASE_URL = window.PXL_WORKER_BASE_URL || '';
     var MATCH_FILTERS = window.PXL_MATCH_FILTERS;       // shared: SETTINGS script at the top
-    var TEAM_LOGO_BASE = 'https://imgs.ysscores.com/teams/128/';
-    var LEAGUE_LOGO_BASE = 'https://imgs.ysscores.com/championship/64/';
     var TZ = 'Africa/Cairo';
     var DAYS_AHEAD = 4;                                  // today + 3 days of fixtures
     var POINTS_EXACT = 10, POINTS_WINNER = 5;
@@ -4186,11 +4372,6 @@ body#layout .sidebar { width: 320px; }
     // ------------------------------------------------------------------ helpers
     var ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
     function esc(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) { return ESC[c]; }); }
-    function imgUrl(base, value) {
-      var v = String(value || '').trim();
-      if (/^https:\/\//i.test(v)) return v;
-      return /^[\w.-]+\.(png|jpe?g|webp|gif|svg)$/i.test(v) ? base + encodeURIComponent(v) : '';
-    }
     function load(key, fallback) {
       try { var v = JSON.parse(localStorage.getItem(NS + key)); return v == null ? fallback : v; } catch (e) { return fallback; }
     }
@@ -4223,10 +4404,10 @@ body#layout .sidebar { width: 320px; }
       return {
         id: String(r.match_id || ''), ts: ts, day: ts ? dayKey(ts) : '', feedDate: feedDate,
         status: Number(r.status) || 0,
-        leagueId: String(r.championship_id || c.url_id || ''), league: c.title || '',
-        leagueLogo: imgUrl(LEAGUE_LOGO_BASE, c.image),
-        home: h.title || '', away: a.title || '',
-        homeLogo: imgUrl(TEAM_LOGO_BASE, h.image), awayLogo: imgUrl(TEAM_LOGO_BASE, a.image),
+        leagueId: String(r.championship_id || c.url_id || c.id || ''), league: c.title || '',
+        leagueLogo: window.pxlImg('league', c.image),
+        home: h.full_title || h.title || '', away: a.full_title || a.title || '',
+        homeLogo: window.pxlImg('team', h.image), awayLogo: window.pxlImg('team', a.image),
         hs: r.home_scores, as: r.away_scores
       };
     }
@@ -4401,9 +4582,9 @@ body#layout .sidebar { width: 320px; }
     }
 
     // ------------------------------------------------------------------ match cards
-    function teamHtml(name, logo) {
+    function teamHtml(name, logo, eager) {
       return `<div class="pred-team">${logo
-        ? `<img src="${esc(logo)}" alt="" width="48" height="48" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'">`
+        ? window.pxlImg.tag(logo, { size: 48, name: name, eager: eager })
         : `<span class="pred-team__ph">${esc(initial(name))}</span>`}<span>${esc(name)}</span></div>`;
     }
     function stepperHtml(side, value, teamName, locked) {
@@ -4435,13 +4616,13 @@ body#layout .sidebar { width: 320px; }
       lockedAtRender[m.id] = locked;
       return `<article class="pred-card${locked ? ' is-locked' : ''}${state.mine[m.id] ? ' has-pick' : ''}" data-id="${esc(m.id)}" style="--i:${Math.min(i, 12)}">
         <header class="pred-card__meta">
-          <span class="pred-card__league">${m.leagueLogo ? `<img src="${esc(m.leagueLogo)}" alt="" width="18" height="18" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}<span>${esc(m.league)}</span></span>
+          <span class="pred-card__league">${window.pxlImg.tag(m.leagueLogo, { size: 18, name: m.league, eager: i < 4 })}<span>${esc(m.league)}</span></span>
           <time datetime="${new Date(m.ts).toISOString()}">${esc(kickoffText(m.ts))}</time>
         </header>
         <div class="pred-card__teams">
-          ${teamHtml(m.home, m.homeLogo)}
+          ${teamHtml(m.home, m.homeLogo, i < 4)}
           <span class="pred-vs">ضد</span>
-          ${teamHtml(m.away, m.awayLogo)}
+          ${teamHtml(m.away, m.awayLogo, i < 4)}
         </div>
         <div class="pred-score">
           ${stepperHtml('h', pick[0], m.home, locked)}
@@ -4767,6 +4948,7 @@ body#layout .sidebar { width: 320px; }
           var res = await fetch(url, { headers: { Accept: 'application/json' }, signal: ctrl.signal });
           if (!res.ok) throw new Error('HTTP ' + res.status);
           var json = await res.json();
+          window.pxlImg.debugList('predictions ' + iso, json && json.data);
           return (Array.isArray(json && json.data) ? json.data : [])
             .map(function (r) { return parseMatch(r, iso); })
             .filter(function (m) { return m.id && m.ts; });
@@ -4869,8 +5051,6 @@ body#layout .sidebar { width: 320px; }
     if (location.pathname !== '/p/match.html') return;   // client-side route guard
 
     var WORKER_BASE_URL = window.PXL_WORKER_BASE_URL || '';
-    var TEAM_LOGO_BASE = 'https://imgs.ysscores.com/teams/128/';
-    var LEAGUE_LOGO_BASE = 'https://imgs.ysscores.com/championship/64/';
     var LIVE_WINDOW_MS = 3.5 * 60 * 60 * 1000;
     var REFRESH_MS = 10 * 1000;                                 // while live (Worker edge TTL for match_info: 15 s)
     var PRE_MATCH_MS = 30 * 1000;                               // last 30 min before kick-off
@@ -4885,10 +5065,6 @@ body#layout .sidebar { width: 320px; }
     var ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
     function esc(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) { return ESC[c]; }); }
     function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
-    function imageUrl(base, file) {
-      var f = file ? String(file).trim() : '';
-      return /^[\w.-]+\.(png|jpe?g|webp|gif|svg)$/i.test(f) ? base + encodeURIComponent(f) : '';
-    }
     function nameOf(x) {                                         // player / referee objects or plain strings
       if (!x) return '';
       if (typeof x === 'string') return x;
@@ -4961,7 +5137,6 @@ body#layout .sidebar { width: 320px; }
     //                               *_team_info, *_formation, *_coach), lu.lineup[teamId] = { lineup, substitutions }
     // Team ids are numbers in objects but STRING keys in maps (statics, penalties, lineup, agg_result).
     // Any argument may be null (failed / not requested): the result then has empty parts.
-    var PLAYER_IMG_BASE = 'https://imgs.ysscores.com/player/128/';   // verified: player/128/{image} serves image/png
     var PLACEHOLDER_PLAYER_ID = 9965324011;                       // "غير معروف", shared by many entries
     var EVENT_KIND = { 1: 'goal', 4: 'own_goal', 5: 'pen_goal', 2: 'yellow', 3: 'red', 8: 'sub' };   // others (21, 22...) ignored
     var ROW_ORDER = ['G', 'D', 'M', 'F', 'S'];                    // lineup item.position = pitch row (NOT player.position)
@@ -4987,7 +5162,7 @@ body#layout .sidebar { width: 320px; }
         id: num(t.row_id),
         name: t.full_title || t.title || '',
         short: t.title || t.full_title || '',
-        logo: imageUrl(TEAM_LOGO_BASE, t.image),
+        logo: window.pxlImg('team', t.image),
         qualified: Number(qualified) === 1,
         formation: header?.[side + '_formation'] || '',
         coach: person(header?.[side + '_coach'])?.name || ''
@@ -5056,7 +5231,7 @@ body#layout .sidebar { width: 320px; }
         id: p.id, name: p.name, placeholder: p.placeholder,
         number: pl.player_number ?? '',
         role: pl.position || '',                                 // real position ("GK", "CM"...), display only
-        image: imageUrl(PLAYER_IMG_BASE, pl.image),
+        image: window.pxlImg('player', pl.image),
         country: pl.country?.title || '',
         row: item?.position || '',                               // G|D|M|F|S
         slot: num(item?.formation_position) || 0,
@@ -5133,7 +5308,7 @@ body#layout .sidebar { width: 320px; }
         kickoff: ts,
         exTime: parseMaybeJson(src.ex_time),
         scoreTime: parseMaybeJson(src.score_time),
-        league: { id: num(src.championship_id), title: champ.title || '', logo: imageUrl(LEAGUE_LOGO_BASE, champ.image) },
+        league: { id: num(src.championship_id), title: champ.title || '', logo: window.pxlImg('league', champ.image) },
         round: info?.round || '',
         venue: info?.Stadium || '',
         referee: nameOf(info?.referees),
@@ -5156,6 +5331,7 @@ body#layout .sidebar { width: 320px; }
           home: teamLineup(lu?.lineup?.[hk], lu?.lineup_injureds?.[hk]),
           away: teamLineup(lu?.lineup?.[ak], lu?.lineup_injureds?.[ak])
         },
+        stream: info?.stream || null,
         hasEvents: Number(info?.events) === 1,
         hasLineup: Number(info?.lineup) === 1
       };
@@ -5164,7 +5340,7 @@ body#layout .sidebar { width: 320px; }
 
     // ------------------------------------------------------------------ hero
     function teamInner(t) {
-      return `<span class="mh__logo">${t.logo ? `<img src="${esc(t.logo)}" alt="${esc(t.name)}" decoding="async" referrerpolicy="no-referrer" onerror="this.replaceWith(document.createTextNode(''))">` : `<span>${esc(t.name.slice(0, 2))}</span>`}</span>
+      return `<span class="mh__logo">${t.logo ? window.pxlImg.tag(t.logo, { size: 58, alt: t.name, eager: true }) : `<span>${esc(t.name.slice(0, 2))}</span>`}</span>
           <span class="mh__name">${esc(t.name)}</span>`;
     }
     // The hero skeleton is built once; each poll then patches only the region that changed
@@ -5211,7 +5387,7 @@ body#layout .sidebar { width: 320px; }
       var cls = 'match-hero' + (st === 'live' ? ' match-hero--live' : '');
       if (hero.className !== cls) hero.className = cls;
       var parts = heroShell();
-      setHtml(parts.league, `${n.league.logo ? `<img src="${esc(n.league.logo)}" alt="" decoding="async" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}
+      setHtml(parts.league, `${window.pxlImg.tag(n.league.logo, { size: 22, name: n.league.title, eager: true })}
           <b>${esc(n.league.title)}</b>${n.round ? `<span>· ${esc(n.round)}</span>` : ''}`);
       setHtml(parts.home, teamInner(n.home));
       setHtml(parts.center, `${center}${badge}${lines.map(function (l) { return `<span class="mh__ht">${esc(l)}</span>`; }).join('')}`);
@@ -5361,7 +5537,7 @@ body#layout .sidebar { width: 320px; }
       var L = n.lineup[side], t = n[side];
       if (!L) return '';
       return `<section class="lu-team">
-          <div class="lu-head">${t.logo ? `<img src="${esc(t.logo)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}<span>${esc(t.name)}</span>${t.formation ? `<span class="lu-formation">${esc(t.formation)}</span>` : ''}</div>
+          <div class="lu-head">${window.pxlImg.tag(t.logo, { size: 30, name: t.name })}<span>${esc(t.name)}</span>${t.formation ? `<span class="lu-formation">${esc(t.formation)}</span>` : ''}</div>
           ${pitchHtml(L.rows) || listHtml(L.starters)}
           ${t.coach ? `<p class="lu-coach">المدرب: <b>${esc(t.coach)}</b></p>` : ''}
           ${L.bench.length ? `<h3 class="lu-sub-title">البدلاء</h3>${listHtml(L.bench)}` : ''}
@@ -5469,6 +5645,7 @@ body#layout .sidebar { width: 320px; }
       try {
         info = await fetchJson(api('match_info', matchId), silent ? 1 : 3);
         if (!isMatchInfo(info)) throw new Error('malformed match_info');
+        applyStream(info.stream);                                // stream merged in by the Worker
         var results = await Promise.allSettled([
           Number(info.events) ? fetchJson(api('matches_event', matchId), silent ? 1 : 2).then(function (d) {
             if (!d || typeof d !== 'object' || !Array.isArray(d.events)) throw new Error('malformed matches_event');
@@ -5548,6 +5725,40 @@ body#layout .sidebar { width: 320px; }
     var initialTab = tabs.filter(function (t) { return '#' + t.getAttribute('data-tab') === location.hash; })[0];
     if (initialTab) selectTab(initialTab, false);
 
+    // ------------------------------------------------------------------ live stream (dashboard)
+    // The Worker merges the dashboard's match_settings into match_info for stream-enabled
+    // origins (px-league.site, tariq-live):  data.stream = { channel, r2_slug }   (absent = none)
+    // match_info is refreshed while the match is live, so a stream attached or removed in the
+    // dashboard follows on the next refresh. No extra request.
+    var STREAM_PLAYER_BASE = window.PXL_STREAM_PLAYER_BASE || 'https://live.smarterwho.site/player/';
+    var STREAM_KEY_RE = /^[A-Za-z0-9_-]{1,64}$/;
+    var streamBox = document.getElementById('match-stream');
+    var streamSlot = document.getElementById('match-player-slot');
+    var streamSrc = null;
+    function streamUrl(s) {
+      var channel = String(s.channel || ''), slug = String(s.r2_slug || '');
+      var okChannel = STREAM_KEY_RE.test(channel), okSlug = STREAM_KEY_RE.test(slug);
+      if (!okChannel && !okSlug) return '';
+      var u = new URL(STREAM_PLAYER_BASE);
+      if (okChannel) u.searchParams.set('channel', channel);
+      if (okSlug) u.searchParams.set('r2', slug);
+      return u.toString();
+    }
+    function showStream(src) {
+      if (!streamBox || !streamSlot || src === streamSrc) return;   // same stream: never reload the player
+      streamSrc = src;
+      streamSlot.textContent = '';
+      if (!src) { streamBox.hidden = true; return; }
+      var f = document.createElement('iframe');
+      f.src = src;
+      f.title = window.pxlT ? window.pxlT('البث المباشر') : 'البث المباشر';
+      f.setAttribute('allow', 'autoplay; fullscreen; encrypted-media; picture-in-picture');
+      f.setAttribute('allowfullscreen', 'true');
+      streamSlot.appendChild(f);
+      streamBox.hidden = false;
+    }
+    function applyStream(s) { showStream(s && typeof s === 'object' ? streamUrl(s) : ''); }
+
     // ------------------------------------------------------------------ self-test
     // Console: pxlSelfTest() (defaults to 5702737), or open /p/match.html?id=5702737&selftest=1
     window.pxlSelfTest = async function (id) {
@@ -5590,6 +5801,52 @@ body#layout .sidebar { width: 320px; }
        ====================================================================== -->
   <script>
   //<![CDATA[
+  // POST VIEW: live player. Moves the post's stream into the 16:9 box (#px-player-slot).
+  // Accepts, on PXL_STREAM_PLAYER_BASE only:
+  //   <div data-stream-src="https://live.smarterwho.site/player/?channel=b1&r2=SLUG"></div>
+  //   or the first <iframe> whose src is on that base.
+  // Other iframes (YouTube highlights etc.) are left in the article untouched.
+  (function () {
+    var slot = document.getElementById('px-player-slot');
+    var body = document.getElementById('px-post-body');
+    var arena = document.getElementById('px-arena');
+    if (!slot || !body || !arena) return;
+    var BASE = window.PXL_STREAM_PLAYER_BASE || 'https://live.smarterwho.site/player/';
+    function ours(src) {
+      try {
+        var u = new URL(src, location.href), b = new URL(BASE);
+        return u.protocol === 'https:' && u.origin === b.origin && u.pathname.indexOf(b.pathname) === 0;
+      } catch (e) { return false; }
+    }
+
+    var frame = null;
+    var marker = body.querySelector('[data-stream-src]');
+    if (marker) {
+      var src = marker.getAttribute('data-stream-src') || '';
+      if (ours(src)) {
+        frame = document.createElement('iframe');
+        frame.src = src;
+      }
+      marker.remove();
+    } else {
+      var frames = body.querySelectorAll('iframe');
+      for (var k = 0; k < frames.length && !frame; k++) if (ours(frames[k].src)) frame = frames[k];
+    }
+    if (!frame) return;   // regular article: the arena stays hidden
+
+    frame.setAttribute('allow', 'autoplay; fullscreen; encrypted-media; picture-in-picture');
+    frame.setAttribute('allowfullscreen', 'true');
+    frame.setAttribute('title', window.pxlT ? window.pxlT('البث المباشر') : 'البث المباشر');
+    frame.removeAttribute('width');
+    frame.removeAttribute('height');
+    frame.removeAttribute('style');
+    frame.removeAttribute('sandbox');   // the player needs scripts + same-origin for hls.js and its API
+    slot.textContent = '';
+    slot.appendChild(frame);
+    arena.hidden = false;
+  })();
+
+  // POST VIEW: ad slots
   (function () {
     var slots = document.querySelectorAll('.post-ad .ad-slot');
     var any = false;
@@ -5615,15 +5872,16 @@ body#layout .sidebar { width: 320px; }
 
        1. Set your Worker URL once in PXL_WORKER_BASE_URL at the top of this file (SETTINGS).
        2. Endpoints (your Worker forwards them to api-ar.ysscores.com):
-            {WORKER_BASE_URL}/api/matches/matches_date_get/{YYYY-MM-DD}/[]/[]/["8634"]/D/60
+            {WORKER_BASE_URL}/api/matches/matches_date_get/{YYYY-MM-DD}/{PXL_MATCH_FILTERS}/D/60
+            (PXL_MATCH_FILTERS = the 30 shared championship ids; never an empty [] list)
             {WORKER_BASE_URL}/api/matches/match_info/{match_id}/D/60      (live matches only)
        3. ysscores response: { status, data: [ { match_id, match_timestamp, status, home_scores,
-          away_scores, championship_id, championship: { title, image },
+          away_scores, championship_id, championship: { id, title, image },
           home_team: { title, image }, away_team: { title, image },
           channel_commm: [ { channel_name, commentator_name } ] } ] }
           status 0 = not started, 4 = finished; any other code = live within 3.5 h of kickoff.
-       4. Grouped by championship.title, sorted by match_timestamp (shown in Cairo time).
-          Team logos: https://imgs.ysscores.com/teams/128/{image}
+       4. One flat list: live first, then VIP leagues, then by match_timestamp (Cairo time).
+          Logos: window.pxlImg('team' | 'league', image) - SETTINGS script at the top.
        5. The spinner in #matches-api-container stays until fetch() returned and the data
           is parsed. Every API value is HTML-escaped before it goes into the templates.
        ====================================================================== -->
@@ -5635,8 +5893,6 @@ body#layout .sidebar { width: 320px; }
     // ------------------------------------------------------------------ configuration
     var WORKER_BASE_URL = window.PXL_WORKER_BASE_URL || '';    // set once at the top of the file (SETTINGS)
     var MATCH_FILTERS = window.PXL_MATCH_FILTERS;               // shared: SETTINGS script at the top
-    var TEAM_LOGO_BASE = 'https://imgs.ysscores.com/teams/128/';
-    var LEAGUE_LOGO_BASE = 'https://imgs.ysscores.com/championship/64/';
     var MAX_ATTEMPTS = 3;                                       // tries before an error is shown
     var REFRESH_LIVE_MS = 30 * 1000;                            // silent refresh while a match is live
     var REFRESH_IDLE_MS = 2 * 60 * 1000;                        // ... and when nothing is live (battery)
@@ -5659,10 +5915,6 @@ body#layout .sidebar { width: 320px; }
       var n = Number(unixSeconds);
       if (!n) return '--:--';
       return new Intl.DateTimeFormat('en-GB', { timeZone: 'Africa/Cairo', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(n * 1000));
-    }
-    function imageUrl(base, file) {                             // only plain file names like "4151761254960.png"
-      var f = file ? String(file).trim() : '';
-      return /^[\w.-]+\.(png|jpe?g|webp|gif|svg)$/i.test(f) ? base + encodeURIComponent(f) : '';
     }
 
     var dateEl = document.getElementById('fixtures-date');
@@ -5726,17 +5978,17 @@ body#layout .sidebar { width: 320px; }
       var away = raw.away_team || {};
       return {
         id: raw.match_id,
-        leagueId: String(raw.championship_id != null ? raw.championship_id : ''),
+        leagueId: String(raw.championship_id != null ? raw.championship_id : (champ.id != null ? champ.id : '')),
         league: champ.title || 'مباريات',
-        leagueLogo: imageUrl(LEAGUE_LOGO_BASE, champ.image),
+        leagueLogo: window.pxlImg('league', champ.image),
         round: raw.round || '',
         timestamp: Number(raw.match_timestamp) || 0,
         time: cairoTime(raw.match_timestamp),
         status: statusOf(raw),
         phase: statusOf(raw) === 'live' ? window.pxlLive.phase(raw, true) : '',   // from the list row
         clock: null,                                          // filled from fresh match_info only
-        home: { name: home.full_title || home.title || '', logo: imageUrl(TEAM_LOGO_BASE, home.image) },
-        away: { name: away.full_title || away.title || '', logo: imageUrl(TEAM_LOGO_BASE, away.image) },
+        home: { name: home.full_title || home.title || '', logo: window.pxlImg('team', home.image) },
+        away: { name: away.full_title || away.title || '', logo: window.pxlImg('team', away.image) },
         scoreHome: raw.home_scores != null ? raw.home_scores : 0,
         scoreAway: raw.away_scores != null ? raw.away_scores : 0,
         channel: cc.channel_name || '',
@@ -5765,13 +6017,13 @@ body#layout .sidebar { width: 320px; }
     var ICON_MIC = '<svg aria-hidden="true" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2" viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 11a7 7 0 0 1-14 0M12 18v4M8 22h8"/></svg>';
     var ICON_TV = '<svg aria-hidden="true" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="m17 2-5 5-5-5"/></svg>';
 
-    function teamHtml(team) {
+    function teamHtml(team, eager) {
       var initials = esc(String(team.name || '').trim().slice(0, 2));
       return `
         <div class="team">
           <span class="team__logo">
             <span class="team__initials">${initials}</span>
-            ${team.logo ? `<img src="${esc(team.logo)}" alt="${esc(team.name)}" loading="lazy" decoding="async" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}
+            ${window.pxlImg.tag(team.logo, { size: 42, alt: team.name, eager: eager })}
           </span>
           <span class="team__name">${esc(team.name)}</span>
         </div>`;
@@ -5805,16 +6057,16 @@ body#layout .sidebar { width: 320px; }
       return { cls: cardClass(m), top: cardTopHtml(m), center: cardCenterHtml(m), bottom: cardBottomHtml(m) };
     }
 
-    function cardHtml(m, entering) {
+    function cardHtml(m, entering, eager) {
       var p = cardParts(m);
       cardState[m.id] = p;                                      // what is on screen, for later diffs
       return `
         <a class="${p.cls}${entering ? ' match-card--enter' : ''}" data-mid="${esc(m.id)}" href="${esc(matchPageUrl(m.id))}">
           <div class="match-card__top">${p.top}</div>
           <div class="match-card__body">
-            ${teamHtml(m.home)}
+            ${teamHtml(m.home, eager)}
             <div class="match-center">${p.center}</div>
-            ${teamHtml(m.away)}
+            ${teamHtml(m.away, eager)}
           </div>
           <div class="match-card__bottom">${p.bottom}</div>
         </a>`;
@@ -5908,7 +6160,7 @@ body#layout .sidebar { width: 320px; }
       var key = keyOf(visible);
       if (!(key === layoutKey && patch(visible))) {
         cardState = {};
-        listEl.innerHTML = visible.map(function (m) { return cardHtml(m, false); }).join('');
+        listEl.innerHTML = visible.map(function (m, i) { return cardHtml(m, false, i < PAGE_SIZE); }).join('');
         layoutKey = key;
       }
       updateMoreButton();
@@ -5989,6 +6241,7 @@ body#layout .sidebar { width: 320px; }
         // A 200 without a data array (error page, wrapper without data) must not replace the
         // cards with "no matches today": treat it as a failed refresh and keep the last good data.
         if (!json || !Array.isArray(json.data)) throw new Error('malformed matches_date_get');
+        window.pxlImg.debugList('home', json.data);
         // Finished matches (status 4, "انتهت") are not shown; a match that ends while the page is
         // open disappears at the next refresh.
         var parsed = json.data.map(parseMatch);

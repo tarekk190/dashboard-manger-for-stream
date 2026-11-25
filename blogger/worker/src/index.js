@@ -2,8 +2,12 @@
 // PX League - Cloudflare Worker: API proxy (ysscores matches + standings) with strict CORS,
 // per-IP rate limiting, an edge response cache and show/hide filtering from the Master Match
 // Controller (Supabase table "match_settings").
-// px-league.site carries NO live streams: the Worker never attaches stream data to a match,
-// and any "stream" field is stripped from the match responses it serves.
+// Streams are per origin:
+//   - STREAM_ORIGINS (px-league.site, www.px-league.site, tariq-live.blogspot.com): match
+//     responses get "stream": { channel, r2_slug } from match_settings, so the blog can embed
+//     our player (live.smarterwho.site/player/).
+//   - every other allowed origin (e.g. the old powerdoflearn.blogspot.com address): NO stream
+//     data; any "stream" field is stripped. The two kinds never share an edge cache entry.
 // -----------------------------------------------------------------------------
 // >>> YOUR BLOG ORIGIN(S) <<<
 // Exact origins: scheme + host only. A trailing slash is tolerated (it is removed below),
@@ -16,6 +20,13 @@ const ALLOWED_ORIGINS = [
   "https://www.px-league.site",
   "https://px-league.site",
   "https://powerdoflearn.blogspot.com",
+].map((o) => o.trim().replace(/\/+$/, ""));
+// Origins that receive stream data (each is also an allowed site origin). More can be added
+// without a code change via the STREAM_ORIGINS var (comma separated).
+const STREAM_ORIGINS = [
+  "https://www.px-league.site",
+  "https://px-league.site",
+  "https://tariq-live.blogspot.com",
 ].map((o) => o.trim().replace(/\/+$/, ""));
 // The dashboard's origin(s) come from the DASHBOARD_ORIGINS variable (comma separated),
 // e.g. "https://dashboard.example.com". Only they may ask for ?raw=1.
@@ -33,11 +44,13 @@ const LOCAL_DASHBOARD_ORIGINS = [
 //            /api/matches/match_info/{match_id}/D/60
 //       matches_date_get: matches with is_visible = false are removed
 //       match_info:       passed through (hidden matches stay reachable by id)
-//       Both: any "stream" field is removed (the site carries no stream data).
+//       STREAM_ORIGINS:   a match with a stream gets "stream": { "channel": "b4", "r2_slug": "..." }
+//                         (list and match_info). A FINISHED match (status 4) never gets one.
+//       Other origins:    any "stream" field is removed.
 //       ?raw=1 (dashboard origins only): no filtering, no edge cache
 //   /api/standings/{id}?include=results
 //                               -> https://football-poster-generator.vercel.app/api/standings/{id}?include=results
-//   /api/active-streams         -> 410 Gone (the site no longer carries streams)
+//   /api/active-streams         -> 410 Gone (themes read match_info.stream instead)
 //   /api/health                 -> {"status":"ok"}
 //
 // Secrets / vars / bindings:
@@ -45,6 +58,7 @@ const LOCAL_DASHBOARD_ORIGINS = [
 //   wrangler secret put SUPABASE_ANON_KEY   anon JWT or sb_publishable_... key (RLS: read-only)
 //   DASHBOARD_ORIGINS (var)                 https://your-dashboard.vercel.app
 //   ALLOWED_ORIGINS (var, optional)         extra blog origins, added to the list above
+//   STREAM_ORIGINS (var, optional)          extra stream-enabled origins, added to STREAM_ORIGINS
 //   RATE_LIMITER (ratelimit binding)        per-IP limit, see wrangler.toml (absent = no limit)
 // Without Supabase settings the proxy works as before (no filtering).
 //
@@ -86,6 +100,10 @@ const EDGE_FRESH_FILTERED = 5;        // seconds a filtered match response is fr
 const EDGE_SWR_MAX = 30;              // longest stale-while-revalidate window (seconds)
 const SETTINGS_STALE_MS = 10 * 60 * 1000;   // last known settings used while Supabase is failing
 const MATCH_ID_RE = /^\d{1,12}$/;
+const STREAM_KEY_RE = /^[A-Za-z0-9_-]{1,64}$/;
+// ysscores match status codes that mean "over" (verified: 4 = finished). A match in one of these
+// states never gets a stream attached, whatever match_settings says.
+const FINISHED_STATUSES = new Set([4]);
 
 const ROUTES = [
   {
@@ -120,8 +138,11 @@ export default {
       .split(",").map((o) => o.trim().replace(/\/+$/, "")).filter(Boolean)
       .concat(LOCAL_DASHBOARD_ORIGINS);
     const isDashboard = dashboardOrigins.includes(origin);
-    const siteOrigins = ALLOWED_ORIGINS.concat(String(env.ALLOWED_ORIGINS || "")
+    const streamOrigins = STREAM_ORIGINS.concat(String(env.STREAM_ORIGINS || "")
       .split(",").map((o) => o.trim().replace(/\/+$/, "")).filter(Boolean));
+    const withStreams = streamOrigins.includes(origin);
+    const siteOrigins = ALLOWED_ORIGINS.concat(String(env.ALLOWED_ORIGINS || "")
+      .split(",").map((o) => o.trim().replace(/\/+$/, "")).filter(Boolean), streamOrigins);
     const originAllowed = siteOrigins.includes(origin) || isDashboard;
     const cors = originAllowed ? corsHeaders(origin) : {};
 
@@ -186,12 +207,16 @@ export default {
 
     // Cache keys on this Worker's own host (never requested by clients). The query string is
     // the whitelisted one, so ?raw=1 and junk parameters never split or poison the cache.
+    // Bodies with stream data live under their own edge key, so a stream-less origin can never
+    // be served a cached body that carries streams (and vice versa). The stale copy is the raw
+    // upstream body (no streams in it) and stays shared.
+    const streams = Boolean(filterKind && withStreams);
     const keyPath = url.pathname + (qs ? "?" + qs : "");
     const staleKey = new Request(url.origin + "/__pxl_stale" + keyPath);
-    const edgeKey = new Request(url.origin + "/__pxl_edge" + keyPath);
+    const edgeKey = new Request(url.origin + (streams ? "/__pxl_edge_s" : "/__pxl_edge") + keyPath);
 
     // Builds the response from upstream (no CORS headers; they are added per request below).
-    const build = () => buildResponse({ upstreamUrl, ttl, filterKind, pathId, raw, staleKey, env, ctx });
+    const build = () => buildResponse({ upstreamUrl, ttl, filterKind, pathId, raw, streams, staleKey, env, ctx });
 
     // --- Edge response cache (filtered bodies; skipped for ?raw=1) ----------
     if (!raw) {
@@ -279,12 +304,12 @@ function respond(request, res, cors, extra) {
 // =============================================================================
 // Upstream fetch + filtering. Returns a Response WITHOUT CORS headers.
 // =============================================================================
-async function buildResponse({ upstreamUrl, ttl, filterKind, pathId, raw, staleKey, env, ctx }) {
+async function buildResponse({ upstreamUrl, ttl, filterKind, pathId, raw, streams, staleKey, env, ctx }) {
   // Final response: filter (if needed) and add our own headers. Used for fresh AND stale bodies.
   const finish = async (body, contentType, extra) => {
     let out = body, settingsState = "";
     if (filterKind) {
-      const r = await applyMatchSettings(filterKind, body, pathId, env);
+      const r = await applyMatchSettings(filterKind, body, pathId, streams, env);
       out = r.body;
       settingsState = r.state;
     }
@@ -359,8 +384,9 @@ async function buildResponse({ upstreamUrl, ttl, filterKind, pathId, raw, staleK
 }
 
 // =============================================================================
-// Match settings (Supabase "match_settings": match_id, is_visible). The table's channel and
-// r2_slug columns are never read: the site does not attach streams.
+// Match settings (Supabase "match_settings": match_id, is_visible, channel, r2_slug).
+// channel / r2_slug are read only for stream-enabled origins (anon needs the column grant from
+// blogger/stream-manager/migrations/2026-11-25-stream-columns-for-stream-origins.sql).
 // =============================================================================
 const settingsMemo = new Map();   // query URL -> { at, map }   (per isolate, best effort)
 
@@ -373,13 +399,26 @@ function supabaseConfig(env) {
   return { base, headers };
 }
 
-// Settings for the given match ids -> Map(id -> { visible }) or null if unavailable.
-async function loadSettings(ids, env) {
+function cleanStream(row) {
+  const channel = STREAM_KEY_RE.test(String(row && row.channel || "")) ? String(row.channel) : "";
+  const r2_slug = STREAM_KEY_RE.test(String(row && row.r2_slug || "")) ? String(row.r2_slug) : "";
+  return channel || r2_slug ? { channel, r2_slug } : null;
+}
+
+// A finished match never carries a stream (match object from ysscores: { status, ... })
+function isFinished(match) {
+  return FINISHED_STATUSES.has(Number(match && match.status));
+}
+
+// Settings for the given match ids -> Map(id -> { visible, stream }) or null if unavailable.
+// withStreams = false never asks for channel / r2_slug (stream = null for every row).
+async function loadSettings(ids, withStreams, env) {
   const cfg = supabaseConfig(env);
   if (!cfg) return { map: null, state: "off" };
   const list = [...new Set(ids.filter((id) => MATCH_ID_RE.test(id)))].sort().slice(0, 400);
   if (!list.length) return { map: new Map(), state: "ok" };
-  const q = `${cfg.base}/rest/v1/match_settings?select=match_id,is_visible&match_id=in.(${list.join(",")})`;
+  const cols = withStreams ? "match_id,is_visible,channel,r2_slug" : "match_id,is_visible";
+  const q = `${cfg.base}/rest/v1/match_settings?select=${cols}&match_id=in.(${list.join(",")})`;
 
   const memo = settingsMemo.get(q);
   if (memo && Date.now() - memo.at < SETTINGS_TTL * 1000) return { map: memo.map, state: "ok" };
@@ -394,7 +433,7 @@ async function loadSettings(ids, env) {
     const map = new Map();
     for (const r of Array.isArray(rows) ? rows : []) {
       const id = String(r && r.match_id != null ? r.match_id : "");
-      if (MATCH_ID_RE.test(id)) map.set(id, { visible: r.is_visible !== false });
+      if (MATCH_ID_RE.test(id)) map.set(id, { visible: r.is_visible !== false, stream: withStreams ? cleanStream(r) : null });
     }
     if (settingsMemo.size > 200) settingsMemo.clear();
     settingsMemo.set(q, { at: Date.now(), map });
@@ -406,9 +445,10 @@ async function loadSettings(ids, env) {
   }
 }
 
-// Filter a match response: hidden matches are dropped from the day list, and any "stream"
-// field is removed (list and match_info). Any parse problem returns the body untouched.
-async function applyMatchSettings(kind, body, pathId, env) {
+// Filter / annotate a match response. Upstream "stream" fields are always dropped first; with
+// withStreams the dashboard's stream is attached (unless the match is finished).
+// Any parse problem returns the body untouched.
+async function applyMatchSettings(kind, body, pathId, withStreams, env) {
   let doc;
   try { doc = JSON.parse(new TextDecoder().decode(body)); } catch { return { body, state: "unparsed" }; }
   if (!doc || typeof doc !== "object") return { body, state: "unparsed" };
@@ -416,18 +456,30 @@ async function applyMatchSettings(kind, body, pathId, env) {
   if (kind === "matches_date_get") {
     if (!Array.isArray(doc.data)) return { body, state: "unparsed" };
     for (const m of doc.data) if (m && typeof m === "object") delete m.stream;
-    const { map, state } = await loadSettings(doc.data.map((m) => String(m && m.match_id != null ? m.match_id : "")), env);
-    // Supabase off/unavailable: everything is shown (state tells the caller not to cache long)
-    if (map) doc.data = doc.data.filter((m) => { const s = map.get(String(m && m.match_id)); return !(s && !s.visible); });
+    const { map, state } = await loadSettings(doc.data.map((m) => String(m && m.match_id != null ? m.match_id : "")), withStreams, env);
+    // Supabase off/unavailable: everything is shown, no streams (state tells the caller not to cache long)
+    if (map) {
+      doc.data = doc.data
+        .filter((m) => { const s = map.get(String(m && m.match_id)); return !(s && !s.visible); })
+        .map((m) => {
+          const s = map.get(String(m && m.match_id));
+          if (s && s.stream && m && typeof m === "object" && !isFinished(m)) m.stream = s.stream;
+          return m;
+        });
+    }
     return { body: JSON.stringify(doc), state };
   }
 
-  // match_info: needs no settings (hidden matches stay reachable by id)
+  // match_info (hidden matches stay reachable by id)
   if (!doc.data || typeof doc.data !== "object" || Array.isArray(doc.data) || !MATCH_ID_RE.test(pathId)) {
     return { body, state: "unparsed" };
   }
   delete doc.data.stream;
-  return { body: JSON.stringify(doc), state: "ok" };
+  if (!withStreams) return { body: JSON.stringify(doc), state: "ok" };
+  const { map, state } = await loadSettings([pathId], true, env);
+  const s = map && map.get(pathId);
+  if (s && s.stream && !isFinished(doc.data)) doc.data.stream = s.stream;
+  return { body: JSON.stringify(doc), state };
 }
 
 function corsHeaders(origin) {

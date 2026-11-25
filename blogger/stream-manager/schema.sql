@@ -51,8 +51,9 @@ create trigger match_settings_touch before insert or update on public.match_sett
 -- Without these, every request fails with "permission denied for table match_settings"
 -- (42501) before RLS is even checked. RLS below still decides which rows/actions pass.
 grant usage on schema public to anon, authenticated;
--- anon may read only the show/hide columns (the Worker); channel / r2_slug stay private.
-grant select (match_id, is_visible) on public.match_settings to anon;
+-- anon (the Worker) reads the show/hide columns and the stream columns. The Worker attaches
+-- streams only for its STREAM_ORIGINS (px-league.site, www.px-league.site, tariq-live.blogspot.com).
+grant select (match_id, is_visible, channel, r2_slug) on public.match_settings to anon;
 grant select on public.match_settings to authenticated;
 grant insert, update, delete on public.match_settings to authenticated;
 revoke all on public.stream_admins from anon, authenticated;   -- read only via is_stream_admin()
