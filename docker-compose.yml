@@ -64,6 +64,14 @@ services:
       - R2_NATIVE_WINDOW_SECONDS=${R2_NATIVE_WINDOW_SECONDS:-7200}
       # true while players older than the secret-path player may still be open; then false
       - R2_LEGACY_PLAYLIST=${R2_LEGACY_PLAYLIST:-true}
+      # AES-128 segment encryption on both delivery paths (off | on; needs HLS_KEY_SECRET)
+      - HLS_ENCRYPTION=${HLS_ENCRYPTION:-off}
+      - HLS_KEY_SECRET=${HLS_KEY_SECRET:-}
+      - HLS_KEY_ROTATE_SECONDS=${HLS_KEY_ROTATE_SECONDS:-300}
+      # true while players older than Phase 3 may still be open; then false (strict)
+      - HLS_KEY_LEGACY=${HLS_KEY_LEGACY:-true}
+      # on = native iOS HLS (no MediaSource) gets keys via a ticket in its R2 playlist
+      - HLS_NATIVE_KEYS=${HLS_NATIVE_KEYS:-on}
       - MEDIAMTX_RTMP_HOST=mediamtx
       - MEDIAMTX_RTMP_PORT=1935
       - R2_ACCOUNT_ID=${R2_ACCOUNT_ID:-}

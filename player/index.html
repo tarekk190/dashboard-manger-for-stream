@@ -532,7 +532,51 @@
             };
         }
 
+        // hls.js default loader (config.loader: fragments and AES-128 keys) that answers key
+        // requests from the page instead of the network: hooks.isKey(url) picks them,
+        // hooks.resolveKey(url) returns a Promise of the 16 key bytes (memory first, key server
+        // as fallback). context.url is left untouched: hls.js matches the answer to its key
+        // cache by that URL. Everything else goes to the normal loader.
+        function keyLoaderClass(Base, hooks) {
+            return class extends Base {
+                load(context, config, callbacks) {
+                    if (!context || !context.keyInfo || !hooks.isKey(context.url)) {
+                        return super.load(context, config, callbacks);
+                    }
+                    var self = this;
+                    var clock = typeof performance !== 'undefined' ? performance : Date;
+                    var stats = this.stats || (this.stats = {});
+                    stats.aborted = false;
+                    stats.loaded = stats.total = stats.retry = stats.chunkCount = stats.bwEstimate = 0;
+                    stats.loading = { start: clock.now(), first: 0, end: 0 };
+                    stats.parsing = { start: 0, end: 0 };
+                    stats.buffering = { start: 0, first: 0, end: 0 };
+                    this.context = context;
+                    this.callbacks = callbacks;
+                    var settled = false;
+                    Promise.resolve().then(function () { return hooks.resolveKey(context.url); }).then(function (bytes) {
+                        if (settled || stats.aborted || !self.callbacks) return;
+                        if (!bytes || bytes.byteLength !== 16) throw new Error('invalid key');
+                        settled = true;
+                        stats.loading.first = stats.loading.end = clock.now();
+                        stats.loaded = stats.total = 16;
+                        callbacks.onSuccess({ url: context.url, data: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + 16) }, stats, context, null);
+                    }).catch(function (err) {
+                        if (settled || stats.aborted || !self.callbacks) return;
+                        settled = true;
+                        stats.loading.end = clock.now();
+                        callbacks.onError({ code: (err && err.status) || 0, text: String((err && err.message) || err) }, context, null, stats);
+                    });
+                }
+                abort() {
+                    if (this.stats) this.stats.aborted = true;
+                    super.abort();
+                }
+            };
+        }
+
         root.PxlRetry = {
+            keyLoaderClass: keyLoaderClass,
             ENDED_MARKER: ENDED_MARKER,
             HD_MARKER: HD_MARKER,
             ENDED_HTTP_CODE: ENDED_HTTP_CODE,
@@ -623,6 +667,79 @@
         let windowKeyTimer = null;
         let windowKeyFailures = 0;
 
+        // ------------------------------------------------------------------
+        // AES-128 segment keys (backend HLS_ENCRYPTION=on). /api/r2, /api/stream and /api/token
+        // carry hlsKeys = { path, keys: { idx: base64 }, token? }: the keys of the current key
+        // period and its neighbours, so hls.js normally decrypts without any key request. The key
+        // server (/api/hls-key/...) is only the fallback; it needs the key token (R2) or the
+        // viewer token (origin). Native HLS fetches keys itself (ticket or cookie, see backend).
+        // ------------------------------------------------------------------
+        const HLS_KEY_PATH_RE = /^\/api\/hls-key\/[ro]\/[A-Za-z0-9_-]+\/\d{1,12}$/;
+        const hlsKeyStore = new Map();     // '/api/hls-key/{r|o}/{id}/{idx}' -> Uint8Array(16)
+        let hlsKeyToken = null;
+        let hlsKeyRefresh = null;
+
+        function addHlsKeys(info) {
+            const k = info && info.hlsKeys;
+            if (!k || typeof k.path !== 'string' || !/^\/api\/hls-key\/[ro]\/[A-Za-z0-9_-]+\/$/.test(k.path) || !k.keys) return;
+            for (const [idx, b64] of Object.entries(k.keys)) {
+                try {
+                    const bin = atob(String(b64));
+                    if (!/^\d{1,12}$/.test(idx) || bin.length !== 16) continue;
+                    hlsKeyStore.delete(k.path + idx);   // re-insert: newest last
+                    hlsKeyStore.set(k.path + idx, Uint8Array.from(bin, c => c.charCodeAt(0)));
+                } catch (e) { /* skipped */ }
+            }
+            if (typeof k.token === 'string') hlsKeyToken = k.token;
+            while (hlsKeyStore.size > 24) hlsKeyStore.delete(hlsKeyStore.keys().next().value);
+        }
+
+        function hlsKeyPath(url) {
+            try {
+                const p = new URL(url, window.location.href).pathname;
+                return HLS_KEY_PATH_RE.test(p) ? p : '';
+            } catch (e) {
+                return '';
+            }
+        }
+
+        async function fetchHlsKey(keyPath) {
+            const headers = {};
+            const credential = hlsKeyToken || viewerToken;
+            if (credential) headers.Authorization = `Bearer ${credential}`;
+            const ctrl = new AbortController();
+            const timer = setTimeout(() => ctrl.abort(), 10000);
+            try {
+                // Same origin as the player, whatever host the playlist named
+                const res = await fetch(keyPath, { headers, credentials: 'same-origin', cache: 'no-store', signal: ctrl.signal });
+                if (!res.ok) throw Object.assign(new Error(`key HTTP ${res.status}`), { status: res.status });
+                return new Uint8Array(await res.arrayBuffer());
+            } finally {
+                clearTimeout(timer);
+            }
+        }
+
+        async function resolveHlsKey(url) {
+            if (guardTripped) throw new Error('devtools guard');
+            const keyPath = hlsKeyPath(url);
+            let key = hlsKeyStore.get(keyPath);
+            if (key) return key;
+            // Not delivered inline (renewal late, tab slept): refresh the inline keys once (shared
+            // by parallel misses), then ask the key server after a little jitter
+            if (!hlsKeyRefresh) {
+                hlsKeyRefresh = (r2SlugParam ? renewWindowKey() : renewViewerToken())
+                    .catch(() => {})
+                    .finally(() => { hlsKeyRefresh = null; });
+            }
+            await hlsKeyRefresh;
+            key = hlsKeyStore.get(keyPath);
+            if (key) return key;
+            await new Promise(resolve => setTimeout(resolve, Math.random() * 1500));
+            key = await fetchHlsKey(keyPath);
+            hlsKeyStore.set(keyPath, key);
+            return key;
+        }
+
         async function fetchR2Info(slug) {
             if (guardTripped) throw new Error('devtools guard');
             const q = useNativeHls ? '?native=1' : '';
@@ -630,6 +747,7 @@
         }
 
         function setWindowKey(info) {
+            addHlsKeys(info);
             if (!info || typeof info.key !== 'string' || !/^[A-Za-z0-9_-]{8,64}$/.test(info.key)) return;
             const ttl = Math.max(60, Number(info.expiresIn) || 0);
             windowKey = info.key;
@@ -812,6 +930,8 @@
             viewerSession = null;
             viewerToken = null;
             windowKey = '';
+            hlsKeyStore.clear();
+            hlsKeyToken = null;
             windowKeyExp = 0;
             started = false;
             if (session) {
@@ -863,6 +983,7 @@
             if (!res.ok) throw new Error(res.status === 404 ? 'القناة غير موجودة' : `تعذّر الحصول على رمز المشاهدة (HTTP ${res.status})`);
             const data = await res.json();
             viewerToken = data.token;
+            addHlsKeys(data);
             scheduleTokenRenewal(data.expiresIn || 60);
         }
 
@@ -878,6 +999,7 @@
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const data = await res.json();
                 viewerToken = data.token;
+                addHlsKeys(data);
                 tokenFailures = 0;
                 scheduleTokenRenewal(data.expiresIn || 60);
             } catch (e) {
@@ -1172,6 +1294,11 @@
                     maxMaxBufferLength: 60,
                     backBufferLength: 30,
                     liveDurationInfinity: true,
+                    // Fragments + AES-128 keys: keys come from hlsKeyStore (inline from the API), see resolveHlsKey
+                    loader: PxlRetry.keyLoaderClass(Hls.DefaultConfig.loader, {
+                        isKey: (u) => Boolean(hlsKeyPath(u)),
+                        resolveKey: resolveHlsKey
+                    }),
                     // Cross-origin (R2/CDN) playlists: a per-second query value so the browser never reuses a
                     // playlist it cached. All viewers share the same URL within a second, so edge caching is
                     // unchanged. Segments are not touched. The loader also reads the HD marker and turns the

@@ -41,7 +41,7 @@ function createSessionTracker({
                 ua: String(info.ua || '').slice(0, 160),
                 networks: new Map(),    // network -> calls from it
                 calls: [],              // timestamps of the last minute
-                totals: { stream: 0, key: 0, token: 0 },
+                totals: { stream: 0, key: 0, token: 0, hlskey: 0 },
                 channels: new Set(),
                 limited: null           // reason once a limit was hit
             };

@@ -34,6 +34,7 @@ const {
 } = require('@aws-sdk/client-s3');
 const viewerSecurity = require('./lib/viewer-security');
 const { createSessionTracker } = require('./lib/session-tracker');
+const { createHlsCrypto, createIndexMap } = require('./lib/hls-crypto');
 
 // ------------------------------------------------------------------------------
 // Configuration & Environment Variables
@@ -215,6 +216,34 @@ function windowKey(slug, kind, windowIndex) {
 function currentWindow(kind, nowMs = Date.now()) {
     return Math.floor(nowMs / 1000 / R2_WINDOW_SECONDS[kind]);
 }
+
+// ------------------------------------------------------------------------------
+// Segment encryption (Phase 3, lib/hls-crypto.js). HLS_ENCRYPTION=on encrypts every segment
+// with AES-128 on both delivery paths: the R2 uploader encrypts before upload (no plain copy
+// in R2), and for the origin path the backend writes encrypted copies (seg_N.k{idx}.ts) plus
+// index.e.m3u8 next to ffmpeg's files, which nginx serves in place of the plain playlist.
+// Keys rotate every HLS_KEY_ROTATE_SECONDS and come from GET /api/hls-key/{r|o}/{id}/{idx}
+// (per-viewer credential) or inline with /api/r2 and /api/stream (no extra request).
+//   HLS_KEY_LEGACY=true   rollout: the key server also serves player pages without a key
+//                         credential (players loaded before Phase 3) and origin segments may
+//                         still be fetched unencrypted. Set false once old players are gone.
+//   HLS_NATIVE_KEYS=on    native iOS HLS (no MediaSource) gets keys through a ticket in its
+//                         R2 playlist; off = encrypted streams do not play there.
+// ------------------------------------------------------------------------------
+const HLS_ENCRYPTION = String(process.env.HLS_ENCRYPTION || 'off').trim().toLowerCase() === 'on';
+const HLS_KEY_SECRET = String(process.env.HLS_KEY_SECRET || '');
+const HLS_KEY_LEGACY = process.env.HLS_KEY_LEGACY !== 'false';
+const HLS_NATIVE_KEYS = String(process.env.HLS_NATIVE_KEYS || 'on').trim().toLowerCase() !== 'off';
+const HLS_KEY_ROTATE_SECONDS = clampSeconds('HLS_KEY_ROTATE_SECONDS', 300, 60, 3600);
+if (HLS_ENCRYPTION && HLS_KEY_SECRET.trim().length < 32) {
+    fatal('HLS_ENCRYPTION=on needs HLS_KEY_SECRET (at least 32 characters, generate with: openssl rand -hex 48).');
+}
+if (HLS_KEY_SECRET && [ADMIN_JWT_SECRET, VIEWER_JWT_SECRET, STREAM_PATH_SECRET].includes(HLS_KEY_SECRET)) {
+    fatal('HLS_KEY_SECRET must differ from ADMIN_JWT_SECRET, VIEWER_JWT_SECRET and STREAM_PATH_SECRET.');
+}
+const hlsCrypto = HLS_ENCRYPTION ? createHlsCrypto({ secret: HLS_KEY_SECRET, rotateSeconds: HLS_KEY_ROTATE_SECONDS }) : null;
+// Key index of every segment, fixed when the segment is first seen (see createIndexMap)
+const segmentKeyIndex = hlsCrypto ? createIndexMap({ indexNow: () => hlsCrypto.currentIndex() }) : null;
 
 // Cross-origin access for the public viewer API only (/api/stream, /api/token).
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -1572,9 +1601,35 @@ class R2PipelineManager {
     segmentKey(r2Prefix, fileName) {
         // Camouflage segment extension: seg_001.ts -> seg_001.js; with STREAM_PATH_SECRET the
         // name also gets an unguessable suffix: seg_001-{h}.js (see "Secret R2 paths")
+        // Encrypted segments (HLS_ENCRYPTION) get other names that include their key index, so an
+        // encrypted upload never replaces a plain or differently keyed copy that Cloudflare still
+        // caches (segments are immutable for an hour).
         const base = fileName.replace(/\.ts$/i, '');
+        if (hlsCrypto) {
+            const idx = this.segmentIndex(r2Prefix, base);
+            if (!STREAM_PATH_SECRET) return `${r2Prefix}/${base}.k${idx}.js`;
+            return `${r2Prefix}/${base}-${pathHmac(`pxl-seg|2|${r2Prefix}|${base}|${idx}`, 16)}.js`;
+        }
         if (!STREAM_PATH_SECRET) return `${r2Prefix}/${base}.js`;
         return `${r2Prefix}/${base}-${pathHmac(`pxl-seg|1|${r2Prefix}|${base}`, 16)}.js`;
+    }
+
+    // Key index of one segment (fixed on first sight); hd/{slug} and hd/{slug}/hd share the
+    // key scope r:{slug}
+    segmentIndex(r2Prefix, base) {
+        return segmentKeyIndex.get(`r|${r2Prefix}|${base}`);
+    }
+
+    static keyScope(r2Prefix) {
+        return `r:${r2Prefix.split('/')[1]}`;
+    }
+
+    // Key URI in R2 playlists: absolute (the playlist lives on the R2 domain), on the edge
+    // domain. Native playlists add the ticket: native HLS cannot send a credential.
+    static keyUri(r2Prefix, idx, native) {
+        const slug = r2Prefix.split('/')[1];
+        const uri = `https://${EDGE_DOMAIN}/api/hls-key/r/${encodeURIComponent(slug)}/${idx}`;
+        return native ? `${uri}?n=${hlsCrypto.nativeTicket(R2PipelineManager.keyScope(r2Prefix), idx)}` : uri;
     }
 
     // R2 keys a playlist update is written to: the legacy public names (R2_PLAYLIST_FILES) and,
@@ -1588,7 +1643,7 @@ class R2PipelineManager {
             for (const kind of ['s', 'n']) {
                 const w = currentWindow(kind);
                 for (const idx of [w, w - 1]) {
-                    targets.push({ key: `${r2Prefix}/w/${windowKey(slug, kind, idx)}/index.html`, type: R2_PLAYLIST_FORMATS.html.type });
+                    targets.push({ key: `${r2Prefix}/w/${windowKey(slug, kind, idx)}/index.html`, type: R2_PLAYLIST_FORMATS.html.type, native: kind === 'n' });
                 }
             }
         }
@@ -1598,6 +1653,9 @@ class R2PipelineManager {
     async processFile(filePath) {
         const ext = path.extname(filePath).toLowerCase();
         if (ext !== '.ts' && ext !== '.m3u8') return;
+        // Encrypted origin copies (seg_N.k{idx}.ts, index.e.m3u8) are never uploaded
+        if (OriginEncryptor.isOwnFile(filePath)) return;
+        if (originEncryptor) originEncryptor.handle(filePath);
 
         const target = this.resolveTarget(filePath);
         if (!target) return;
@@ -1610,10 +1668,13 @@ class R2PipelineManager {
     }
 
     forgetFile(filePath) {
-        if (path.extname(filePath).toLowerCase() !== '.ts') return;
+        if (path.extname(filePath).toLowerCase() !== '.ts' || OriginEncryptor.isOwnFile(filePath)) return;
+        if (originEncryptor) originEncryptor.forget(filePath);
         const target = this.resolveTarget(filePath);
         // A deleted local segment is no longer in any current playlist
-        if (target) this.uploadedSegments.delete(this.segmentKey(target.r2Prefix, target.fileName));
+        if (!target) return;
+        this.uploadedSegments.delete(this.segmentKey(target.r2Prefix, target.fileName));
+        if (segmentKeyIndex) segmentKeyIndex.delete(`r|${target.r2Prefix}|${target.fileName.replace(/\.ts$/i, '')}`);
     }
 
     async handleSegment(filePath, r2Prefix, fileName) {
@@ -1622,13 +1683,21 @@ class R2PipelineManager {
             const stat = await fsp.stat(filePath).catch(() => null);
             if (!stat || stat.size === 0) return;
 
-            await this.uploadObject(
-                r2Key,
-                () => fs.createReadStream(filePath), // fresh stream per attempt
-                stat.size,
-                'application/javascript',
-                SEGMENT_CACHE_CONTROL
-            );
+            if (hlsCrypto) {
+                // Encrypted in memory (segments are ~0.5-2 MB): R2 never holds a plain copy
+                const base = fileName.replace(/\.ts$/i, '');
+                const plain = await fsp.readFile(filePath);
+                const body = hlsCrypto.encryptSegment(plain, R2PipelineManager.keyScope(r2Prefix), this.segmentIndex(r2Prefix, base), base);
+                await this.uploadObject(r2Key, () => body, body.length, 'application/javascript', SEGMENT_CACHE_CONTROL);
+            } else {
+                await this.uploadObject(
+                    r2Key,
+                    () => fs.createReadStream(filePath), // fresh stream per attempt
+                    stat.size,
+                    'application/javascript',
+                    SEGMENT_CACHE_CONTROL
+                );
+            }
             this.uploadedSegments.add(r2Key);
             this.stats.uploadedSegments++;
             this.lastSegmentUploadAt = Date.now();
@@ -1657,7 +1726,21 @@ class R2PipelineManager {
         // Rewrite manifest internal segment links: .ts -> .js. With STREAM_PATH_SECRET every
         // segment line becomes the absolute path of its secret name (/hd/{slug}/seg_N-{h}.js), so
         // it resolves the same from every playlist key (hd/{slug}/w/{key}/ or the legacy name).
-        const rewritten = STREAM_PATH_SECRET
+        // Encrypted (HLS_ENCRYPTION): an EXT-X-KEY tag in front of every segment, plus a second
+        // body for the native playlists, whose key URIs carry the native ticket
+        let nativeBody = null;
+        let rewritten;
+        if (hlsCrypto) {
+            const encrypted = (native) => hlsCrypto.rewritePlaylist(content, {
+                segment: (base, line) => {
+                    const key = this.segmentKey(r2Prefix, path.posix.basename(line.split('?')[0]));
+                    return { uri: STREAM_PATH_SECRET ? `/${key}` : path.posix.basename(key), idx: this.segmentIndex(r2Prefix, base) };
+                },
+                keyUri: (idx) => R2PipelineManager.keyUri(r2Prefix, idx, native)
+            });
+            rewritten = encrypted(false);
+            if (HLS_NATIVE_KEYS) nativeBody = Buffer.from(encrypted(true), 'utf8');
+        } else rewritten = STREAM_PATH_SECRET
             ? content.split(/\r?\n/).map(line => {
                 const s = line.trim();
                 return s && !s.startsWith('#') && /\.ts$/i.test(s) ? `/${this.segmentKey(r2Prefix, path.posix.basename(s))}` : line;
@@ -1667,7 +1750,7 @@ class R2PipelineManager {
         // Keep the newest few versions: when uploads are slower than the segment rate, the newest
         // version always lists a segment still in flight, but a slightly older one is complete.
         const versions = this.pendingPlaylists.get(r2Prefix) || [];
-        versions.push({ version: ++this.playlistVersion, body: Buffer.from(rewritten, 'utf8'), segmentKeys });
+        versions.push({ version: ++this.playlistVersion, body: Buffer.from(rewritten, 'utf8'), nativeBody, segmentKeys });
         if (versions.length > R2_PENDING_PLAYLIST_VERSIONS) versions.splice(0, versions.length - R2_PENDING_PLAYLIST_VERSIONS);
         this.pendingPlaylists.set(r2Prefix, versions);
         await this.flushPlaylist(r2Prefix);
@@ -1698,9 +1781,10 @@ class R2PipelineManager {
 
         this.flushingPlaylists.add(r2Prefix);
         try {
-            const size = ready.body.length;
-            await Promise.all(this.playlistTargets(r2Prefix).map(t => this.uploadObject(
-                t.key, () => ready.body, size, t.type, PLAYLIST_CACHE_CONTROL)));
+            await Promise.all(this.playlistTargets(r2Prefix).map(t => {
+                const body = t.native && ready.nativeBody ? ready.nativeBody : ready.body;
+                return this.uploadObject(t.key, () => body, body.length, t.type, PLAYLIST_CACHE_CONTROL);
+            }));
             this.publishedVersion.set(r2Prefix, ready.version);
             this.lastPlaylistAt.set(r2Prefix, Date.now());
             this.stats.uploadedPlaylists++;
@@ -1836,6 +1920,171 @@ class R2PipelineManager {
         if (this.pruneInterval) clearInterval(this.pruneInterval);
         if (this.hdExpiryInterval) clearInterval(this.hdExpiryInterval);
     }
+}
+
+// ------------------------------------------------------------------------------
+// Origin path encryption (HLS_ENCRYPTION). For /hls/live/{dir}/ the backend writes, next to
+// ffmpeg's files:
+//   seg_N.k{idx}.ts  the encrypted copy of seg_N.ts (key index in the name: a re-encryption
+//                    after a backend restart never replaces a copy nginx/Cloudflare cached)
+//   index.e.m3u8     ffmpeg's index.m3u8 with EXT-X-KEY tags and the encrypted names; written
+//                    only once every segment it lists has its encrypted copy
+// nginx serves index.e.m3u8 in place of index.m3u8 whenever it exists (try_files in the
+// internal origin), so the player URLs do not change. Fed by the R2 pipeline's watcher.
+// ------------------------------------------------------------------------------
+const ORIGIN_ENC_SEGMENT_RE = /\.k\d+\.ts$/i;
+const ORIGIN_ENC_PLAYLIST = 'index.e.m3u8';
+
+class OriginEncryptor {
+    static isOwnFile(filePath) {
+        const name = path.basename(filePath);
+        return name === ORIGIN_ENC_PLAYLIST || ORIGIN_ENC_SEGMENT_RE.test(name);
+    }
+
+    constructor() {
+        this.done = new Set();        // encrypted copies written (absolute paths)
+        this.inflight = new Map();    // encrypted path -> promise
+        this.playlists = new Map();   // dir path -> { running, again }
+        this.stats = { segments: 0, playlists: 0, failures: 0 };
+    }
+
+    // /hls/live/{dir}/{name} (or /hls/{dir}/{name}) -> key scope and key URI base of its channel
+    target(filePath) {
+        const parts = path.relative(HLS_DIR, filePath).replace(/\\/g, '/').split('/');
+        let dir;
+        if (parts.length === 3 && parts[0] === 'live') dir = parts[1];
+        else if (parts.length === 2) dir = parts[0];
+        else return null;
+        const streamDir = dir.toLowerCase();
+        if (!CHANNEL_RE.test(streamDir)) return null;
+        const channel = streamDir.endsWith(HD_VARIANT_SUFFIX) ? streamDir.slice(0, -HD_VARIANT_SUFFIX.length) : streamDir;
+        return {
+            dirPath: path.dirname(filePath),
+            name: parts[parts.length - 1],
+            streamDir,
+            scope: `o:${channel}`,
+            keyBase: `/api/hls-key/o/${channel}/`
+        };
+    }
+
+    index(t, base) {
+        return segmentKeyIndex.get(`o|${t.streamDir}|${base}`);
+    }
+
+    handle(filePath) {
+        const t = this.target(filePath);
+        if (!t) return;
+        if (/\.ts$/i.test(t.name)) {
+            this.ensureSegment(t, t.name).catch(err => this.fail(`segment ${t.streamDir}/${t.name}`, err));
+        } else if (t.name === 'index.m3u8') {
+            this.schedulePlaylist(t);
+        }
+    }
+
+    ensureSegment(t, name) {
+        const base = name.replace(/\.ts$/i, '');
+        const idx = this.index(t, base);
+        const out = path.join(t.dirPath, `${base}.k${idx}.ts`);
+        if (this.done.has(out)) return Promise.resolve();
+        if (this.inflight.has(out)) return this.inflight.get(out);
+        const p = (async () => {
+            const plain = await fsp.readFile(path.join(t.dirPath, name));
+            const tmp = path.join(t.dirPath, `.${base}.k${idx}.ts.tmp`);   // dotfile: not watched
+            await fsp.writeFile(tmp, hlsCrypto.encryptSegment(plain, t.scope, idx, base));
+            await fsp.rename(tmp, out);
+            this.done.add(out);
+            this.stats.segments++;
+        })().finally(() => this.inflight.delete(out));
+        this.inflight.set(out, p);
+        return p;
+    }
+
+    // One playlist rewrite per directory at a time; a change during a rewrite runs it again
+    schedulePlaylist(t) {
+        const state = this.playlists.get(t.dirPath) || { running: false, again: false };
+        this.playlists.set(t.dirPath, state);
+        if (state.running) { state.again = true; return; }
+        state.running = true;
+        (async () => {
+            do {
+                state.again = false;
+                await this.writePlaylist(t).catch(err => this.fail(`playlist ${t.streamDir}`, err));
+            } while (state.again);
+        })().finally(() => { state.running = false; });
+    }
+
+    async writePlaylist(t) {
+        let content;
+        try {
+            content = await fsp.readFile(path.join(t.dirPath, 'index.m3u8'), 'utf8');
+        } catch {
+            return; // rotated away
+        }
+        if (!content.includes('#EXTM3U')) return;
+        const segments = content.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#') && /\.ts$/i.test(l.split('?')[0]));
+        // Every listed segment needs its encrypted copy first (one that is already gone fails
+        // this version; the next playlist, 2 s later, no longer lists it)
+        await Promise.all(segments.map(l => this.ensureSegment(t, path.posix.basename(l.split('?')[0]))));
+        const body = hlsCrypto.rewritePlaylist(content, {
+            segment: (base) => {
+                const idx = this.index(t, base);
+                return { uri: `${base}.k${idx}.ts`, idx };
+            },
+            keyUri: (idx) => `${t.keyBase}${idx}`
+        });
+        const tmp = path.join(t.dirPath, `.${ORIGIN_ENC_PLAYLIST}.tmp`);
+        await fsp.writeFile(tmp, body);
+        await fsp.rename(tmp, path.join(t.dirPath, ORIGIN_ENC_PLAYLIST));
+        this.stats.playlists++;
+    }
+
+    // ffmpeg deleted seg_N.ts: delete its encrypted copy too
+    forget(filePath) {
+        const t = this.target(filePath);
+        if (!t) return;
+        const base = t.name.replace(/\.ts$/i, '');
+        const id = `o|${t.streamDir}|${base}`;
+        const idx = segmentKeyIndex.peek(id);
+        if (idx === undefined) return;
+        segmentKeyIndex.delete(id);
+        const out = path.join(t.dirPath, `${base}.k${idx}.ts`);
+        this.done.delete(out);
+        fsp.unlink(out).catch(() => { /* already gone (janitor, packager restart) */ });
+    }
+
+    fail(what, err) {
+        this.stats.failures++;
+        if (this.stats.failures <= 20 || this.stats.failures % 100 === 0) {
+            console.error(`[HLS-ENC] ${what}: ${err.message} (${this.stats.failures} failures so far)`);
+        }
+    }
+}
+
+// Encryption off: remove encrypted copies a previous run left behind, otherwise nginx would
+// keep serving a stale index.e.m3u8 instead of ffmpeg's live playlist
+async function removeEncryptedLeftovers(dir = HLS_DIR) {
+    let removed = 0;
+    let entries;
+    try {
+        entries = await fsp.readdir(dir, { withFileTypes: true });
+    } catch {
+        return 0;
+    }
+    for (const entry of entries) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) removed += await removeEncryptedLeftovers(full);
+        else if (OriginEncryptor.isOwnFile(full)) {
+            await fsp.unlink(full).then(() => { removed++; }, () => {});
+        }
+    }
+    return removed;
+}
+
+const originEncryptor = hlsCrypto ? new OriginEncryptor() : null;
+if (!hlsCrypto) {
+    removeEncryptedLeftovers().then(n => {
+        if (n) console.log(`[HLS-ENC] Encryption is off: removed ${n} encrypted file(s) left from an earlier run.`);
+    });
 }
 
 const r2Pipeline = new R2PipelineManager();
@@ -2757,7 +3006,15 @@ const VIEWER_PAGE_ORIGINS = new Set(
 function requireViewerPage(req, res, next) {
     if (ALLOWED_ORIGINS.includes('*')) return next();   // non-production only (refused at startup otherwise)
     if (req.method === 'OPTIONS') return next();         // CORS preflight, answered by viewerCors
+    if (!isViewerPageRequest(req)) {
+        res.set('Cache-Control', 'no-store');
+        return res.status(403).json({ error: 'Forbidden' });
+    }
+    return next();
+}
 
+function isViewerPageRequest(req) {
+    if (ALLOWED_ORIGINS.includes('*')) return true;
     const fetchSite = String(req.headers['sec-fetch-site'] || '');
     const fetchMode = String(req.headers['sec-fetch-mode'] || '');
     const rawOrigin = req.headers.origin && req.headers.origin !== 'null' ? req.headers.origin : req.headers.referer;
@@ -2766,12 +3023,8 @@ function requireViewerPage(req, res, next) {
     // serves its server_name, so this is the edge domain even if EDGE_DOMAIN is out of date)
     const sameHost = normalizeOrigin(`https://${String(req.headers.host || '').split(':')[0]}`);
 
-    if (fetchSite === 'none' || fetchMode === 'navigate' || !origin ||
-        !(VIEWER_PAGE_ORIGINS.has(origin) || (sameHost && origin === sameHost))) {
-        res.set('Cache-Control', 'no-store');
-        return res.status(403).json({ error: 'Forbidden' });
-    }
-    return next();
+    return !(fetchSite === 'none' || fetchMode === 'navigate' || !origin ||
+        !(VIEWER_PAGE_ORIGINS.has(origin) || (sameHost && origin === sameHost)));
 }
 
 // Viewer token cookie for playlist auth (needed by native Safari HLS, which reloads the same
@@ -2790,6 +3043,17 @@ function setViewerCookie(res, channelKey, token) {
         path: `/live/${channelKey}/`,
         maxAge: TOKEN_EXPIRATION_SECONDS * 1000
     });
+    // Encrypted streams: the same token for native HLS key requests of this channel
+    if (hlsCrypto) {
+        res.cookie(VIEWER_COOKIE, token, {
+            httpOnly: true,
+            secure: true,
+            sameSite: 'none',
+            partitioned: true,
+            path: `/api/hls-key/o/${String(channelKey).toLowerCase()}/`,
+            maxAge: TOKEN_EXPIRATION_SECONDS * 1000
+        });
+    }
 }
 
 function cookieToken(req) {
@@ -2972,8 +3236,93 @@ app.get('/api/stream', requireViewerPage, requireViewerSession, (req, res) => {
         channel: channel.streamKey,
         token,
         expiresIn: TOKEN_EXPIRATION_SECONDS,
-        streamUrl: `https://${EDGE_DOMAIN}/live/${channel.streamKey}/index.css?token=${token}`
+        streamUrl: `https://${EDGE_DOMAIN}/live/${channel.streamKey}/index.css?token=${token}`,
+        ...originHlsKeys(channel.streamKey)
     });
+});
+
+// ------------------------------------------------------------------------------
+// HLS key server (Phase 3, HLS_ENCRYPTION=on)
+//
+// Normal case: no key request at all. /api/r2 and /api/stream (and every /api/token renewal)
+// carry the keys of the current key period, the one before and the two after ("hlsKeys"); the
+// player feeds them to hls.js from memory. The key server below is the fallback:
+//   GET /api/hls-key/r/{slug}/{idx}       R2 path    (Bearer key token from /api/r2)
+//   GET /api/hls-key/o/{channel}/{idx}    origin     (Bearer viewer token, or its cookie)
+// Every credential is bound to the viewer's session (Turnstile, UA + network, revocable, per-
+// session limits), and only keys near "now" are released (no harvesting ahead of time).
+// Native iOS HLS cannot send a credential: its R2 playlists carry a ticket (?n=) instead.
+// ------------------------------------------------------------------------------
+const HLS_KEY_TOKEN_SECONDS = 2 * R2_WINDOW_SECONDS.s + 60;
+
+function r2HlsKeys(slug, req, session) {
+    if (!hlsCrypto) return {};
+    const scope = `r:${slug}`;
+    const token = jwt.sign(
+        { role: 'hk', scope, sid: session.sid, sx: session.exp, ep: session.ep || 0, ...bindingClaims(req) },
+        VIEWER_JWT_SECRET,
+        { algorithm: 'HS256', expiresIn: HLS_KEY_TOKEN_SECONDS }
+    );
+    return { hlsKeys: { path: `/api/hls-key/r/${encodeURIComponent(slug)}/`, keys: hlsCrypto.inlineKeys(scope), token } };
+}
+
+function originHlsKeys(channelKey) {
+    if (!hlsCrypto) return {};
+    const channel = String(channelKey).toLowerCase();
+    return { hlsKeys: { path: `/api/hls-key/o/${channel}/`, keys: hlsCrypto.inlineKeys(`o:${channel}`) } };
+}
+
+function sendHlsKey(res, key) {
+    res.set({
+        'Content-Type': 'application/octet-stream',
+        'Cache-Control': 'no-store, private',
+        'X-Content-Type-Options': 'nosniff',
+        'Cross-Origin-Resource-Policy': 'same-origin'
+    });
+    return res.send(Buffer.from(key));
+}
+
+app.get('/api/hls-key/:type/:id/:idx', (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    const { type, id } = req.params;
+    const idx = /^\d{1,12}$/.test(req.params.idx) ? Number(req.params.idx) : NaN;
+    if (!hlsCrypto || (type !== 'r' && type !== 'o') || !R2_SLUG_RE.test(id) || !hlsCrypto.indexAllowed(idx)) {
+        return res.status(404).json({ error: 'Not found' });
+    }
+    const channel = type === 'r' ? channelManager.getByR2Slug(id) : channelManager.getByStreamKey(id.toLowerCase());
+    if (!channel) return res.status(404).json({ error: 'Not found' });
+    const streamKey = String(channel.streamKey).toLowerCase();
+    const scope = type === 'r' ? `r:${channel.r2_slug}` : `o:${streamKey}`;
+    const ua = clientUserAgent(req);
+
+    // 1. Per-viewer credential: key token (R2), viewer token (origin, or R2 of the same channel)
+    const token = bearerToken(req) || (type === 'o' ? cookieToken(req) : null);
+    if (token) {
+        let decoded = null;
+        try {
+            decoded = jwt.verify(token, VIEWER_JWT_SECRET, { algorithms: JWT_ALGORITHMS });
+        } catch { /* expired or forged: try the other ways */ }
+        const fits = decoded && (
+            (decoded.role === 'hk' && decoded.scope === scope) ||
+            (decoded.role === 'viewer' && typeof decoded.channel === 'string' && decoded.channel.toLowerCase() === streamKey));
+        if (fits && bindingMatches(decoded, req) && viewerTokenSessionOk(decoded, Math.floor(Date.now() / 1000))) {
+            if (trackSessionCall(req, decoded.sid, decoded.sx, 'hlskey', streamKey)) {
+                return res.status(401).json({ error: 'session', reason: 'session_limited' });
+            }
+            return sendHlsKey(res, hlsCrypto.deriveKey(scope, idx));
+        }
+    }
+    // 2. Native HLS ticket from a native R2 playlist (Apple user agents only)
+    if (type === 'r' && HLS_NATIVE_KEYS && req.query.n &&
+        (isNativeHlsAgent(ua) || viewerSecurity.mayUseNativeHls(ua)) &&
+        hlsCrypto.verifyNativeTicket(scope, idx, req.query.n)) {
+        return sendHlsKey(res, hlsCrypto.deriveKey(scope, idx));
+    }
+    // 3. Rollout (HLS_KEY_LEGACY): players loaded before Phase 3 send no credential
+    if (HLS_KEY_LEGACY && (isNativeHlsAgent(ua) || isViewerPageRequest(req))) {
+        return sendHlsKey(res, hlsCrypto.deriveKey(scope, idx));
+    }
+    return res.status(401).json({ error: 'key credential required' });
 });
 
 // R2 source for the player (?r2={slug}): the playlist base URL of a known channel.
@@ -2998,7 +3347,7 @@ app.get('/api/r2/:slug', requireViewerPage, requireViewerSession, (req, res) => 
         return res.status(404).json({ error: 'Not found' });
     }
     const base = `https://${R2_CUSTOM_DOMAIN}/hd/${encodeURIComponent(channel.r2_slug)}/`;
-    if (!STREAM_PATH_SECRET) return res.json({ base });
+    if (!STREAM_PATH_SECRET) return res.json({ base, ...r2HlsKeys(channel.r2_slug, req, req.viewerSession) });
     // The long-lived native key only for Apple browsers that may really lack hls.js; anyone
     // else asking for it gets the short hls.js key
     const kind = req.query.native === '1' && viewerSecurity.mayUseNativeHls(clientUserAgent(req)) ? 'n' : 's';
@@ -3010,7 +3359,8 @@ app.get('/api/r2/:slug', requireViewerPage, requireViewerSession, (req, res) => 
         base,
         key: windowKey(channel.r2_slug, kind, w),
         expiresIn: Math.floor((w + 2) * len - nowS),
-        renewIn: Math.max(30, Math.floor(nextStart - nowS + Math.random() * len * 0.7))
+        renewIn: Math.max(30, Math.floor(nextStart - nowS + Math.random() * len * 0.7)),
+        ...r2HlsKeys(channel.r2_slug, req, req.viewerSession)
     });
 });
 
@@ -3050,7 +3400,7 @@ app.post('/api/token', requireViewerPage, (req, res) => {
     const renewed = signViewerToken(decoded.channel, req, { sid: decoded.sid, exp: decoded.sx, ep: decoded.ep });
     setViewerCookie(res, decoded.channel, renewed);
     res.set('Cache-Control', 'no-store');
-    res.json({ token: renewed, expiresIn: TOKEN_EXPIRATION_SECONDS });
+    res.json({ token: renewed, expiresIn: TOKEN_EXPIRATION_SECONDS, ...originHlsKeys(decoded.channel) });
 });
 
 // Internal Nginx auth_request endpoint. 200 = allow, 401 = missing/invalid/expired, 403 = channel mismatch
@@ -3105,6 +3455,12 @@ app.head('/auth', handleEdgeAuth);
 // unknown without a playlist, which needs a viewer token.
 function handleSegmentAuth(req, res) {
     if (!ENABLE_AUTH_ON_PLAYLISTS) return res.status(200).send('OK');
+    // Encrypted streams after the rollout: the plain seg_N.ts next to its encrypted copy is
+    // never handed out (playlists list only seg_N.k{idx}). nginx sends the name (X-Seg-Name).
+    const segName = req.headers['x-seg-name'];
+    if (hlsCrypto && !HLS_KEY_LEGACY && segName !== undefined && !/\.k\d+$/i.test(String(segName))) {
+        return res.status(403).send('Forbidden');
+    }
     const channel = String(req.headers['x-seg-channel'] || '').toLowerCase();
     const ok = CHANNEL_RE.test(channel) && viewerSecurity.verifySegmentQuery(
         SEGMENT_SIGN_KEY, channel,

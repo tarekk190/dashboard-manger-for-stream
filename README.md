@@ -142,6 +142,11 @@ Optional:
 | `SESSION_MAX_NETWORKS` | `2` | Networks (/24 or /48) one viewer session may be used from (0 = no limit). With `ua+net` binding a session only works on its own network anyway |
 | `SESSION_MAX_CALLS_PER_MINUTE` | `20` | `/api/stream` + `/api/r2` + `/api/token` calls per session and minute (0 = no limit; a normal player makes 2-4). Over a limit the session is revoked and shows as "limited" in the admin panel |
 | `MAX_SESSIONS_PER_NETWORK` | `0` | New sessions one network may open per 10 minutes (0 = off). Mobile carriers put many viewers behind one address, so read the "top networks" in the admin panel before setting it |
+| `HLS_ENCRYPTION` | `off` | `on` = AES-128 segment encryption on both delivery paths (needs `HLS_KEY_SECRET`). See "Segment encryption" in section 10 |
+| `HLS_KEY_SECRET` | empty | Key derivation secret, `openssl rand -hex 48`; must differ from the JWT secrets and `STREAM_PATH_SECRET`. Backend only (not the data Worker). Rotating it changes every key at once |
+| `HLS_KEY_ROTATE_SECONDS` | `300` | Key period (60-3600). Players get the keys of the current period, the one before and the two after |
+| `HLS_KEY_LEGACY` | `true` | Rollout: keys also for player pages without a key credential (players loaded before Phase 3), plain origin segments still reachable. Set `false` once those players are gone |
+| `HLS_NATIVE_KEYS` | `on` | Native iOS HLS (no MediaSource) gets keys via a ticket in its R2 playlist. `off` = encrypted streams do not play there |
 | `PLAYER_DEVTOOLS_GUARD` | `soft` | `soft`: while DevTools is open the player stops, clears its source and revokes its session; it restarts with a new session once DevTools is closed. `off`: no guard. A deterrent only. |
 | `ALLOWED_ORIGINS` | empty | Comma-separated origins allowed to call `/api/stream`, `/api/token` and `/api/r2/:slug` cross-origin. These endpoints also refuse (403) any request whose `Origin`/`Referer` is neither `https://EDGE_DOMAIN` (the bundled player) nor one of these origins. `*` is refused when `NODE_ENV=production`. |
 | `ADMIN_ALLOWED_ORIGINS` | empty | Extra origins allowed to call the admin API (`/api/admin`, `/api/channels`, `/api/stats`, `/api/config`) from a browser, e.g. an external control panel. Exact origins or `scheme://host:*` for any port (`http://localhost:*,http://127.0.0.1:*`). `*` is refused. No cookies are involved: the panel sends the admin Bearer token. |
@@ -490,3 +495,44 @@ networks, calls in the last minute, renewals/keys/tokens, and whether it was lim
   that were already handed out keep working until their window ends (at most
   2 x `R2_WINDOW_SECONDS`); for an immediate R2 cut, rotate `STREAM_PATH_SECRET` in the backend
   and the data Worker.
+
+### Segment encryption (Phase 3)
+
+With `HLS_ENCRYPTION=on` every segment is encrypted with AES-128 (HLS `METHOD=AES-128`):
+
+- **R2 path:** the uploader encrypts each segment in memory before the upload, so R2 and
+  Cloudflare only ever hold ciphertext. Encrypted segments get new names that include the key
+  index. Playlists carry an `EXT-X-KEY` tag with an explicit IV in front of every segment. The
+  number of R2 writes is unchanged.
+- **Origin path:** the backend writes `seg_N.k{idx}.ts` and `index.e.m3u8` next to ffmpeg's
+  files, and nginx serves `index.e.m3u8` in place of `index.m3u8` whenever it exists. Player
+  URLs do not change.
+- **Keys** are `HMAC(HLS_KEY_SECRET, scope|period)` and are never stored. The player receives the
+  keys of the current period, the one before and the two after, inline with `/api/r2`,
+  `/api/stream` and every `/api/token` renewal, so hls.js decrypts without a single key request.
+  `GET /api/hls-key/{r|o}/{id}/{idx}` is the fallback and requires one of:
+  - a key token or viewer token bound to the viewer session (Turnstile, UA plus network,
+    revocable, counted against the per-session limits);
+  - the `stream_auth` cookie, for native origin playback;
+  - a native ticket, only for Apple user agents.
+
+  Only keys near the current time are released.
+
+**Rollout:**
+
+1. Deploy with `HLS_ENCRYPTION=off`. Nothing changes.
+2. Set `HLS_KEY_SECRET` and `HLS_ENCRYPTION=on`, then run `docker compose up -d --no-deps backend`.
+   Do this when no match is live. Players opened before this still play, because
+   `HLS_KEY_LEGACY=true` lets their credential-less key requests through.
+3. About a day later, set `HLS_KEY_LEGACY=false`. Old players then stop, and plain origin
+   segments return 403. nginx caches `/seg-auth` answers for 30 s, so the change can take up to
+   30 s to apply.
+
+To switch it off, set `HLS_ENCRYPTION=off`. At startup the backend removes the encrypted files,
+so nginx falls back to ffmpeg's playlist.
+
+**What it does not do:** viewers share one key per period, because per-viewer encryption would
+make every segment uncacheable. Anyone holding a live, valid session can therefore decrypt and
+re-stream. What changes is that copied playlists, segments and R2 URLs no longer work without a
+live session, which shows up in the admin sessions panel and can be revoked. Revoking stops the
+inline key supply. Rotating `HLS_KEY_SECRET` cuts every viewer at once.
