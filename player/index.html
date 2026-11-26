@@ -88,6 +88,16 @@
             pointer-events: none;
         }
         .center > * { pointer-events: auto; }
+        /* Turnstile renders nothing (interaction-only) unless Cloudflare needs a click */
+        #turnstile-box {
+            position: absolute;
+            left: 50%;
+            bottom: 72px;
+            transform: translateX(-50%);
+            z-index: 30;
+            max-width: calc(100% - 32px);
+        }
+        #turnstile-box:empty { display: none; }
 
         .spinner {
             width: 56px; height: 56px;
@@ -339,6 +349,8 @@
             </button>
             <p class="status-msg" id="status-msg">جاري الاتصال بالبث...</p>
         </div>
+        <!-- Cloudflare Turnstile (viewer session check). Invisible unless Cloudflare asks for a click. -->
+        <div id="turnstile-box" aria-live="polite"></div>
 
         <!-- Control bar (RTL: the first group sits on the right) -->
         <div class="controls" id="controls">
@@ -612,8 +624,9 @@
         let windowKeyFailures = 0;
 
         async function fetchR2Info(slug) {
+            if (guardTripped) throw new Error('devtools guard');
             const q = useNativeHls ? '?native=1' : '';
-            return fetch(`/api/r2/${encodeURIComponent(slug)}${q}`, { headers: { 'Accept': 'application/json' } });
+            return sessionFetch(`/api/r2/${encodeURIComponent(slug)}${q}`, { headers: { 'Accept': 'application/json' } });
         }
 
         function setWindowKey(info) {
@@ -629,6 +642,7 @@
         }
 
         async function renewWindowKey() {
+            if (guardTripped) return;
             try {
                 const res = await fetchR2Info(r2SlugParam);
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -659,6 +673,175 @@
         }
 
         // ------------------------------------------------------------------
+        // Viewer session. /api/stream and /api/r2 answer only with a session from POST /api/session,
+        // which the backend gives out after an invisible Cloudflare Turnstile check (when
+        // configured: turnstileSiteKey in /api/config). The session is bound to this browser and
+        // network and lasts ~30 min; a new one is fetched silently when it ends, when the network
+        // changes, or after the DevTools guard revoked it. An older backend without /api/session
+        // (HTML 404) is used without sessions.
+        // ------------------------------------------------------------------
+        let playerConfig = null;
+        let viewerSession = null;      // { token, exp (ms) }
+        let sessionUnsupported = false;
+        let sessionPromise = null;
+        let turnstileScript = null;
+        let turnstileWidget = null;
+        let turnstileWaiter = null;
+
+        let playerConfigPromise = null;
+        function loadPlayerConfig() {
+            if (playerConfig) return Promise.resolve(playerConfig);
+            if (!playerConfigPromise) {
+                playerConfigPromise = fetch('/api/config', { headers: { 'Accept': 'application/json' }, credentials: 'omit' })
+                    .then((res) => (res.ok ? res.json() : null))
+                    .then((cfg) => { if (cfg) playerConfig = cfg; })
+                    .catch(() => { /* asked again next time */ })
+                    .then(() => { playerConfigPromise = null; return playerConfig || {}; });
+            }
+            return playerConfigPromise;
+        }
+
+        function loadTurnstile() {
+            if (window.turnstile) return Promise.resolve(window.turnstile);
+            if (!turnstileScript) {
+                turnstileScript = new Promise((resolve, reject) => {
+                    const s = document.createElement('script');
+                    s.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+                    s.async = true;
+                    s.onload = () => (window.turnstile ? resolve(window.turnstile) : reject(new Error('turnstile missing')));
+                    s.onerror = () => { turnstileScript = null; reject(new Error('turnstile script failed')); };
+                    document.head.appendChild(s);
+                });
+            }
+            return turnstileScript;
+        }
+
+        // One Turnstile token (single use): renders the widget the first time, resets it after
+        async function turnstileToken(siteKey) {
+            const ts = await loadTurnstile();
+            return new Promise((resolve, reject) => {
+                const done = (fn) => (value) => { clearTimeout(timer); turnstileWaiter = null; fn(value); };
+                const timer = setTimeout(() => done(reject)(new Error('turnstile timeout')), 60000);
+                turnstileWaiter = { resolve: done(resolve), reject: done(reject) };
+                if (turnstileWidget === null) {
+                    turnstileWidget = ts.render('#turnstile-box', {
+                        sitekey: siteKey,
+                        action: 'player',
+                        appearance: 'interaction-only',
+                        'refresh-expired': 'manual',
+                        callback: (t) => turnstileWaiter && turnstileWaiter.resolve(t),
+                        'error-callback': (code) => { if (turnstileWaiter) turnstileWaiter.reject(new Error(`turnstile ${code}`)); }
+                    });
+                } else {
+                    ts.reset(turnstileWidget);
+                }
+            });
+        }
+
+        async function ensureSession(force) {
+            if (sessionUnsupported) return null;
+            if (!force && viewerSession && Date.now() < viewerSession.exp - 60000) return viewerSession.token;
+            if (!sessionPromise) {
+                sessionPromise = (async () => {
+                    const cfg = await loadPlayerConfig();
+                    const body = {};
+                    if (cfg.turnstileSiteKey) body.turnstile = await turnstileToken(cfg.turnstileSiteKey);
+                    const res = await fetch('/api/session', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                        credentials: 'omit',
+                        body: JSON.stringify(body)
+                    });
+                    if (res.status === 404 && !/json/i.test(res.headers.get('content-type') || '')) {
+                        sessionUnsupported = true;   // older backend
+                        return null;
+                    }
+                    if (!res.ok) throw new Error(`session HTTP ${res.status}`);
+                    const data = await res.json();
+                    viewerSession = { token: data.session, exp: Date.now() + Math.max(60, Number(data.expiresIn) || 0) * 1000 };
+                    return viewerSession.token;
+                })().finally(() => { sessionPromise = null; });
+            }
+            return sessionPromise;
+        }
+
+        // fetch() with the X-Viewer-Session header; on 401 (session ended, revoked, other
+        // network) once more with a new session
+        async function sessionFetch(url, init = {}) {
+            for (let attempt = 0; ; attempt++) {
+                const token = await ensureSession(attempt > 0);
+                const headers = Object.assign({}, init.headers, token ? { 'X-Viewer-Session': token } : {});
+                const res = await fetch(url, Object.assign({}, init, { headers }));
+                if (res.status !== 401 || attempt > 0 || sessionUnsupported) return res;
+                viewerSession = null;
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // DevTools guard (backend PLAYER_DEVTOOLS_GUARD=soft). A `debugger` statement costs nothing
+        // while DevTools is closed; while it is open the page pauses on it, so the time around it
+        // jumps. Then playback stops, the stream source is cleared and the viewer session is revoked
+        // on the backend (its viewer tokens stop working). After two quick checks in a row
+        // (DevTools closed) the player starts again with a new session. This only deters casual
+        // inspection: switching off breakpoints defeats it. The real protection is server-side.
+        // ------------------------------------------------------------------
+        let guardTripped = false;
+        let guardTimer = null;
+        let guardCleanChecks = 0;
+        let hdProbeTimer = null;
+        let nativeListeners = false;
+
+        function devtoolsPaused() {
+            const t0 = performance.now();
+            // eslint-disable-next-line no-debugger
+            debugger;
+            return performance.now() - t0 > 500;
+        }
+
+        function stopForDevtools() {
+            guardTripped = true;
+            guardCleanChecks = 0;
+            if (tokenRenewTimer) { clearTimeout(tokenRenewTimer); tokenRenewTimer = null; }
+            if (windowKeyTimer) { clearTimeout(windowKeyTimer); windowKeyTimer = null; }
+            resolveRetry.cancel();
+            if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
+            video.pause();
+            video.removeAttribute('src');
+            video.load();
+            const session = viewerSession && viewerSession.token;
+            viewerSession = null;
+            viewerToken = null;
+            windowKey = '';
+            windowKeyExp = 0;
+            started = false;
+            if (session) {
+                fetch('/api/session/revoke', {
+                    method: 'POST', keepalive: true, credentials: 'omit',
+                    headers: { 'X-Viewer-Session': session }
+                }).catch(() => {});
+            }
+            setStatus('أغلق أدوات المطوّر لمتابعة المشاهدة.');
+        }
+
+        function resumeAfterDevtools() {
+            guardTripped = false;
+            lastFailure = null;
+            resolveStream();
+        }
+
+        function startDevtoolsGuard() {
+            if (guardTimer) return;
+            guardTimer = setInterval(() => {
+                if (devtoolsPaused()) {
+                    guardCleanChecks = 0;
+                    if (!guardTripped) stopForDevtools();
+                    return;
+                }
+                if (guardTripped && ++guardCleanChecks >= 2) resumeAfterDevtools();
+            }, 1000);
+        }
+
+        // ------------------------------------------------------------------
         // Viewer token for the Nginx edge (/auth). Fetched from /api/stream and renewed before expiry.
         // ------------------------------------------------------------------
         let viewerToken = tokenParam || null;
@@ -671,8 +854,9 @@
         }
 
         async function fetchViewerToken(channel) {
+            if (guardTripped) throw new Error('devtools guard');
             // credentials: 'include' so the browser stores the stream_auth playlist cookie
-            const res = await fetch(`/api/stream?channel=${encodeURIComponent(channel)}`, {
+            const res = await sessionFetch(`/api/stream?channel=${encodeURIComponent(channel)}`, {
                 headers: { 'Accept': 'application/json' },
                 credentials: 'include'
             });
@@ -683,6 +867,7 @@
         }
 
         async function renewViewerToken() {
+            if (guardTripped) return;
             try {
                 const res = await fetch('/api/token', {
                     method: 'POST',
@@ -887,6 +1072,7 @@
         // Resolve Target Stream URL
         // ------------------------------------------------------------------
         async function resolveStream() {
+            if (guardTripped) return;
             // Case 1: Direct src provided
             if (srcParam) {
                 streamManifestUrl = srcParam;
@@ -928,7 +1114,8 @@
                 initHls(streamManifestUrl);
                 if (hdSignal === 'probe') {
                     refreshHdOption();
-                    setInterval(refreshHdOption, HD_CHECK_MS);
+                    // once per page: resolveStream runs again after the DevTools guard
+                    if (!hdProbeTimer) hdProbeTimer = setInterval(refreshHdOption, HD_CHECK_MS);
                 }
                 return;
             }
@@ -955,13 +1142,15 @@
             // Playlist auth: hls.js sends the Bearer header AND the cookie on .css requests (see
             // xhrSetup). Native Safari HLS uses the plain URL: every playlist reload carries the
             // stream_auth cookie, which /api/token keeps refreshing, so playback survives token
-            // expiry. Segments (.js) are requested without token, header or cookie.
+            // expiry. Segments (.js) carry no token, header or cookie, only the shared ?e=&s=
+            // signature nginx writes into the playlist.
             streamManifestUrl = `/live/${encodeURIComponent(channel)}/index.css`;
             return initHls(streamManifestUrl);
         }
 
         // Initialize Hls.js with Camouflage Handlers & Low-Latency Tuning
         function initHls(url) {
+            if (guardTripped) return;
             setStatus('جاري الاتصال بالبث...', { spinner: true });
 
             if (Hls.isSupported()) {
@@ -997,7 +1186,7 @@
                     xhrSetup: function(xhr, requestUrl) {
                         // Token goes ONLY on same-origin .css playlist requests. .js segments stay
                         // header-free and token-free so every viewer requests the identical,
-                        // CDN-cacheable URL (segments are not auth-checked at the edge).
+                        // CDN-cacheable URL (their ?e=&s= signature comes from the playlist).
                         // withCredentials is limited to same-origin .css as well: R2 (cross-origin,
                         // wildcard CORS) rejects credentialed requests.
                         if (!requestUrl.startsWith(window.location.origin + '/')) return;
@@ -1045,15 +1234,19 @@
                 // Native Safari HLS
                 video.src = withWindowKey(url);
                 video.addEventListener('loadedmetadata', attemptAutoplay, { once: true });
-                video.addEventListener('playing', () => recovery.succeeded());
-                // Native player gives up on errors: check the stream again with backoff
-                video.addEventListener('error', () => {
-                    // HD errors are handled by hdFailed (listener below), which already reloads 480p
-                    if (qualityMode === 'hd' || Date.now() - hdSwitchedAt < 2000) return;
-                    setStatus('جاري إعادة المحاولة...', { spinner: true });
-                    lastFailure = { code: 0, playlist: true };
-                    recovery.trigger();
-                });
+                // Listeners once per page (initHls runs again after the DevTools guard)
+                if (!nativeListeners) {
+                    nativeListeners = true;
+                    video.addEventListener('playing', () => recovery.succeeded());
+                    // Native player gives up on errors: check the stream again with backoff
+                    video.addEventListener('error', () => {
+                        // HD errors are handled by hdFailed (listener below), which already reloads 480p
+                        if (guardTripped || qualityMode === 'hd' || Date.now() - hdSwitchedAt < 2000) return;
+                        setStatus('جاري إعادة المحاولة...', { spinner: true });
+                        lastFailure = { code: 0, playlist: true };
+                        recovery.trigger();
+                    });
+                }
             } else {
                 setStatus('عذرًا، هذا المتصفح لا يدعم تشغيل البث المباشر.');
             }
@@ -1093,6 +1286,7 @@
         // R2 mode: one playlist request (edge-cached for 1 s, per-second _t so it is never a stale
         // browser copy). Other modes keep the old behaviour: hls.js reloads and decides.
         async function probeStream() {
+            if (guardTripped) return 'error';
             if (!r2SlugParam || !streamManifestUrl) return 'live';
             await ensureWindowKey(false);
             const load = () => {
@@ -1132,6 +1326,7 @@
         let lastProbeSeq = { seq: null, at: 0 };
 
         async function resumeStream() {
+            if (guardTripped) return;
             const failure = lastFailure;
             lastFailure = null;
             // 401/403 on the playlist = token expired (e.g. tab slept): get a fresh one
@@ -1297,7 +1492,7 @@
         }
         function switchQuality(mode) {
             const url = mode === 'hd' ? hdManifestUrl : sdManifestUrl;
-            if (!url || mode === qualityMode) return;
+            if (guardTripped || !url || mode === qualityMode) return;
             qualityMode = mode;
             hdSwitchedAt = Date.now();
             streamManifestUrl = url;
@@ -1347,7 +1542,10 @@
         updatePlayUi();
         updateVolumeUi();
         updateFullscreenUi();
-        window.addEventListener('DOMContentLoaded', resolveStream);
+        window.addEventListener('DOMContentLoaded', () => {
+            resolveStream();
+            loadPlayerConfig().then((cfg) => { if (cfg.devtoolsGuard === 'soft') startDevtoolsGuard(); });
+        });
     </script>
 </body>
 </html>

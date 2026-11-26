@@ -32,6 +32,7 @@ const {
     ListObjectsV2Command,
     DeleteObjectsCommand
 } = require('@aws-sdk/client-s3');
+const viewerSecurity = require('./lib/viewer-security');
 
 // ------------------------------------------------------------------------------
 // Configuration & Environment Variables
@@ -101,18 +102,49 @@ const TOKEN_RENEW_GRACE_SECONDS = parseInt(process.env.TOKEN_RENEW_GRACE_SECONDS
 const ADMIN_TOKEN_TTL = '12h';
 const JWT_ALGORITHMS = ['HS256'];
 
-// Viewer token binding: what a token is tied to besides its channel.
-//   off   - nothing (any client holding the token may use it)
-//   ua    - the User-Agent that requested it (default)
-//   ua+ip - User-Agent and client IP. Stricter, but a viewer whose IP changes (Wi-Fi <-> mobile,
-//           IPv6 privacy addresses) loses the playlist until the player fetches a new token
-//           (it does so automatically on the next failed renewal), i.e. a short stall.
+// Viewer token binding: what a token (and the viewer session behind it) is tied to besides
+// its channel.
+//   off    - nothing (any client holding the token may use it)
+//   ua     - the User-Agent that requested it
+//   ua+net - User-Agent and the client's network: the /24 (IPv4) or /48 (IPv6) its address is
+//            in (default). A token copied to another ISP or country stops working, while a
+//            viewer whose carrier rotates the last part of the address keeps playing.
+//   ua+ip  - User-Agent and the exact client IP. Strictest, but a viewer whose IP changes
+//            (Wi-Fi <-> mobile, IPv6 privacy addresses) stalls until the player has fetched a
+//            new token (it does so automatically on the next failed renewal).
 // Native HLS stacks (AppleCoreMedia on older iOS/Safari) send their own User-Agent on playlist
 // requests, so the UA check is skipped for them; that is no weaker than the check itself, since
-// a script can send any User-Agent.
-const VIEWER_TOKEN_BIND = String(process.env.VIEWER_TOKEN_BIND || 'ua').trim().toLowerCase();
-if (!['off', 'ua', 'ua+ip'].includes(VIEWER_TOKEN_BIND)) {
-    fatal("VIEWER_TOKEN_BIND must be 'off', 'ua' or 'ua+ip'.");
+// a script can send any User-Agent. The network check still applies to them.
+const VIEWER_TOKEN_BIND = String(process.env.VIEWER_TOKEN_BIND || 'ua+net').trim().toLowerCase();
+if (!['off', 'ua', 'ua+net', 'ua+ip'].includes(VIEWER_TOKEN_BIND)) {
+    fatal("VIEWER_TOKEN_BIND must be 'off', 'ua', 'ua+net' or 'ua+ip'.");
+}
+
+// Cloudflare Turnstile gate for viewer sessions (POST /api/session). With both keys set, the
+// player must pass an (invisible) Turnstile check before /api/stream or /api/r2 hand out
+// anything, so a script can no longer mint tokens by faking Origin/Referer headers.
+// Without the keys, sessions are still issued (revocation and binding keep working) but any
+// client gets one.
+const TURNSTILE_SITE_KEY = String(process.env.TURNSTILE_SITE_KEY || '').trim();
+const TURNSTILE_SECRET_KEY = String(process.env.TURNSTILE_SECRET_KEY || '').trim();
+if (Boolean(TURNSTILE_SITE_KEY) !== Boolean(TURNSTILE_SECRET_KEY)) {
+    fatal('Set both TURNSTILE_SITE_KEY and TURNSTILE_SECRET_KEY, or neither.');
+}
+const TURNSTILE_ENABLED = Boolean(TURNSTILE_SECRET_KEY);
+if (!TURNSTILE_ENABLED) {
+    console.warn('[SECURITY] TURNSTILE_SITE_KEY/TURNSTILE_SECRET_KEY not set: any script can open a viewer session. See deploy/cloudflare-cdn-rules.md.');
+}
+// Extra hostnames Turnstile may report for the player page (comma-separated). The edge domain
+// and the hosts of ALLOWED_ORIGINS are always accepted.
+const TURNSTILE_HOSTNAMES = String(process.env.TURNSTILE_HOSTNAMES || '')
+    .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+
+// Player DevTools guard: 'soft' = the player stops, clears the source and revokes its session
+// while DevTools is open, then starts again with a new session once it is closed. 'off' = none.
+// A deterrent against casual inspection only; it is trivially disabled by a determined user.
+const PLAYER_DEVTOOLS_GUARD = String(process.env.PLAYER_DEVTOOLS_GUARD || 'soft').trim().toLowerCase();
+if (!['soft', 'off'].includes(PLAYER_DEVTOOLS_GUARD)) {
+    fatal("PLAYER_DEVTOOLS_GUARD must be 'soft' or 'off'.");
 }
 
 // ------------------------------------------------------------------------------
@@ -124,11 +156,12 @@ if (!['off', 'ua', 'ua+ip'].includes(VIEWER_TOKEN_BIND)) {
 //   playlist  hd/{slug}/w/{key}/index.html        (HD: hd/{slug}/hd/w/{key}/index.html)
 //             key = base64url(HMAC-SHA256(secret, "pxl-win|1|{slug}|{kind}|{window}"))[0..22]
 //             window = floor(unix seconds / window length); kind "s" = hls.js players
-//             (R2_WINDOW_SECONDS, default 10 min), "n" = native HLS that cannot switch URLs
+//             (R2_WINDOW_SECONDS, default 3 min), "n" = native HLS that cannot switch URLs
 //             (R2_NATIVE_WINDOW_SECONDS, default 2 h). Each playlist update is written under
 //             the keys of the current AND the previous window, so a key handed out in window w
 //             works until the end of window w+1 (between 1x and 2x the window length).
-//             The key is handed out only by /api/r2/:slug (viewer page gate + nginx rate limit).
+//             The key is handed out only by /api/r2/:slug (viewer page gate, Turnstile viewer
+//             session, nginx rate limit).
 //   segment   hd/{slug}/seg_N-{h}.js   h = base64url(HMAC(secret, "pxl-seg|1|{prefix}|{file}"))[0..16]
 //             unguessable, listed only inside a playlist, deleted after MAX_SEGMENT_AGE_SECONDS.
 // The same derivation runs in the data Worker (blogger/worker, /api/channel-status).
@@ -145,8 +178,14 @@ function clampSeconds(name, fallback, min, max) {
     const n = parseInt(process.env[name] || String(fallback), 10);
     return Number.isFinite(n) ? Math.min(Math.max(n, min), max) : fallback;
 }
+// Viewer session lifetime (POST /api/session). The player fetches a new one, with a new
+// Turnstile check, when it runs out.
+const VIEWER_SESSION_SECONDS = clampSeconds('VIEWER_SESSION_SECONDS', 1800, 300, 6 * 3600);
+// Origin path: segment URLs carry ?e=&s= (see viewer-security.js). A signature handed out in
+// one window works until the end of the next (1x-2x this), then a fresh playlist is needed.
+const SEGMENT_SIGN_WINDOW_SECONDS = clampSeconds('SEGMENT_SIGN_WINDOW_SECONDS', 120, 30, 900);
 const R2_WINDOW_SECONDS = {
-    s: clampSeconds('R2_WINDOW_SECONDS', 600, 120, 3600),
+    s: clampSeconds('R2_WINDOW_SECONDS', 180, 120, 3600),
     n: clampSeconds('R2_NATIVE_WINDOW_SECONDS', 7200, 600, 6 * 3600)
 };
 // Keep writing the old public hd/{slug}/index.html too (players deployed before the secret
@@ -1986,12 +2025,12 @@ const viewerCors = cors({
         callback(null, allowed);
     },
     methods: ['GET', 'POST', 'OPTIONS'],
-    allowedHeaders: ['Authorization', 'Content-Type'],
+    allowedHeaders: ['Authorization', 'Content-Type', 'X-Viewer-Session'],
     maxAge: 86400,
     // Lets allow-listed third-party pages receive/send the stream_auth cookie (never with '*' in production)
     credentials: true
 });
-app.use(['/api/stream', '/api/token', '/api/r2'], viewerCors);
+app.use(['/api/stream', '/api/token', '/api/r2', '/api/session'], viewerCors);
 
 // Admin endpoints: same-origin, plus the external control panels listed in ADMIN_ALLOWED_ORIGINS.
 // Entries are exact origins ("https://panel.example.com") or "scheme://host:*" for any port
@@ -2156,7 +2195,10 @@ app.get('/api/config', (req, res) => {
         rtmpPort: MEDIAMTX_RTMP_PORT,
         r2Configured: isR2Configured,
         enableAuthOnPlaylists: ENABLE_AUTH_ON_PLAYLISTS,
-        maxSegmentAgeSeconds: MAX_SEGMENT_AGE_SECONDS
+        maxSegmentAgeSeconds: MAX_SEGMENT_AGE_SECONDS,
+        // Player: Turnstile widget for POST /api/session (public by design), DevTools guard mode
+        turnstileSiteKey: TURNSTILE_SITE_KEY || null,
+        devtoolsGuard: PLAYER_DEVTOOLS_GUARD
     });
 });
 
@@ -2511,10 +2553,15 @@ function isNativeHlsAgent(ua) {
     return /^AppleCoreMedia\//.test(ua);
 }
 
-// Binding claims for a new token (req = the /api/stream or /api/token request)
+function clientNetwork(req) {
+    return viewerSecurity.ipPrefix(req.ip || '');
+}
+
+// Binding claims for a new token or session (req = the request it is issued for)
 function bindingClaims(req) {
     const claims = {};
-    if (VIEWER_TOKEN_BIND === 'ua' || VIEWER_TOKEN_BIND === 'ua+ip') claims.uah = bindingHash('ua', clientUserAgent(req));
+    if (VIEWER_TOKEN_BIND !== 'off') claims.uah = bindingHash('ua', clientUserAgent(req));
+    if (VIEWER_TOKEN_BIND === 'ua+net') claims.nph = bindingHash('net', clientNetwork(req));
     if (VIEWER_TOKEN_BIND === 'ua+ip') claims.iph = bindingHash('ip', req.ip || '');
     return claims;
 }
@@ -2524,16 +2571,101 @@ function bindingMatches(decoded, req) {
     if (VIEWER_TOKEN_BIND === 'off') return true;
     const ua = clientUserAgent(req);
     if (!isNativeHlsAgent(ua) && decoded.uah !== bindingHash('ua', ua)) return false;
+    if (VIEWER_TOKEN_BIND === 'ua+net' && decoded.nph !== bindingHash('net', clientNetwork(req))) return false;
     if (VIEWER_TOKEN_BIND === 'ua+ip' && decoded.iph !== bindingHash('ip', req.ip || '')) return false;
     return true;
 }
 
-function signViewerToken(channelKey, req) {
+// Viewer token for one channel. sid / sx = the viewer session it was issued under and that
+// session's expiry (unix s): renewals stop with the session, and revoking the session (DevTools
+// guard) makes /auth refuse every token issued under it.
+function signViewerToken(channelKey, req, session) {
     return jwt.sign(
-        { sub: crypto.randomBytes(8).toString('hex'), channel: channelKey, role: 'viewer', ...bindingClaims(req) },
+        {
+            sub: crypto.randomBytes(8).toString('hex'),
+            channel: channelKey,
+            role: 'viewer',
+            sid: session.sid,
+            sx: session.exp,
+            ...bindingClaims(req)
+        },
         VIEWER_JWT_SECRET,
         { algorithm: 'HS256', expiresIn: TOKEN_EXPIRATION_SECONDS }
     );
+}
+
+// ------------------------------------------------------------------------------
+// Viewer sessions (POST /api/session, header X-Viewer-Session)
+// One per player page: issued after a Cloudflare Turnstile check (when configured), bound like
+// the viewer tokens (UA + network by default), lasting VIEWER_SESSION_SECONDS. /api/stream and
+// /api/r2/:slug only answer with a valid, unrevoked session, so stream access can no longer be
+// minted by a script that merely fakes Origin/Referer headers.
+// ------------------------------------------------------------------------------
+const SESSION_HEADER = 'x-viewer-session';
+const revokedSessions = viewerSecurity.createRevocationStore();
+setInterval(() => revokedSessions.sweep(), 60 * 1000).unref();
+
+function signViewerSession(req) {
+    const sid = crypto.randomBytes(12).toString('base64url');
+    return jwt.sign({ sid, role: 'session', ...bindingClaims(req) }, VIEWER_JWT_SECRET, {
+        algorithm: 'HS256',
+        expiresIn: VIEWER_SESSION_SECONDS
+    });
+}
+
+// { session } or { error } for the X-Viewer-Session header of this request
+function readViewerSession(req) {
+    const raw = String(req.headers[SESSION_HEADER] || '').trim();
+    if (!raw) return { error: 'session_missing' };
+    let decoded;
+    try {
+        decoded = jwt.verify(raw, VIEWER_JWT_SECRET, { algorithms: JWT_ALGORITHMS });
+    } catch (err) {
+        return { error: err.name === 'TokenExpiredError' ? 'session_expired' : 'session_invalid' };
+    }
+    if (decoded.role !== 'session' || typeof decoded.sid !== 'string' || !decoded.sid) return { error: 'session_invalid' };
+    if (revokedSessions.isRevoked(decoded.sid)) return { error: 'session_revoked' };
+    // Bound to another browser or network: the player opens a new session (new Turnstile check)
+    if (!bindingMatches(decoded, req)) return { error: 'session_invalid' };
+    return { session: decoded };
+}
+
+// 401 { error: 'session', reason } tells the player to open a new session and retry once
+function requireViewerSession(req, res, next) {
+    if (req.method === 'OPTIONS') return next();
+    const result = readViewerSession(req);
+    if (result.error) {
+        res.set('Cache-Control', 'no-store');
+        return res.status(401).json({ error: 'session', reason: result.error });
+    }
+    req.viewerSession = result.session;
+    return next();
+}
+
+// Is this viewer token's session still usable? (tokens without sid predate sessions: refused)
+function viewerTokenSessionOk(decoded, nowSeconds) {
+    if (typeof decoded.sid !== 'string' || !decoded.sid) return false;
+    if (revokedSessions.isRevoked(decoded.sid)) return false;
+    return !(Number.isFinite(decoded.sx) && nowSeconds >= decoded.sx);
+}
+
+// Hostnames Turnstile may report: the player page (edge domain, request host) and the hosts of
+// ALLOWED_ORIGINS / TURNSTILE_HOSTNAMES
+function turnstileHostAllowed(hostname, req) {
+    if (!hostname) return false;
+    const allowed = new Set(TURNSTILE_HOSTNAMES);
+    allowed.add(String(EDGE_DOMAIN).toLowerCase());
+    allowed.add(String(req.headers.host || '').split(':')[0].toLowerCase());
+    for (const origin of VIEWER_PAGE_ORIGINS) {
+        try { allowed.add(new URL(origin).hostname); } catch { /* skipped */ }
+    }
+    return allowed.has(hostname);
+}
+
+// Origin path: query string for the segment URLs of one channel's playlist (see /seg-auth)
+const SEGMENT_SIGN_KEY = viewerSecurity.deriveSegmentKey(VIEWER_JWT_SECRET);
+function segmentQueryFor(channel) {
+    return viewerSecurity.segmentQuery(SEGMENT_SIGN_KEY, channel, Math.floor(Date.now() / 1000), SEGMENT_SIGN_WINDOW_SECONDS);
 }
 
 // ------------------------------------------------------------------------------
@@ -2635,8 +2767,44 @@ function tokenFromOriginalUri(uri) {
     }
 }
 
+// Open a viewer session. Body: { turnstile: "<widget token>" } (required with Turnstile keys
+// set). Answer: { session, expiresIn, challenge }.
+app.post('/api/session', requireViewerPage, async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    if (TURNSTILE_ENABLED) {
+        const result = await viewerSecurity.verifyTurnstile({
+            secret: TURNSTILE_SECRET_KEY,
+            token: req.body && req.body.turnstile,
+            remoteip: req.ip
+        });
+        // action 'player' = issued by the player's widget (not a token from another widget on
+        // the same key); hostname = the page the check ran on
+        if (!result.ok || result.action !== 'player' || !turnstileHostAllowed(result.hostname, req)) {
+            console.warn(`[SECURITY] Turnstile refused (${result.codes.join(',') || `host=${result.hostname} action=${result.action}`}) for ${req.ip}`);
+            return res.status(403).json({ error: 'challenge_failed' });
+        }
+    }
+    res.json({ session: signViewerSession(req), expiresIn: VIEWER_SESSION_SECONDS, challenge: TURNSTILE_ENABLED });
+});
+
+// Revoke the caller's own session (player DevTools guard). Always 204, so the answer tells a
+// caller nothing about the session it sent. Every viewer token issued under it stops working
+// at /auth (within the nginx auth cache time) and cannot be renewed.
+app.post('/api/session/revoke', requireViewerPage, (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    const raw = String(req.headers[SESSION_HEADER] || '').trim();
+    try {
+        const decoded = jwt.verify(raw, VIEWER_JWT_SECRET, { algorithms: JWT_ALGORITHMS });
+        if (decoded.role === 'session' && typeof decoded.sid === 'string' && decoded.sid) {
+            revokedSessions.revoke(decoded.sid, decoded.exp * 1000);
+            console.log(`[SECURITY] Viewer session revoked by the player (DevTools guard), ${req.ip}`);
+        }
+    } catch { /* invalid or expired: nothing to revoke */ }
+    res.status(204).end();
+});
+
 // Generate dynamic viewer token for Edge CDN playback
-app.get('/api/stream', requireViewerPage, (req, res) => {
+app.get('/api/stream', requireViewerPage, requireViewerSession, (req, res) => {
     const requested = String(req.query.channel || '').trim().toLowerCase();
     if (!requested) {
         return res.status(400).json({ error: 'channel query parameter is required' });
@@ -2649,7 +2817,7 @@ app.get('/api/stream', requireViewerPage, (req, res) => {
         return res.status(404).json({ error: 'Channel not found' });
     }
 
-    const token = signViewerToken(channel.streamKey, req);
+    const token = signViewerToken(channel.streamKey, req, req.viewerSession);
     setViewerCookie(res, channel.streamKey, token);
     res.set('Cache-Control', 'no-store');
     res.json({
@@ -2671,7 +2839,7 @@ app.get('/api/stream', requireViewerPage, (req, res) => {
 //              stadium of viewers does not renew in the same second
 // ?native=1 = the long native-HLS window (the player cannot switch URLs there).
 const R2_SLUG_RE = /^[A-Za-z0-9_-]{1,64}$/;
-app.get('/api/r2/:slug', requireViewerPage, (req, res) => {
+app.get('/api/r2/:slug', requireViewerPage, requireViewerSession, (req, res) => {
     const slug = String(req.params.slug || '');
     res.set('Cache-Control', 'no-store');
     if (!R2_SLUG_RE.test(slug) || !isR2Configured) {
@@ -2683,7 +2851,9 @@ app.get('/api/r2/:slug', requireViewerPage, (req, res) => {
     }
     const base = `https://${R2_CUSTOM_DOMAIN}/hd/${encodeURIComponent(channel.r2_slug)}/`;
     if (!STREAM_PATH_SECRET) return res.json({ base });
-    const kind = req.query.native === '1' ? 'n' : 's';
+    // The long-lived native key only for Apple browsers that may really lack hls.js; anyone
+    // else asking for it gets the short hls.js key
+    const kind = req.query.native === '1' && viewerSecurity.mayUseNativeHls(clientUserAgent(req)) ? 'n' : 's';
     const len = R2_WINDOW_SECONDS[kind];
     const nowS = Date.now() / 1000;
     const w = currentWindow(kind);
@@ -2720,20 +2890,29 @@ app.post('/api/token', requireViewerPage, (req, res) => {
     if (!bindingMatches(decoded, req)) {
         return res.status(401).json({ error: 'Invalid token' });
     }
+    // ...and only while its viewer session lives (expired/revoked: the player opens a new session)
+    if (!viewerTokenSessionOk(decoded, Math.floor(Date.now() / 1000))) {
+        return res.status(401).json({ error: 'session' });
+    }
 
-    const renewed = signViewerToken(decoded.channel, req);
+    const renewed = signViewerToken(decoded.channel, req, { sid: decoded.sid, exp: decoded.sx });
     setViewerCookie(res, decoded.channel, renewed);
     res.set('Cache-Control', 'no-store');
     res.json({ token: renewed, expiresIn: TOKEN_EXPIRATION_SECONDS });
 });
 
 // Internal Nginx auth_request endpoint. 200 = allow, 401 = missing/invalid/expired, 403 = channel mismatch
+// On 200 the response carries X-Seg-Query ("e=..&s=.."): nginx appends it to every segment URL
+// of the playlist (auth_request_set + sub_filter), and /seg-auth checks it on segment requests.
 function handleEdgeAuth(req, res) {
+    const originalUri = req.headers['x-original-uri'] || '';
+    const uriChannel = extractChannelFromUri(originalUri);
+    if (uriChannel) res.set('X-Seg-Query', segmentQueryFor(uriChannel));
+
     if (!ENABLE_AUTH_ON_PLAYLISTS) {
         return res.status(200).send('OK');
     }
 
-    const originalUri = req.headers['x-original-uri'] || '';
     // Precedence: Authorization header, then ?token= from the original URI, then the stream_auth cookie
     const token = bearerToken(req) || tokenFromOriginalUri(originalUri) || cookieToken(req);
     if (!token) {
@@ -2757,11 +2936,33 @@ function handleEdgeAuth(req, res) {
     if (!bindingMatches(decoded, req)) {
         return res.status(403).send('Forbidden: Token bound to another client');
     }
+    // Session revoked (DevTools guard) or ended, or a token from before viewer sessions
+    if (!viewerTokenSessionOk(decoded, Math.floor(Date.now() / 1000))) {
+        return res.status(401).set('WWW-Authenticate', 'Bearer error="session"').send('Unauthorized: Session ended');
+    }
 
     return res.status(200).send('OK');
 }
 app.get('/auth', handleEdgeAuth);
 app.head('/auth', handleEdgeAuth);
+
+// Internal nginx auth_request endpoint for origin-path SEGMENTS (/live/{channel}/*.js).
+// nginx passes the channel and the ?e=&s= of the segment URL. No per-viewer token: the
+// signature is shared by every viewer of the channel within a window, so the segment stays one
+// cache entry for nginx and Cloudflare, but a segment URL is useless after 1-2 windows and
+// unknown without a playlist, which needs a viewer token.
+function handleSegmentAuth(req, res) {
+    if (!ENABLE_AUTH_ON_PLAYLISTS) return res.status(200).send('OK');
+    const channel = String(req.headers['x-seg-channel'] || '').toLowerCase();
+    const ok = CHANNEL_RE.test(channel) && viewerSecurity.verifySegmentQuery(
+        SEGMENT_SIGN_KEY, channel,
+        String(req.headers['x-seg-e'] || ''), String(req.headers['x-seg-s'] || ''),
+        Math.floor(Date.now() / 1000), SEGMENT_SIGN_WINDOW_SECONDS
+    );
+    return ok ? res.status(200).send('OK') : res.status(403).send('Forbidden');
+}
+app.get('/seg-auth', handleSegmentAuth);
+app.head('/seg-auth', handleSegmentAuth);
 
 // ------------------------------------------------------------------------------
 // MediaMTX HTTP auth hook (authMethod: http). Reachable only on the docker network;

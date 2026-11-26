@@ -50,3 +50,62 @@ public names must stop answering (their last copy stays in R2 otherwise):
   also matches, because `*` spans `/`). Expected: `cf-cache-status: HIT` within the same second,
   `max-age=1`.
 - Segments (`/hd/{slug}/seg_N-xxxx.js`) keep the "cache everything" rule.
+
+## Viewer sessions: Turnstile widget (zone of the player domain, `live.smarterwho.site`)
+
+The backend hands out playlist keys (`/api/r2/:slug`) and edge tokens (`/api/stream`) only to a
+viewer session, and a session only after a passed Turnstile check (`POST /api/session`).
+
+1. Cloudflare dashboard -> **Turnstile** -> **Add widget**.
+   - Hostnames: `live.smarterwho.site` (the player page; the blogs only frame it).
+   - Widget mode: **Invisible** (or Managed: shows a checkbox only to suspicious visitors).
+2. Put the keys in the root `.env`: `TURNSTILE_SITE_KEY=...` and `TURNSTILE_SECRET_KEY=...`,
+   then `docker compose up -d backend`.
+3. Check: the backend log no longer prints `TURNSTILE_SITE_KEY/TURNSTILE_SECRET_KEY not set`;
+   `POST /api/session` without a token answers `403 {"error":"challenge_failed"}`.
+
+Deploy between matches: an open player tab from before this change cannot get a token any more
+and keeps retrying until it is reloaded.
+
+## Rate limiting rule (zone of the player domain), action: Block for 10 s
+
+Free plan: one rule. It stops a script that hammers the session/token endpoints before the
+request reaches nginx (nginx `viewer_api` still limits each IP at 120/min behind it).
+
+```
+(http.host eq "live.smarterwho.site") and (
+  starts_with(http.request.uri.path, "/api/session")
+  or starts_with(http.request.uri.path, "/api/r2/")
+  or http.request.uri.path eq "/api/stream"
+  or http.request.uri.path eq "/api/token"
+)
+```
+
+Characteristics: IP. Period: 10 s. Requests: **30**. A normal viewer makes 1-3 of these
+requests per minute; 30 per 10 s per IP leaves room for a few dozen viewers behind one mobile
+carrier (CGNAT) address at kickoff.
+
+## Origin segments (`live.smarterwho.site/live/*.js`): keep the query string in the cache key
+
+Origin-path segments now need `?e=..&s=..` (a signature the authenticated playlist adds, shared by
+all viewers of a channel for 2-4 minutes). Cloudflare's default cache key includes the query
+string, which is what makes this work: a cached segment is only served for the URL with the
+signature. **Do not** add a cache rule that ignores the query string for `/live/*`, or Cloudflare
+would serve cached segments to anyone who guesses a segment name.
+
+## R2 hostname: tighten the empty-Referer exception (after testing on an iPhone)
+
+The `PXL CDN lock` rule above lets requests without a Referer through, for native iOS HLS. That
+also lets curl and VLC through (they still need the rotating secret key, which now requires a
+Turnstile session). To keep the exception for Apple's player only, replace the Referer line with:
+
+```
+  or (http.referer eq "" and not (
+        starts_with(http.user_agent, "AppleCoreMedia/")
+        or (http.user_agent contains "iPhone" or http.user_agent contains "iPad" or http.user_agent contains "Macintosh")
+     ))
+  or (http.referer ne "" and not starts_with(http.referer, "https://live.smarterwho.site/"))
+```
+
+A User-Agent can be faked, so this only removes default curl/VLC/ffmpeg clients. Test playback on
+a real iPhone (Safari and Chrome) right after enabling it, and remove it again if video stops.

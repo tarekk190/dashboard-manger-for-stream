@@ -60,7 +60,7 @@ services:
       # Secret R2 paths (rotating playlist keys, unguessable segment names). Same value as the
       # data Worker's STREAM_PATH_SECRET. Empty = old public layout.
       - STREAM_PATH_SECRET=${STREAM_PATH_SECRET:-}
-      - R2_WINDOW_SECONDS=${R2_WINDOW_SECONDS:-600}
+      - R2_WINDOW_SECONDS=${R2_WINDOW_SECONDS:-180}
       - R2_NATIVE_WINDOW_SECONDS=${R2_NATIVE_WINDOW_SECONDS:-7200}
       # true while players older than the secret-path player may still be open; then false
       - R2_LEGACY_PLAYLIST=${R2_LEGACY_PLAYLIST:-true}
@@ -80,7 +80,16 @@ services:
       - ENABLE_AUTH_ON_PLAYLISTS=${ENABLE_AUTH_ON_PLAYLISTS:-true}
       - TOKEN_EXPIRATION_SECONDS=${TOKEN_EXPIRATION_SECONDS:-45}
       - TOKEN_RENEW_GRACE_SECONDS=${TOKEN_RENEW_GRACE_SECONDS:-10}
-      - VIEWER_TOKEN_BIND=${VIEWER_TOKEN_BIND:-ua}
+      - VIEWER_TOKEN_BIND=${VIEWER_TOKEN_BIND:-ua+net}
+      # Viewer sessions: Cloudflare Turnstile check before any token/key (both keys, or neither)
+      - TURNSTILE_SITE_KEY=${TURNSTILE_SITE_KEY:-}
+      - TURNSTILE_SECRET_KEY=${TURNSTILE_SECRET_KEY:-}
+      - TURNSTILE_HOSTNAMES=${TURNSTILE_HOSTNAMES:-}
+      - VIEWER_SESSION_SECONDS=${VIEWER_SESSION_SECONDS:-1800}
+      # Origin-path segment URL signatures (?e=&s=), valid 1-2 windows
+      - SEGMENT_SIGN_WINDOW_SECONDS=${SEGMENT_SIGN_WINDOW_SECONDS:-120}
+      # soft = player stops and revokes its session while DevTools is open; off = no guard
+      - PLAYER_DEVTOOLS_GUARD=${PLAYER_DEVTOOLS_GUARD:-soft}
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-}
       - ADMIN_ALLOWED_ORIGINS=${ADMIN_ALLOWED_ORIGINS:-}
       - RESTREAM_MAX_RETRIES=${RESTREAM_MAX_RETRIES:-0}
