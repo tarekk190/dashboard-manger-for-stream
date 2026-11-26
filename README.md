@@ -139,6 +139,9 @@ Optional:
 | `TURNSTILE_HOSTNAMES` | empty | Extra hostnames Turnstile may report for the player page (`EDGE_DOMAIN` and `ALLOWED_ORIGINS` hosts are always accepted) |
 | `VIEWER_SESSION_SECONDS` | `1800` | Viewer session lifetime (300-21600); the player opens a new one (new Turnstile check) when it ends |
 | `SEGMENT_SIGN_WINDOW_SECONDS` | `120` | Edge segment signatures are shared per channel and window and stay valid 1-2 windows (30-900) |
+| `SESSION_MAX_NETWORKS` | `2` | Networks (/24 or /48) one viewer session may be used from (0 = no limit). With `ua+net` binding a session only works on its own network anyway |
+| `SESSION_MAX_CALLS_PER_MINUTE` | `20` | `/api/stream` + `/api/r2` + `/api/token` calls per session and minute (0 = no limit; a normal player makes 2-4). Over a limit the session is revoked and shows as "limited" in the admin panel |
+| `MAX_SESSIONS_PER_NETWORK` | `0` | New sessions one network may open per 10 minutes (0 = off). Mobile carriers put many viewers behind one address, so read the "top networks" in the admin panel before setting it |
 | `PLAYER_DEVTOOLS_GUARD` | `soft` | `soft`: while DevTools is open the player stops, clears its source and revokes its session; it restarts with a new session once DevTools is closed. `off`: no guard. A deterrent only. |
 | `ALLOWED_ORIGINS` | empty | Comma-separated origins allowed to call `/api/stream`, `/api/token` and `/api/r2/:slug` cross-origin. These endpoints also refuse (403) any request whose `Origin`/`Referer` is neither `https://EDGE_DOMAIN` (the bundled player) nor one of these origins. `*` is refused when `NODE_ENV=production`. |
 | `ADMIN_ALLOWED_ORIGINS` | empty | Extra origins allowed to call the admin API (`/api/admin`, `/api/channels`, `/api/stats`, `/api/config`) from a browser, e.g. an external control panel. Exact origins or `scheme://host:*` for any port (`http://localhost:*,http://127.0.0.1:*`). `*` is refused. No cookies are involved: the panel sends the admin Bearer token. |
@@ -473,3 +476,17 @@ Embedding it on any other domain shows a blocked frame. To allow a partner site 
 - **Clear the edge cache:** `docker compose exec nginx sh -c 'rm -rf /var/cache/nginx/hls/*'`
 - **R2 pruning** runs every 20 seconds and paginates the full `hd/` listing.
 - **Local /hls cleanup:** each packager start empties its channel directory, and the backend removes local files older than 5 minutes every minute (`[HLS-JANITOR]` in the logs).
+
+### Viewer sessions panel and kill switch
+
+The admin dashboard lists every active viewer session (`GET /api/admin/sessions`): its channels,
+networks, calls in the last minute, renewals/keys/tokens, and whether it was limited or revoked.
+
+- **Revoke** (per row, `POST /api/admin/sessions/{sid}/revoke`): that session's viewer tokens stop
+  at `/auth` within the nginx auth cache time (10 s); the player has to pass Turnstile again.
+- **Revoke all** (`POST /api/admin/sessions/revoke-all`): increments the session epoch stored in
+  `data/security-state.json`, which invalidates every session and viewer token at once (also
+  after a restart). Players reconnect with a new session automatically. Shared R2 window keys
+  that were already handed out keep working until their window ends (at most
+  2 x `R2_WINDOW_SECONDS`); for an immediate R2 cut, rotate `STREAM_PATH_SECRET` in the backend
+  and the data Worker.

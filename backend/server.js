@@ -33,6 +33,7 @@ const {
     DeleteObjectsCommand
 } = require('@aws-sdk/client-s3');
 const viewerSecurity = require('./lib/viewer-security');
+const { createSessionTracker } = require('./lib/session-tracker');
 
 // ------------------------------------------------------------------------------
 // Configuration & Environment Variables
@@ -184,6 +185,19 @@ const VIEWER_SESSION_SECONDS = clampSeconds('VIEWER_SESSION_SECONDS', 1800, 300,
 // Origin path: segment URLs carry ?e=&s= (see viewer-security.js). A signature handed out in
 // one window works until the end of the next (1x-2x this), then a fresh playlist is needed.
 const SEGMENT_SIGN_WINDOW_SECONDS = clampSeconds('SEGMENT_SIGN_WINDOW_SECONDS', 120, 30, 900);
+// Per-session limits (Phase 2, 0 = off). A session over a limit is revoked: its tokens stop at
+// /auth and the player has to pass Turnstile again for a new one.
+//   SESSION_MAX_NETWORKS          networks (/24 or /48) one session may be used from. With
+//                                 VIEWER_TOKEN_BIND=ua+net a session only works on its own
+//                                 network anyway; this matters for 'ua' / 'off'.
+//   SESSION_MAX_CALLS_PER_MINUTE  /api/stream + /api/r2 + /api/token calls per session and minute
+//                                 (a normal player makes 2-4, more while retrying)
+//   MAX_SESSIONS_PER_NETWORK      new sessions one network may open per 10 minutes. Off by
+//                                 default: mobile carriers put thousands of viewers behind one
+//                                 address (CGNAT). Pick a value from the admin monitor first.
+const SESSION_MAX_NETWORKS = clampSeconds('SESSION_MAX_NETWORKS', 2, 0, 50);
+const SESSION_MAX_CALLS_PER_MINUTE = clampSeconds('SESSION_MAX_CALLS_PER_MINUTE', 20, 0, 600);
+const MAX_SESSIONS_PER_NETWORK = clampSeconds('MAX_SESSIONS_PER_NETWORK', 0, 0, 1000000);
 const R2_WINDOW_SECONDS = {
     s: clampSeconds('R2_WINDOW_SECONDS', 180, 120, 3600),
     n: clampSeconds('R2_NATIVE_WINDOW_SECONDS', 7200, 600, 6 * 3600)
@@ -2587,6 +2601,7 @@ function signViewerToken(channelKey, req, session) {
             role: 'viewer',
             sid: session.sid,
             sx: session.exp,
+            ep: session.ep || 0,
             ...bindingClaims(req)
         },
         VIEWER_JWT_SECRET,
@@ -2603,14 +2618,52 @@ function signViewerToken(channelKey, req, session) {
 // ------------------------------------------------------------------------------
 const SESSION_HEADER = 'x-viewer-session';
 const revokedSessions = viewerSecurity.createRevocationStore();
-setInterval(() => revokedSessions.sweep(), 60 * 1000).unref();
+const sessionTracker = createSessionTracker({
+    maxNetworks: SESSION_MAX_NETWORKS,
+    maxCallsPerMinute: SESSION_MAX_CALLS_PER_MINUTE,
+    maxSessionsPerNetwork: MAX_SESSIONS_PER_NETWORK
+});
+setInterval(() => { revokedSessions.sweep(); sessionTracker.sweep(); }, 60 * 1000).unref();
 
-function signViewerSession(req) {
-    const sid = crypto.randomBytes(12).toString('base64url');
-    return jwt.sign({ sid, role: 'session', ...bindingClaims(req) }, VIEWER_JWT_SECRET, {
+// Kill switch: every session and viewer token carries the session epoch (ep) it was issued in.
+// "Revoke all" (admin) increments the epoch, which invalidates all of them at once. Persisted
+// next to channels.json so a restart does not bring revoked sessions back.
+const SECURITY_STATE_FILE = path.join(path.dirname(DATA_FILE), 'security-state.json');
+let sessionEpoch = 0;
+try {
+    sessionEpoch = Math.max(0, parseInt(JSON.parse(fs.readFileSync(SECURITY_STATE_FILE, 'utf8')).sessionEpoch, 10) || 0);
+} catch { /* first start: epoch 0 */ }
+
+function saveSecurityState() {
+    fs.mkdirSync(path.dirname(SECURITY_STATE_FILE), { recursive: true });
+    const tmp = `${SECURITY_STATE_FILE}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify({ sessionEpoch, updatedAt: new Date().toISOString() }, null, 2));
+    fs.renameSync(tmp, SECURITY_STATE_FILE);
+}
+
+function signViewerSession(req, sid) {
+    return jwt.sign({ sid, role: 'session', ep: sessionEpoch, ...bindingClaims(req) }, VIEWER_JWT_SECRET, {
         algorithm: 'HS256',
         expiresIn: VIEWER_SESSION_SECONDS
     });
+}
+
+// Record one viewer API call of a session and enforce the per-session limits. Over a limit,
+// the session is revoked (its viewer tokens stop at /auth too). Returns the limit reason or null.
+function trackSessionCall(req, sid, expSeconds, kind, channel) {
+    const result = sessionTracker.touch(sid, {
+        network: clientNetwork(req),
+        ua: clientUserAgent(req),
+        exp: expSeconds * 1000,
+        kind,
+        channel
+    });
+    if (result.ok) return null;
+    if (!revokedSessions.isRevoked(sid)) {
+        revokedSessions.revoke(sid, expSeconds * 1000);
+        console.warn(`[SECURITY] Viewer session ${sid.slice(0, 8)}… revoked: ${result.reason} (${req.ip})`);
+    }
+    return result.reason;
 }
 
 // { session } or { error } for the X-Viewer-Session header of this request
@@ -2624,7 +2677,7 @@ function readViewerSession(req) {
         return { error: err.name === 'TokenExpiredError' ? 'session_expired' : 'session_invalid' };
     }
     if (decoded.role !== 'session' || typeof decoded.sid !== 'string' || !decoded.sid) return { error: 'session_invalid' };
-    if (revokedSessions.isRevoked(decoded.sid)) return { error: 'session_revoked' };
+    if ((decoded.ep || 0) !== sessionEpoch || revokedSessions.isRevoked(decoded.sid)) return { error: 'session_revoked' };
     // Bound to another browser or network: the player opens a new session (new Turnstile check)
     if (!bindingMatches(decoded, req)) return { error: 'session_invalid' };
     return { session: decoded };
@@ -2638,14 +2691,22 @@ function requireViewerSession(req, res, next) {
         res.set('Cache-Control', 'no-store');
         return res.status(401).json({ error: 'session', reason: result.error });
     }
-    req.viewerSession = result.session;
+    const s = result.session;
+    const isKey = req.path.startsWith('/api/r2/');
+    const limited = trackSessionCall(req, s.sid, s.exp, isKey ? 'key' : 'stream',
+        isKey ? req.params.slug : String(req.query.channel || ''));
+    if (limited) {
+        res.set('Cache-Control', 'no-store');
+        return res.status(401).json({ error: 'session', reason: 'session_limited' });
+    }
+    req.viewerSession = s;
     return next();
 }
 
 // Is this viewer token's session still usable? (tokens without sid predate sessions: refused)
 function viewerTokenSessionOk(decoded, nowSeconds) {
     if (typeof decoded.sid !== 'string' || !decoded.sid) return false;
-    if (revokedSessions.isRevoked(decoded.sid)) return false;
+    if ((decoded.ep || 0) !== sessionEpoch || revokedSessions.isRevoked(decoded.sid)) return false;
     return !(Number.isFinite(decoded.sx) && nowSeconds >= decoded.sx);
 }
 
@@ -2784,7 +2845,18 @@ app.post('/api/session', requireViewerPage, async (req, res) => {
             return res.status(403).json({ error: 'challenge_failed' });
         }
     }
-    res.json({ session: signViewerSession(req), expiresIn: VIEWER_SESSION_SECONDS, challenge: TURNSTILE_ENABLED });
+    const sid = crypto.randomBytes(12).toString('base64url');
+    const opened = sessionTracker.open(sid, {
+        network: clientNetwork(req),
+        ua: clientUserAgent(req),
+        exp: Date.now() + VIEWER_SESSION_SECONDS * 1000
+    });
+    if (!opened.ok) {
+        console.warn(`[SECURITY] Viewer session refused: ${opened.reason} (${req.ip})`);
+        res.set('Retry-After', '60');
+        return res.status(429).json({ error: opened.reason });
+    }
+    res.json({ session: signViewerSession(req, sid), expiresIn: VIEWER_SESSION_SECONDS, challenge: TURNSTILE_ENABLED });
 });
 
 // Revoke the caller's own session (player DevTools guard). Always 204, so the answer tells a
@@ -2801,6 +2873,82 @@ app.post('/api/session/revoke', requireViewerPage, (req, res) => {
         }
     } catch { /* invalid or expired: nothing to revoke */ }
     res.status(204).end();
+});
+
+// ------------------------------------------------------------------------------
+// Admin: viewer sessions monitor, revoke one, revoke all (kill switch)
+// ------------------------------------------------------------------------------
+function displayNetwork(network) {
+    return String(network || '').replace(/^[46]:/, '');
+}
+
+app.get('/api/admin/sessions', verifyAdminAuth, (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 200, 1), 1000);
+    const q = String(req.query.q || '').trim().toLowerCase().slice(0, 64);
+    const onlyFlagged = req.query.flagged === '1';
+    const { total, sessions } = sessionTracker.list({
+        limit,
+        filter: (s) => {
+            if (onlyFlagged && !s.limited && !revokedSessions.isRevoked(s.sid)) return false;
+            if (!q) return true;
+            return s.sid.toLowerCase().startsWith(q) || s.channels.some(c => c.toLowerCase().includes(q)) ||
+                s.networks.some(n => displayNetwork(n).includes(q));
+        }
+    });
+    const summary = sessionTracker.summary();
+    res.json({
+        success: true,
+        epoch: sessionEpoch,
+        turnstile: TURNSTILE_ENABLED,
+        binding: VIEWER_TOKEN_BIND,
+        limits: {
+            maxNetworks: SESSION_MAX_NETWORKS,
+            maxCallsPerMinute: SESSION_MAX_CALLS_PER_MINUTE,
+            maxSessionsPerNetwork: MAX_SESSIONS_PER_NETWORK,
+            sessionSeconds: VIEWER_SESSION_SECONDS
+        },
+        summary: {
+            ...summary,
+            revoked: revokedSessions.size,
+            topNetworks: summary.topNetworks.map(n => ({ ...n, network: displayNetwork(n.network) }))
+        },
+        total,
+        sessions: sessions.map(s => ({
+            ...s,
+            networks: s.networks.map(displayNetwork),
+            revoked: revokedSessions.isRevoked(s.sid)
+        }))
+    });
+});
+
+app.post('/api/admin/sessions/revoke-all', verifyAdminAuth, (req, res) => {
+    sessionEpoch += 1;
+    try {
+        saveSecurityState();
+    } catch (err) {
+        sessionEpoch -= 1;
+        return res.status(500).json({ success: false, error: `Could not save the new session epoch: ${err.message}` });
+    }
+    const dropped = sessionTracker.size;
+    sessionTracker.clear();
+    console.warn(`[SECURITY] Revoke all: session epoch is now ${sessionEpoch} (${dropped} tracked sessions dropped)`);
+    res.json({
+        success: true,
+        epoch: sessionEpoch,
+        dropped,
+        // Shared R2 window keys already handed out keep working until their window ends
+        r2KeysExpireWithinSeconds: STREAM_PATH_SECRET ? 2 * R2_WINDOW_SECONDS.s : 0
+    });
+});
+
+app.post('/api/admin/sessions/:sid/revoke', verifyAdminAuth, (req, res) => {
+    const sid = String(req.params.sid || '');
+    if (!/^[A-Za-z0-9_-]{8,64}$/.test(sid)) return res.status(400).json({ success: false, error: 'Invalid session id' });
+    const known = sessionTracker.list({ limit: 1, filter: s => s.sid === sid }).sessions[0];
+    revokedSessions.revoke(sid, known ? known.expiresAt : Date.now() + VIEWER_SESSION_SECONDS * 1000);
+    console.warn(`[SECURITY] Viewer session ${sid.slice(0, 8)}… revoked by admin`);
+    res.json({ success: true });
 });
 
 // Generate dynamic viewer token for Edge CDN playback
@@ -2894,8 +3042,12 @@ app.post('/api/token', requireViewerPage, (req, res) => {
     if (!viewerTokenSessionOk(decoded, Math.floor(Date.now() / 1000))) {
         return res.status(401).json({ error: 'session' });
     }
+    // Per-session limits (renewals count as calls)
+    if (trackSessionCall(req, decoded.sid, decoded.sx, 'token', decoded.channel)) {
+        return res.status(401).json({ error: 'session', reason: 'session_limited' });
+    }
 
-    const renewed = signViewerToken(decoded.channel, req, { sid: decoded.sid, exp: decoded.sx });
+    const renewed = signViewerToken(decoded.channel, req, { sid: decoded.sid, exp: decoded.sx, ep: decoded.ep });
     setViewerCookie(res, decoded.channel, renewed);
     res.set('Cache-Control', 'no-store');
     res.json({ token: renewed, expiresIn: TOKEN_EXPIRATION_SECONDS });

@@ -259,6 +259,56 @@
             </div>
         </div>
 
+        <!-- Viewer sessions monitor (Phase 2): /api/admin/sessions -->
+        <section id="sessions-panel" class="bg-dark-900 border border-slate-800 rounded-2xl p-4 space-y-4" aria-labelledby="sessions-title">
+            <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                <div>
+                    <h2 id="sessions-title" class="text-lg font-bold text-white flex items-center gap-2">
+                        <i class="fa-solid fa-shield-halved text-brand-400 text-base"></i>
+                        <span>جلسات المشاهدة</span>
+                    </h2>
+                    <p id="sessions-meta" class="text-xs text-slate-400 mt-1">جارٍ التحميل...</p>
+                </div>
+                <div class="flex flex-wrap items-center gap-2">
+                    <div class="relative w-full sm:w-56">
+                        <span class="absolute inset-y-0 start-0 ps-3 flex items-center text-slate-500 text-xs"><i class="fa-solid fa-magnifying-glass"></i></span>
+                        <input id="sessions-search" type="text" placeholder="جلسة، قناة أو شبكة..." class="w-full bg-dark-950 border border-slate-800 rounded-lg ps-8 pe-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-brand-500">
+                    </div>
+                    <label class="flex items-center gap-1.5 text-xs text-slate-300 cursor-pointer select-none">
+                        <input id="sessions-flagged" type="checkbox" class="accent-rose-500"> المقيّدة والملغاة فقط
+                    </label>
+                    <button id="btn-sessions-refresh" title="تحديث الجلسات" aria-label="تحديث الجلسات" class="p-2 bg-dark-950 border border-slate-800 hover:bg-dark-800 text-slate-300 rounded-lg transition-colors">
+                        <i class="fa-solid fa-arrows-rotate text-xs"></i>
+                    </button>
+                    <button id="btn-revoke-all" class="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5">
+                        <i class="fa-solid fa-power-off"></i> إلغاء جميع الجلسات
+                    </button>
+                </div>
+            </div>
+
+            <div id="sessions-stats" class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center"></div>
+
+            <div id="sessions-networks" class="text-xs text-slate-400"></div>
+
+            <div class="overflow-x-auto rounded-xl border border-slate-800">
+                <table class="w-full text-xs text-start">
+                    <thead class="bg-dark-950 text-slate-400">
+                        <tr>
+                            <th class="px-3 py-2 text-start font-semibold">الجلسة</th>
+                            <th class="px-3 py-2 text-start font-semibold">القنوات</th>
+                            <th class="px-3 py-2 text-start font-semibold">الشبكات</th>
+                            <th class="px-3 py-2 text-start font-semibold">طلبات/دقيقة</th>
+                            <th class="px-3 py-2 text-start font-semibold">تجديد / مفتاح / رمز</th>
+                            <th class="px-3 py-2 text-start font-semibold">آخر نشاط</th>
+                            <th class="px-3 py-2 text-start font-semibold">الحالة</th>
+                            <th class="px-3 py-2"><span class="sr-only">إجراء</span></th>
+                        </tr>
+                    </thead>
+                    <tbody id="sessions-body" class="divide-y divide-slate-800/80"></tbody>
+                </table>
+            </div>
+        </section>
+
     </main>
 
     <!-- Modal: Create New Channel -->
@@ -1124,6 +1174,118 @@
                 .replace(/'/g, '&#039;');
         }
 
+        // ------------------------------------------------------------------
+        // Viewer sessions monitor: /api/admin/sessions (refreshed every 10 s)
+        // ------------------------------------------------------------------
+        const LIMIT_REASONS = {
+            too_many_networks: 'شبكات كثيرة',
+            too_many_calls: 'طلبات كثيرة'
+        };
+        let sessionsLoading = false;
+
+        function agoText(ms) {
+            const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+            if (s < 60) return `منذ ${s.toLocaleString('ar-EG')} ث`;
+            const m = Math.round(s / 60);
+            if (m < 60) return `منذ ${m.toLocaleString('ar-EG')} د`;
+            return `منذ ${Math.round(m / 60).toLocaleString('ar-EG')} س`;
+        }
+
+        function sessionStat(label, value, tone) {
+            return `<div class="bg-dark-950 border border-slate-800 rounded-xl p-3">
+                <p class="text-[11px] text-slate-400">${label}</p>
+                <p class="text-xl font-bold ${tone} mt-0.5">${Number(value || 0).toLocaleString('ar-EG')}</p>
+            </div>`;
+        }
+
+        function sessionStatus(s) {
+            if (s.revoked) return '<span class="px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-300 border border-rose-500/30">ملغاة</span>';
+            if (s.limited) return `<span class="px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30">مقيّدة: ${escapeHtml(LIMIT_REASONS[s.limited] || s.limited)}</span>`;
+            return '<span class="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">نشطة</span>';
+        }
+
+        async function loadSessions() {
+            if (sessionsLoading) return;
+            sessionsLoading = true;
+            try {
+                const params = new URLSearchParams({ limit: '100' });
+                const q = document.getElementById('sessions-search').value.trim();
+                if (q) params.set('q', q);
+                if (document.getElementById('sessions-flagged').checked) params.set('flagged', '1');
+                const data = await api(`/api/admin/sessions?${params}`);
+                const sum = data.summary || {};
+                const lim = data.limits || {};
+                document.getElementById('sessions-meta').innerHTML =
+                    `Turnstile: <span class="${data.turnstile ? 'text-emerald-400' : 'text-amber-400'}">${data.turnstile ? 'مفعّل' : 'غير مفعّل'}</span>` +
+                    ` · الربط: <span class="font-mono ltr">${escapeHtml(data.binding)}</span>` +
+                    ` · الحدود: ${lim.maxNetworks || '∞'} شبكة، ${lim.maxCallsPerMinute || '∞'} طلب/دقيقة لكل جلسة` +
+                    ` · الحقبة: <span class="font-mono">${Number(data.epoch)}</span>`;
+                document.getElementById('sessions-stats').innerHTML =
+                    sessionStat('جلسات سارية', sum.active, 'text-white') +
+                    sessionStat('نشطة آخر 5 دقائق', sum.recent, 'text-emerald-400') +
+                    sessionStat('مقيّدة تلقائيًا', sum.limited, 'text-amber-400') +
+                    sessionStat('ملغاة', sum.revoked, 'text-rose-400');
+                const nets = sum.topNetworks || [];
+                document.getElementById('sessions-networks').innerHTML = nets.length
+                    ? 'أكثر الشبكات جلسات: ' + nets.map(n => `<span class="inline-block me-2 font-mono ltr text-slate-300">${escapeHtml(n.network)}</span><span class="me-3">(${Number(n.sessions).toLocaleString('ar-EG')})</span>`).join('')
+                    : '';
+                const rows = data.sessions || [];
+                document.getElementById('sessions-body').innerHTML = rows.length ? rows.map(s => `
+                    <tr class="hover:bg-dark-950/60">
+                        <td class="px-3 py-2 font-mono ltr text-slate-300" title="${escapeHtml(s.ua)}">${escapeHtml(s.sid.slice(0, 10))}…</td>
+                        <td class="px-3 py-2 text-slate-300">${s.channels.map(escapeHtml).join('، ') || '—'}</td>
+                        <td class="px-3 py-2 font-mono ltr text-slate-400">${s.networks.map(escapeHtml).join(', ') || '—'}</td>
+                        <td class="px-3 py-2 ${s.callsLastMinute > (lim.maxCallsPerMinute || Infinity) * 0.7 ? 'text-amber-300' : 'text-slate-300'}">${Number(s.callsLastMinute).toLocaleString('ar-EG')}</td>
+                        <td class="px-3 py-2 text-slate-400">${[s.totals.token, s.totals.key, s.totals.stream].map(n => Number(n).toLocaleString('ar-EG')).join(' / ')}</td>
+                        <td class="px-3 py-2 text-slate-400 whitespace-nowrap">${agoText(s.lastSeen)}</td>
+                        <td class="px-3 py-2 whitespace-nowrap">${sessionStatus(s)}</td>
+                        <td class="px-3 py-2 text-end">${s.revoked ? '' : `<button data-revoke-session="${escapeHtml(s.sid)}" class="px-2 py-1 rounded-md border border-rose-500/40 text-rose-300 hover:bg-rose-500/15">إلغاء</button>`}</td>
+                    </tr>`).join('')
+                    : '<tr><td colspan="8" class="px-3 py-6 text-center text-slate-500">لا توجد جلسات حاليًا</td></tr>';
+            } catch (err) {
+                console.error('Failed to load sessions:', err);
+                document.getElementById('sessions-meta').textContent = 'تعذّر تحميل الجلسات';
+            } finally {
+                sessionsLoading = false;
+            }
+        }
+
+        document.getElementById('sessions-body').addEventListener('click', async (e) => {
+            const btn = e.target.closest('[data-revoke-session]');
+            if (!btn) return;
+            btn.disabled = true;
+            try {
+                await api(`/api/admin/sessions/${encodeURIComponent(btn.dataset.revokeSession)}/revoke`, { method: 'POST' });
+                showToast('تم إلغاء الجلسة', 'success');
+                loadSessions();
+            } catch (err) {
+                btn.disabled = false;
+                showToast(`تعذّر إلغاء الجلسة: ${err.message}`, 'error');
+            }
+        });
+
+        document.getElementById('btn-revoke-all').addEventListener('click', async () => {
+            if (!confirm('سيتم إلغاء جميع جلسات المشاهدة فورًا، وسيعيد كل مشاهد التحقق تلقائيًا. هل تريد المتابعة؟')) return;
+            try {
+                const data = await api('/api/admin/sessions/revoke-all', { method: 'POST' });
+                const r2 = data.r2KeysExpireWithinSeconds
+                    ? ` مفاتيح R2 المُسلَّمة تنتهي خلال ${Math.ceil(data.r2KeysExpireWithinSeconds / 60).toLocaleString('ar-EG')} دقائق.`
+                    : '';
+                showToast(`تم إلغاء جميع الجلسات.${r2}`, 'success');
+                loadSessions();
+            } catch (err) {
+                showToast(`تعذّر إلغاء الجلسات: ${err.message}`, 'error');
+            }
+        });
+
+        let sessionsSearchTimer = null;
+        document.getElementById('sessions-search').addEventListener('input', () => {
+            clearTimeout(sessionsSearchTimer);
+            sessionsSearchTimer = setTimeout(loadSessions, 300);
+        });
+        document.getElementById('sessions-flagged').addEventListener('change', loadSessions);
+        document.getElementById('btn-sessions-refresh').addEventListener('click', loadSessions);
+
         // Initialize App
         async function initDashboard() {
             await loadConfig();
@@ -1133,6 +1295,9 @@
 
             // Live viewers: every 10 seconds (the count itself moves on a 15 s heartbeat)
             setInterval(loadViewers, 10000);
+            // Viewer sessions monitor: every 10 seconds
+            loadSessions();
+            setInterval(loadSessions, 10000);
 
             // Background Telemetry Polling (every 3 seconds)
             setInterval(() => {

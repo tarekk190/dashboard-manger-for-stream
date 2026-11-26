@@ -90,6 +90,11 @@ services:
       - SEGMENT_SIGN_WINDOW_SECONDS=${SEGMENT_SIGN_WINDOW_SECONDS:-120}
       # soft = player stops and revokes its session while DevTools is open; off = no guard
       - PLAYER_DEVTOOLS_GUARD=${PLAYER_DEVTOOLS_GUARD:-soft}
+      # Per-session limits (0 = off); a session over a limit is revoked
+      - SESSION_MAX_NETWORKS=${SESSION_MAX_NETWORKS:-2}
+      - SESSION_MAX_CALLS_PER_MINUTE=${SESSION_MAX_CALLS_PER_MINUTE:-20}
+      # New sessions per /24 or /48 network and 10 min. Off: mobile CGNAT puts many viewers on one IP
+      - MAX_SESSIONS_PER_NETWORK=${MAX_SESSIONS_PER_NETWORK:-0}
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-}
       - ADMIN_ALLOWED_ORIGINS=${ADMIN_ALLOWED_ORIGINS:-}
       - RESTREAM_MAX_RETRIES=${RESTREAM_MAX_RETRIES:-0}
