@@ -188,10 +188,6 @@
             transition: background .15s ease, color .15s ease, box-shadow .15s ease;
         }
         .ctrl:hover { background: rgba(255, 255, 255, .08); color: var(--lime); }
-        /* Larger touch area without making the bar wider. Vertical only by default: the volume
-           slider sits directly beside the mute button, so a sideways extension would cover it. */
-        .ctrl { position: relative; touch-action: manipulation; }
-        .ctrl::after { content: ''; position: absolute; inset: -4px 0; }
         .ctrl svg { width: 22px; height: 22px; }
         .ctrl.primary { color: var(--lime); }
         .ctrl.primary:hover { box-shadow: var(--glow-lime); }
@@ -246,9 +242,12 @@
         .quality {
             display: inline-flex;
             align-items: center;
+            gap: 5px;
             height: 24px;
             padding: 0 8px;
+            border: 0;
             border-radius: 6px;
+            font: inherit;
             font-size: 11px;
             font-weight: 700;
             letter-spacing: .04em;
@@ -258,15 +257,59 @@
             direction: ltr;
             unicode-bidi: isolate;
             margin-inline-end: 4px;
+            cursor: default;
         }
+        /* Quality selector (R2 mode, only while the HD rendition exists) */
+        .quality-wrap { position: relative; display: inline-flex; }
+        .quality .gear { display: none; width: 13px; height: 13px; transition: transform .3s; }
+        .quality-wrap.has-menu .quality { cursor: pointer; }
+        .quality-wrap.has-menu .quality .gear { display: block; }
+        .quality-wrap.has-menu .quality:hover .gear,
+        .quality[aria-expanded="true"] .gear { transform: rotate(60deg); }
+        .quality:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+        .quality-menu {
+            position: absolute;
+            bottom: calc(100% + 12px);
+            left: 0;
+            min-width: 170px;
+            padding: 6px;
+            border-radius: 12px;
+            background: rgba(10, 13, 16, .92);
+            border: 1px solid rgba(255, 255, 255, .12);
+            box-shadow: 0 12px 30px rgba(0, 0, 0, .5);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            z-index: 5;
+        }
+        .quality-menu button {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            width: 100%;
+            min-height: 40px;
+            padding: 6px 10px;
+            border: 0;
+            border-radius: 8px;
+            background: transparent;
+            color: #e5e7eb;
+            font: inherit;
+            font-size: 13px;
+            font-weight: 700;
+            cursor: pointer;
+            text-align: start;
+        }
+        .quality-menu button small { color: var(--muted); font-size: 11px; font-weight: 600; }
+        .quality-menu button:hover, .quality-menu button:focus-visible { background: rgba(255, 255, 255, .08); outline: none; }
+        .quality-menu button[aria-checked="true"] { color: var(--lime); }
+        .quality-menu button[aria-checked="true"]::before { content: '\2713'; margin-inline-end: 6px; }
+        .quality-menu button span { flex: 1; }
 
 
         /* ---------- Small screens ---------- */
         @media (max-width: 520px) {
             .controls { inset-inline: 8px; bottom: 8px; height: 46px; padding: 0 6px; }
             .ctrl { width: 36px; height: 36px; }
-            /* Slider is hidden here: 44x44 targets; the 4px side extension stays inside the 4px group gap */
-            .ctrl::after { inset: -4px; }
             .ctrl svg { width: 20px; height: 20px; }
             .volume-slider-wrap { display: none; }
             .big-play { width: 72px; height: 72px; }
@@ -323,7 +366,16 @@
             </div>
 
             <div class="ctrl-group">
-                <span class="quality" id="quality-badge" title="دقة البث">480p</span>
+                <div class="quality-wrap" id="quality-wrap">
+                    <button class="quality" id="quality-badge" type="button" title="دقة البث" aria-haspopup="menu" aria-expanded="false" aria-controls="quality-menu" disabled>
+                        <svg class="gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+                        <span id="quality-label">480p</span>
+                    </button>
+                    <div class="quality-menu hidden" id="quality-menu" role="menu" aria-label="جودة البث">
+                        <button type="button" role="menuitemradio" data-quality="sd" aria-checked="true"><span>480p</span><small>توفير البيانات</small></button>
+                        <button type="button" role="menuitemradio" data-quality="hd" aria-checked="false"><span>720p</span><small>جودة أعلى</small></button>
+                    </div>
+                </div>
                 <button class="ctrl" id="btn-fullscreen" type="button" aria-label="ملء الشاشة" title="ملء الشاشة (F)">
                     <svg id="icon-fs-enter" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
                     <svg id="icon-fs-exit" class="hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/></svg>
@@ -331,6 +383,157 @@
             </div>
         </div>
     </div>
+
+    <!-- Retry, backoff and playlist-state helpers (no DOM access). A separate block so the tests in
+         backend/test load exactly this code. player/index.html and index.hd-menu.html are identical. -->
+    <script id="pxl-retry">
+    (function (root) {
+        'use strict';
+        // Comment lines written by the backend into R2 playlists (backend/lib/stream-lifecycle.js)
+        var ENDED_MARKER = '#PXL-STREAM-ENDED';
+        var HD_MARKER = '#PXL-HD-AVAILABLE';
+        // An ended playlist is reported to hls.js as this HTTP status (4xx: hls.js does not retry)
+        var ENDED_HTTP_CODE = 410;
+
+        function hasLine(text, marker) {
+            var lines = String(text).split(/\r?\n/);
+            for (var i = 0; i < lines.length; i++) if (lines[i].trim() === marker) return true;
+            return false;
+        }
+
+        // Bounded exponential backoff with "equal jitter": delay = d/2 + random * d/2 with
+        // d = min(cap, base * 2^attempt). Viewers that failed at the same moment spread their
+        // retries over that range instead of retrying in lockstep.
+        function backoffDelay(attempt, opts) {
+            var rnd = opts.random || Math.random;
+            var n = Math.min(Math.max(0, attempt | 0), 30);
+            var d = Math.min(opts.capMs, opts.baseMs * Math.pow(2, n));
+            return Math.round(d / 2 + rnd() * d / 2);
+        }
+
+        // 'live' (lists segments) | 'ended' (backend ended marker) | 'empty' | 'invalid'
+        function playlistState(text) {
+            if (typeof text !== 'string' || text.indexOf('#EXTM3U') === -1) return 'invalid';
+            if (hasLine(text, ENDED_MARKER)) return 'ended';
+            return /^[^#\s]/m.test(text) ? 'live' : 'empty';
+        }
+
+        function hasHdMarker(text) {
+            return typeof text === 'string' && hasLine(text, HD_MARKER);
+        }
+
+        // One pending retry at a time; every schedule() without succeeded() in between waits longer.
+        function createRetryScheduler(opts) {
+            var setTimer = opts.setTimer || function (fn, ms) { return setTimeout(fn, ms); };
+            var clearTimer = opts.clearTimer || function (t) { clearTimeout(t); };
+            var attempt = 0, timer = null;
+            return {
+                schedule: function (fn) {
+                    if (timer !== null) return -1;
+                    var delay = backoffDelay(attempt, opts);
+                    attempt++;
+                    timer = setTimer(function () { timer = null; fn(); }, delay);
+                    return delay;
+                },
+                succeeded: function () { attempt = 0; },
+                cancel: function () { if (timer !== null) { clearTimer(timer); timer = null; } },
+                get attempt() { return attempt; },
+                get pending() { return timer !== null; }
+            };
+        }
+
+        // Playback recovery: after a failure, wait (backoff), probe the stream, then either resume
+        // (onLive) or report it unavailable (onUnavailable) and wait again. probe() resolves
+        // 'live' | 'ended' | 'missing' | 'error'. trigger() is ignored while a retry is already
+        // waiting or probing, so the error handler, the stall watchdog and the 'ended' event can
+        // all call it without stacking retries.
+        function createRecovery(opts) {
+            var scheduler = opts.scheduler, probing = false;
+            function run() {
+                probing = true;
+                Promise.resolve()
+                    .then(function () { return opts.probe(); })
+                    .catch(function () { return 'error'; })
+                    .then(function (state) {
+                        probing = false;
+                        if (state === 'live') { opts.onLive(); return; }
+                        opts.onUnavailable(state);
+                        scheduler.schedule(run);
+                    });
+            }
+            return {
+                trigger: function () { return probing ? -1 : scheduler.schedule(run); },
+                succeeded: function () { scheduler.succeeded(); },
+                get busy() { return probing || scheduler.pending; }
+            };
+        }
+
+        // hls.js load policies = the hls.js 1.5.8 defaults, except the error-retry base delay,
+        // which each viewer picks at random (baseMs), so hls.js' own exponential retries
+        // (base, 2x, 4x, ... capped at 8 s) are not synchronised across viewers.
+        function hlsLoadPolicies(baseMs) {
+            function policy(ttfb, maxLoad, timeoutRetries, errorRetries) {
+                return { default: {
+                    maxTimeToFirstByteMs: ttfb,
+                    maxLoadTimeMs: maxLoad,
+                    timeoutRetry: { maxNumRetry: timeoutRetries, retryDelayMs: 0, maxRetryDelayMs: 0 },
+                    errorRetry: { maxNumRetry: errorRetries, retryDelayMs: baseMs, maxRetryDelayMs: 8000 }
+                } };
+            }
+            return {
+                manifestLoadPolicy: policy(Infinity, 20000, 2, 1),
+                playlistLoadPolicy: policy(10000, 20000, 2, 2),
+                fragLoadPolicy: policy(10000, 120000, 4, 6)
+            };
+        }
+
+        // hls.js playlist loader (pLoader). Cross-origin (R2/CDN) playlists get a per-second _t
+        // query value so the browser never reuses a cached copy (all viewers share the URL within
+        // a second, so edge caching is unchanged; segments are not touched). Every playlist body
+        // is passed to hooks.onPlaylist; the ended playlist is turned into a 410 load error, so
+        // hls.js stops loading it and the page's recovery takes over.
+        function playlistLoaderClass(Base, hooks) {
+            return class extends Base {
+                load(context, config, callbacks) {
+                    try {
+                        // mapUrl: the page points the playlist at its current secret key (renewed
+                        // in the background), so hls.js keeps one stable level URL
+                        var u = new URL(hooks.mapUrl ? hooks.mapUrl(context.url) : context.url, hooks.pageUrl());
+                        if (u.origin !== hooks.pageOrigin()) {
+                            u.searchParams.set('_t', String(Math.floor(hooks.now() / 1000)));
+                            context.url = u.toString();
+                        }
+                    } catch (e) { /* keep the original URL */ }
+                    var wrapped = Object.assign({}, callbacks, {
+                        onSuccess: function (response, stats, ctx, networkDetails) {
+                            var text = response && typeof response.data === 'string' ? response.data : '';
+                            if (playlistState(text) === 'ended') {
+                                callbacks.onError({ code: ENDED_HTTP_CODE, text: 'Stream ended' }, ctx, networkDetails, stats);
+                                return;
+                            }
+                            try { if (hooks.onPlaylist) hooks.onPlaylist(text, ctx); } catch (e) { /* never break loading */ }
+                            callbacks.onSuccess(response, stats, ctx, networkDetails);
+                        }
+                    });
+                    super.load(context, config, wrapped);
+                }
+            };
+        }
+
+        root.PxlRetry = {
+            ENDED_MARKER: ENDED_MARKER,
+            HD_MARKER: HD_MARKER,
+            ENDED_HTTP_CODE: ENDED_HTTP_CODE,
+            backoffDelay: backoffDelay,
+            playlistState: playlistState,
+            hasHdMarker: hasHdMarker,
+            createRetryScheduler: createRetryScheduler,
+            createRecovery: createRecovery,
+            hlsLoadPolicies: hlsLoadPolicies,
+            playlistLoaderClass: playlistLoaderClass
+        };
+    })(typeof window !== 'undefined' ? window : globalThis);
+    </script>
 
     <script>
         // Parse Query Parameters
@@ -355,13 +558,105 @@
         const liveIndicator = document.getElementById('live-indicator');
         const liveIndicatorText = document.getElementById('live-indicator-text');
         const qualityBadge = document.getElementById('quality-badge');
+        const qualityWrap = document.getElementById('quality-wrap');
+        const qualityLabel = document.getElementById('quality-label');
+        const qualityMenu = document.getElementById('quality-menu');
 
 
         let hlsInstance = null;
         let streamManifestUrl = '';
+        let sdManifestUrl = '', hdManifestUrl = '';
+        let qualityMode = 'sd';        // every page load starts on 480p
+        let hdBroken = false;          // HD failed right after switching: not offered again this visit
+        let hdSwitchedAt = 0;
+        const HD_CHECK_MS = 60000;
+        // 'probe' = older backend: check hd/index.html every HD_CHECK_MS. 'playlist' = the backend
+        // marks HD availability in the 480p playlist (no extra request); set from /api/r2.
+        let hdSignal = 'probe';
+        let hdMarkerSeen = null;
         let userPaused = false;     // only the viewer may leave the stream paused
         let lastProgress = { t: 0, at: Date.now() };
         let started = false;
+
+        // ------------------------------------------------------------------
+        // Retries: bounded exponential backoff with jitter (PxlRetry above), never a fixed interval
+        //   playback: 1-2 s, 2-4 s, 4-8 s ... capped at 15-30 s, reset when a segment loads
+        //   stream lookup (/api/r2, /api/stream) and token renewal: 2.5-5 s ... capped at 30-60 s
+        // hls.js' own retries also get a random per-viewer base delay (0.5-1.5 s instead of 1 s).
+        // ------------------------------------------------------------------
+        const RETRY_BASE_MS = 500 + Math.round(Math.random() * 1000);
+        const resolveRetry = PxlRetry.createRetryScheduler({ baseMs: 5000, capMs: 60000 });
+        let tokenFailures = 0;
+        let lastFailure = null;     // { code, playlist } of the last fatal playback error
+        const recovery = PxlRetry.createRecovery({
+            scheduler: PxlRetry.createRetryScheduler({ baseMs: 2000, capMs: 30000 }),
+            probe: probeStream,
+            onLive: resumeStream,
+            onUnavailable: showUnavailable
+        });
+
+        // ------------------------------------------------------------------
+        // Secret playlist key (R2 mode). /api/r2/{slug} returns { base, key, expiresIn, renewIn }
+        // when the backend has STREAM_PATH_SECRET: the playlists are then at {base}w/{key}/index.html
+        // and {base}hd/w/{key}/index.html (the plain {base}index.html is the old public layout).
+        // The key rotates; the page fetches the next one at renewIn (a random moment of the next
+        // window) and hls.js picks it up on its next playlist reload. Native HLS cannot switch the
+        // URL it reloads, so it asks for the slow-rotating native key. An older backend returns no
+        // key: the plain URLs are used. Segments are listed in the playlist under secret names.
+        // ------------------------------------------------------------------
+        const useNativeHls = !(typeof Hls !== 'undefined' && Hls.isSupported());
+        let r2Base = '';
+        let windowKey = '';
+        let windowKeyExp = 0;         // ms
+        let windowKeyTimer = null;
+        let windowKeyFailures = 0;
+
+        async function fetchR2Info(slug) {
+            const q = useNativeHls ? '?native=1' : '';
+            return fetch(`/api/r2/${encodeURIComponent(slug)}${q}`, { headers: { 'Accept': 'application/json' } });
+        }
+
+        function setWindowKey(info) {
+            if (!info || typeof info.key !== 'string' || !/^[A-Za-z0-9_-]{8,64}$/.test(info.key)) return;
+            const ttl = Math.max(60, Number(info.expiresIn) || 0);
+            windowKey = info.key;
+            windowKeyExp = Date.now() + ttl * 1000;
+            windowKeyFailures = 0;
+            if (windowKeyTimer) clearTimeout(windowKeyTimer);
+            if (useNativeHls) return;   // native: the URL is fixed; recovery reloads with a new key
+            const renewIn = Math.min(Math.max(30, Number(info.renewIn) || ttl / 2), ttl - 30);
+            windowKeyTimer = setTimeout(renewWindowKey, renewIn * 1000);
+        }
+
+        async function renewWindowKey() {
+            try {
+                const res = await fetchR2Info(r2SlugParam);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                setWindowKey(await res.json());
+            } catch (err) {
+                const delay = PxlRetry.backoffDelay(windowKeyFailures++, { baseMs: 5000, capMs: 60000 });
+                console.warn(`[CDN] key renewal failed, retrying in ${Math.round(delay / 1000)}s`, err);
+                if (windowKeyTimer) clearTimeout(windowKeyTimer);
+                windowKeyTimer = setTimeout(renewWindowKey, delay);
+            }
+        }
+
+        // Before a probe or reload: renew a key that has expired or is about to (tab slept)
+        async function ensureWindowKey(force) {
+            if (windowKey && (force || Date.now() > windowKeyExp - 60000)) await renewWindowKey();
+        }
+
+        // {base}[hd/][w/{old}/]index.html -> {base}[hd/]w/{current}/index.html (idempotent)
+        function withWindowKey(url) {
+            if (!windowKey || !r2Base || !String(url).startsWith(r2Base)) return url;
+            const u = new URL(url);
+            u.pathname = u.pathname.replace(/\/(?:w\/[A-Za-z0-9_-]+\/)?index\.html$/, `/w/${windowKey}/index.html`);
+            return u.toString();
+        }
+        // Playlist URL without key and query: compares a loaded playlist with sd/hdManifestUrl
+        function canonicalPlaylistUrl(url) {
+            return String(url).split('?')[0].replace(/\/w\/[A-Za-z0-9_-]+\/index\.html$/, '/index.html');
+        }
 
         // ------------------------------------------------------------------
         // Viewer token for the Nginx edge (/auth). Fetched from /api/stream and renewed before expiry.
@@ -398,14 +693,18 @@
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const data = await res.json();
                 viewerToken = data.token;
+                tokenFailures = 0;
                 scheduleTokenRenewal(data.expiresIn || 60);
             } catch (e) {
                 // Renewal window missed (e.g. tab suspended): request a fresh token
                 try {
                     await fetchViewerToken(channelParam || 'match1');
+                    tokenFailures = 0;
                 } catch (err) {
-                    console.warn('[TOKEN] Renewal failed, retrying in 5s', err);
-                    tokenRenewTimer = setTimeout(renewViewerToken, 5000);
+                    const delay = PxlRetry.backoffDelay(tokenFailures++, { baseMs: 5000, capMs: 60000 });
+                    console.warn(`[TOKEN] Renewal failed, retrying in ${Math.round(delay / 1000)}s`, err);
+                    if (tokenRenewTimer) clearTimeout(tokenRenewTimer);
+                    tokenRenewTimer = setTimeout(renewViewerToken, delay);
                 }
             }
         }
@@ -518,15 +817,16 @@
             player.classList.remove('idle', 'hide-cursor');
             clearTimeout(idleTimer);
             idleTimer = setTimeout(() => {
-                if (!video.paused) {
+                if (!video.paused && qualityMenu.classList.contains('hidden')) {
                     player.classList.add('idle', 'hide-cursor');
                 }
             }, 3000);
         }
 
         function updateQualityBadge() {
-            const q = video.videoHeight ? `${video.videoHeight}p` : '';
-            if (q && qualityBadge.textContent !== q) qualityBadge.textContent = q;
+            if (!video.videoHeight) return;
+            const text = (qualityMode === 'hd' ? 'HD ' : '') + `${video.videoHeight}p`;
+            if (qualityLabel.textContent !== text) qualityLabel.textContent = text;
         }
 
         // ------------------------------------------------------------------
@@ -596,24 +896,41 @@
             // Case 2: Cloudflare R2 Direct Mode (?r2={random_slug})
             if (r2SlugParam) {
 
-                // Playlist base URL of this slug (gated endpoint: only the player page may ask)
-                let r2Base = '';
+                // Playlist base URL of this slug + CDN token (gated endpoint: only the player page may ask)
+                r2Base = '';
                 try {
-                    const srcRes = await fetch(`/api/r2/${encodeURIComponent(r2SlugParam)}`, {
-                        headers: { 'Accept': 'application/json' }
-                    });
-                    if (srcRes.ok) r2Base = (await srcRes.json()).base || '';
+                    const srcRes = await fetchR2Info(r2SlugParam);
+                    if (srcRes.ok) {
+                        const info = await srcRes.json();
+                        r2Base = info.base || '';
+                        setWindowKey(info);
+                        hdSignal = info.hdSignal === 'playlist' ? 'playlist' : 'probe';
+                    } else if (srcRes.status === 404 && !/json/i.test(srcRes.headers.get('content-type') || '')) {
+                        // Older backend without /api/r2 (Express "Cannot GET" HTML page): it publishes
+                        // the R2 domain in /api/config. Unknown slugs get a JSON 404 from newer backends.
+                        r2Base = await legacyR2Base(r2SlugParam);
+                        hdSignal = 'probe';
+                    }
                 } catch (e) {
                     // network error: retried below
                 }
                 if (!/^https:\/\//.test(r2Base)) {
                     setStatus('البث غير متاح حاليًا. جاري إعادة المحاولة...', { spinner: true });
-                    setTimeout(resolveStream, 5000);
+                    resolveRetry.schedule(resolveStream);
                     return;
                 }
+                resolveRetry.succeeded();
 
-                streamManifestUrl = `${r2Base}index.html`;
-                return initHls(streamManifestUrl);
+                // 480p (default rendition) and the optional HD rendition (source passthrough)
+                sdManifestUrl = `${r2Base}index.html`;
+                hdManifestUrl = `${r2Base}hd/index.html`;
+                streamManifestUrl = sdManifestUrl;
+                initHls(streamManifestUrl);
+                if (hdSignal === 'probe') {
+                    refreshHdOption();
+                    setInterval(refreshHdOption, HD_CHECK_MS);
+                }
+                return;
             }
 
             // Case 3: Nginx Edge Camouflaged Mode (?channel={channel})
@@ -626,9 +943,10 @@
                     // Channel missing or API unreachable: keep trying politely, never show the raw error
                     console.warn('[PLAYER] token request failed:', err.message);
                     setStatus('البث غير متاح حاليًا. جاري إعادة المحاولة...', { spinner: true });
-                    setTimeout(resolveStream, 5000);
+                    resolveRetry.schedule(resolveStream);
                     return;
                 }
+                resolveRetry.succeeded();
             } else {
                 // Token passed via ?token=: renew it once so the stream_auth cookie gets set
                 await renewViewerToken();
@@ -651,20 +969,31 @@
                     hlsInstance.destroy();
                 }
 
-                hlsInstance = new Hls({
+                hlsInstance = new Hls(Object.assign(PxlRetry.hlsLoadPolicies(RETRY_BASE_MS), {
                     enableWorker: true,
                     // Stable 5s delay: play 5s behind the live edge with a deeper forward buffer, so
                     // source jitter / network spikes are absorbed instead of stalling playback.
                     // lowLatencyMode only enables hls.js' playback-rate drift toward the target
                     // (our playlists have no LL-HLS parts, so nothing else changes).
-                    lowLatencyMode: true,
-                    liveSyncDuration: 5,          // target distance from the live edge (seconds)
-                    liveMaxLatencyDuration: 15,   // only jump forward when more than 15s behind
-                    maxLiveSyncPlaybackRate: 1.05, // drift back toward the 5s target at most 5% faster (inaudible)
-                    maxBufferLength: 20,
-                    maxMaxBufferLength: 30,
+                    lowLatencyMode: false,         // no playback-rate catch-up (bursty source)
+                    liveSyncDuration: 12,         // play 12s (6 segments) behind the edge: absorbs 8-9s ingest bursts
+                    liveMaxLatencyDuration: 18,   // jump forward only when more than 18s behind (playlist window ~20s)
+                    maxLiveSyncPlaybackRate: 1,   // never speed up to chase the edge
+                    maxBufferLength: 30,
+                    maxMaxBufferLength: 60,
                     backBufferLength: 30,
                     liveDurationInfinity: true,
+                    // Cross-origin (R2/CDN) playlists: a per-second query value so the browser never reuses a
+                    // playlist it cached. All viewers share the same URL within a second, so edge caching is
+                    // unchanged. Segments are not touched. The loader also reads the HD marker and turns the
+                    // backend's ended playlist into a 410 error (see PxlRetry.playlistLoaderClass).
+                    pLoader: PxlRetry.playlistLoaderClass(Hls.DefaultConfig.loader, {
+                        pageUrl: () => window.location.href,
+                        pageOrigin: () => window.location.origin,
+                        now: () => Date.now(),
+                        mapUrl: withWindowKey,
+                        onPlaylist: onPlaylistLoaded
+                    }),
                     xhrSetup: function(xhr, requestUrl) {
                         // Token goes ONLY on same-origin .css playlist requests. .js segments stay
                         // header-free and token-free so every viewer requests the identical,
@@ -680,7 +1009,7 @@
                             if (viewerToken) xhr.setRequestHeader('Authorization', `Bearer ${viewerToken}`);
                         }
                     }
-                });
+                }));
 
                 hlsInstance.loadSource(url);
                 hlsInstance.attachMedia(video);
@@ -695,34 +1024,35 @@
                     // Details go to the console only; the viewer sees a polite message
                     console.warn('[HLS-WARN]', data.type, data.details);
                     if (!data.fatal) return;
+                    if (qualityMode === 'hd') { hdFailed('hls ' + data.details); return; }
                     setStatus('جاري إعادة المحاولة...', { spinner: true });
                     if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
                         hlsInstance.recoverMediaError();
                         return;
                     }
                     const code = data.response && data.response.code;
-                    const playlistFailed = /manifest|level/i.test(data.details || '');
-                    setTimeout(async () => {
-                        // 401/403 on the playlist = token expired (e.g. tab slept): get a fresh one
-                        if ((code === 401 || code === 403) && channelParam && !srcParam && !r2SlugParam) {
-                            try { await fetchViewerToken(channelParam); } catch { /* retried below */ }
-                        }
-                        if (playlistFailed) hlsInstance.loadSource(url);
-                        else hlsInstance.startLoad();
-                    }, 3000);
+                    lastFailure = { code, playlist: /manifest|level/i.test(data.details || '') };
+                    if (code === PxlRetry.ENDED_HTTP_CODE) showUnavailable('ended');
+                    // Stop hls.js (it would keep requesting a dead playlist or deleted segments)
+                    // until the backoff below has checked the stream again
+                    hlsInstance.stopLoad();
+                    recovery.trigger();
                 });
+                // A loaded segment = playback works again: the next failure starts at the short delay
+                hlsInstance.on(Hls.Events.FRAG_LOADED, () => recovery.succeeded());
 
             } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
                 // Native Safari HLS
-                video.src = url;
+                video.src = withWindowKey(url);
                 video.addEventListener('loadedmetadata', attemptAutoplay, { once: true });
-                // Native player gives up on errors: reload the stream after 3s
+                video.addEventListener('playing', () => recovery.succeeded());
+                // Native player gives up on errors: check the stream again with backoff
                 video.addEventListener('error', () => {
+                    // HD errors are handled by hdFailed (listener below), which already reloads 480p
+                    if (qualityMode === 'hd' || Date.now() - hdSwitchedAt < 2000) return;
                     setStatus('جاري إعادة المحاولة...', { spinner: true });
-                    setTimeout(() => {
-                        video.src = url;
-                        video.addEventListener('loadedmetadata', attemptAutoplay, { once: true });
-                    }, 3000);
+                    lastFailure = { code: 0, playlist: true };
+                    recovery.trigger();
                 });
             } else {
                 setStatus('عذرًا، هذا المتصفح لا يدعم تشغيل البث المباشر.');
@@ -755,51 +1085,263 @@
         // Self-healing: a live stream must never stay ended / paused / frozen unless the
         // viewer paused it (e.g. the source restarted behind the scenes)
         // ------------------------------------------------------------------
-        function reloadStream() {
+        // All of it goes through `recovery` (bounded exponential backoff with jitter):
+        //   wait -> probeStream() -> 'live': resumeStream() | otherwise: showUnavailable(), wait longer
+        // An ended stream (backend ended playlist) or a missing playlist shows "unavailable" and is
+        // re-checked at most every 15-30 s; when the stream returns, playback resumes by itself.
+
+        // R2 mode: one playlist request (edge-cached for 1 s, per-second _t so it is never a stale
+        // browser copy). Other modes keep the old behaviour: hls.js reloads and decides.
+        async function probeStream() {
+            if (!r2SlugParam || !streamManifestUrl) return 'live';
+            await ensureWindowKey(false);
+            const load = () => {
+                const u = new URL(withWindowKey(streamManifestUrl), window.location.href);
+                u.searchParams.set('_t', String(Math.floor(Date.now() / 1000)));
+                return fetch(u.toString(), { cache: 'no-store', credentials: 'omit' });
+            };
+            let res = await load();
+            // 404 under a key: the key may be outdated (tab slept, secret rotated). Ask once more.
+            if (res.status === 404 && windowKey) {
+                await ensureWindowKey(true);
+                res = await load();
+            }
+            if (res.status === 404 || res.status === 410) return 'missing';
+            if (!res.ok) return 'error';
+            const text = await res.text();
+            const state = PxlRetry.playlistState(text);
+            if (state !== 'live') return state === 'ended' ? 'ended' : 'error';
+            // A playlist left behind by a stopped restream (no ended marker, e.g. an older backend
+            // or a crash) still lists segments, but they were pruned (404). Treat it as ended, or
+            // the player would reload it and fail on its segments forever.
+            //   - Last-Modified (CORS-safelisted) older than STALE_PLAYLIST_MS: abandoned. The
+            //     margin is wide so a viewer's wrong clock cannot trigger it.
+            //   - the same media sequence for FROZEN_PLAYLIST_MS: not updating any more.
+            // Recovery keeps probing with backoff, so playback resumes once the playlist moves.
+            const modified = Date.parse(res.headers.get('Last-Modified') || '');
+            if (Number.isFinite(modified) && Date.now() - modified > STALE_PLAYLIST_MS) return 'ended';
+            const seq = (text.match(/#EXT-X-MEDIA-SEQUENCE:(\d+)/) || [])[1];
+            if (seq) {
+                if (seq !== lastProbeSeq.seq) lastProbeSeq = { seq, at: Date.now() };
+                else if (Date.now() - lastProbeSeq.at > FROZEN_PLAYLIST_MS) return 'ended';
+            }
+            return 'live';
+        }
+        const STALE_PLAYLIST_MS = 10 * 60 * 1000;
+        const FROZEN_PLAYLIST_MS = 45000;
+        let lastProbeSeq = { seq: null, at: 0 };
+
+        async function resumeStream() {
+            const failure = lastFailure;
+            lastFailure = null;
+            // 401/403 on the playlist = token expired (e.g. tab slept): get a fresh one
+            if (failure && (failure.code === 401 || failure.code === 403) && channelParam && !srcParam && !r2SlugParam) {
+                try { await fetchViewerToken(channelParam); } catch { /* the next failure retries */ }
+            }
             setStatus('جاري إعادة المحاولة...', { spinner: true });
             lastProgress = { t: video.currentTime, at: Date.now() };
             if (hlsInstance) {
-                hlsInstance.loadSource(streamManifestUrl);
+                // Playlist failure, ended stream or missing segment: start from a fresh playlist.
+                // Other segment failures resume where playback stopped (as before).
+                const fresh = !failure || failure.playlist || failure.code === 404 || failure.code === PxlRetry.ENDED_HTTP_CODE;
+                if (fresh) hlsInstance.loadSource(streamManifestUrl);
+                else hlsInstance.startLoad();
             } else if (streamManifestUrl) {
-                video.src = streamManifestUrl;
+                if (!started) video.addEventListener('loadedmetadata', attemptAutoplay, { once: true });
+                video.src = withWindowKey(streamManifestUrl);   // probeStream renewed an old key
                 video.play().catch(() => {});
             }
         }
+
+        function showUnavailable(state) {
+            if (state === 'ended' || state === 'missing') {
+                setStatus('البث متوقف حاليًا. سيُستأنف تلقائيًا عند عودته.');
+            } else {
+                setStatus('جاري إعادة المحاولة...', { spinner: true });
+            }
+        }
+
         video.addEventListener('ended', () => {
             if (!started || userPaused) return;
             setStatus('جاري إعادة المحاولة...', { spinner: true });
-            setTimeout(reloadStream, 3000);
-        });
-        // Background tabs: mobile browsers pause/throttle media, so currentTime freezes and the
-        // watchdog used to reload the stream every 12 s in the background (data + battery drain).
-        document.addEventListener('visibilitychange', () => {
-            if (!document.hidden) lastProgress = { t: video.currentTime, at: Date.now() };
+            lastFailure = { code: 0, playlist: true };
+            recovery.trigger();
         });
         setInterval(() => {
-            if (document.hidden || !started || userPaused || !streamManifestUrl) return;
+            if (!started || userPaused || !streamManifestUrl) return;
             if (video.currentTime !== lastProgress.t) {
                 lastProgress = { t: video.currentTime, at: Date.now() };
                 return;
             }
-            if (Date.now() - lastProgress.at > 12000) reloadStream();
+            if (Date.now() - lastProgress.at > 20000) {
+                lastProgress = { t: video.currentTime, at: Date.now() };
+                // Frozen on HD (its playlist stopped updating): back to 480p. Otherwise re-check.
+                if (qualityMode === 'hd') { hdFailed('stalled'); return; }
+                if (recovery.busy) return;
+                lastFailure = { code: 0, playlist: true };
+                recovery.trigger();
+            }
         }, 2000);
+
+        // ------------------------------------------------------------------
+        // Live viewers heartbeat: POST /api/ping/{channel}?sid=... every 60-75 s while playing.
+        // The channel is the R2 slug of the stream actually played (hd/{slug}/), otherwise the
+        // ?channel= key. Fire-and-forget: a failed ping never affects playback.
+        // ------------------------------------------------------------------
+        const viewerSid = (window.crypto && crypto.randomUUID)
+            ? crypto.randomUUID()
+            : 'v' + Date.now().toString(36) + Math.random().toString(36).slice(2, 12);
+        function viewerKey() {
+            const m = /\/hd\/([a-z0-9]+)\//i.exec(streamManifestUrl || '');
+            return m ? m[1] : (channelParam || 'match1');
+        }
+        function sendViewerPing() {
+            if (!started || video.paused) return;
+            const url = `/api/ping/${encodeURIComponent(viewerKey())}?sid=${encodeURIComponent(viewerSid)}`;
+            try {
+                if (navigator.sendBeacon && navigator.sendBeacon(url)) return;
+            } catch (e) { /* fall back to fetch */ }
+            fetch(url, { method: 'POST', keepalive: true, credentials: 'omit' }).catch(() => {});
+        }
+        video.addEventListener('playing', function firstPing() {
+            video.removeEventListener('playing', firstPing);
+            sendViewerPing();                                   // count the viewer as soon as video plays
+        });
+        // Every 60-75 s (random per ping): 50,000 viewers = ~750 uncacheable POST/s instead of
+        // ~3,300/s at 15 s, and kickoff joiners do not ping in lockstep. The backend counts a
+        // viewer for VIEWER_TTL_MS (150 s) after the last ping, so one lost ping is tolerated.
+        (function pingLoop() {
+            setTimeout(() => { sendViewerPing(); pingLoop(); }, 60000 + Math.random() * 15000);
+        })();
 
         // ------------------------------------------------------------------
         // Live-edge state + quality badge
         // ------------------------------------------------------------------
-        let lastNotLive = null;
         setInterval(() => {
-            if (document.hidden) return;
             const edge = liveEdge();
-            const behind = edge !== null && Number.isFinite(edge) && (edge - video.currentTime) > 8;
+            const behind = edge !== null && Number.isFinite(edge) && (edge - video.currentTime) > 20;
             const notLive = behind || (started && video.paused);
-            if (notLive !== lastNotLive) {                      // touch the DOM only on change
-                lastNotLive = notLive;
-                liveIndicator.classList.toggle('behind', notLive);
-                liveIndicatorText.textContent = notLive ? 'العودة للمباشر' : 'مباشر';
-            }
+            liveIndicator.classList.toggle('behind', notLive);
+            liveIndicatorText.innerText = notLive ? 'العودة للمباشر' : 'مباشر';
             updateQualityBadge();
         }, 1000);
+
+        // ------------------------------------------------------------------
+        // Quality selector (R2 mode only)
+        //   480p = hd/{slug}/index.html     the transcoded rendition, ALWAYS the start quality
+        //   HD   = hd/{slug}/hd/index.html  H.264 720p (backend RESTREAM_HD_MODE=encode)
+        // HD is offered only while its playlist exists (the backend removes it ~45 s after the HD
+        // leg stops) and is re-checked every minute. Switching loads the other playlist, so it works
+        // the same with hls.js and native Safari HLS. Any fatal error while on HD (stream gone,
+        // codec the browser cannot play, e.g. HEVC) switches back to 480p and hides HD for this visit.
+        // ------------------------------------------------------------------
+        function updateQualityMenu() {
+            qualityMenu.querySelectorAll('[data-quality]').forEach(b => {
+                b.setAttribute('aria-checked', b.dataset.quality === qualityMode ? 'true' : 'false');
+            });
+            if (!video.videoHeight) qualityLabel.textContent = qualityMode === 'hd' ? 'HD' : '480p';
+        }
+        function openQualityMenu(open) {
+            const show = open && qualityWrap.classList.contains('has-menu');
+            qualityMenu.classList.toggle('hidden', !show);
+            qualityBadge.setAttribute('aria-expanded', show ? 'true' : 'false');
+            if (show) (qualityMenu.querySelector('[aria-checked="true"]') || qualityMenu.querySelector('button')).focus();
+        }
+        async function hdPlaylistAvailable() {
+            if (!hdManifestUrl || hdBroken) return false;
+            try {
+                const u = new URL(withWindowKey(hdManifestUrl));
+                u.searchParams.set('_t', String(Math.floor(Date.now() / 1000)));
+                const res = await fetch(u.toString(), { cache: 'no-store', credentials: 'omit' });
+                if (!res.ok) return false;
+                const text = await res.text();
+                return text.includes('#EXTM3U') && /^[^#\s].*\.(js|ts)\s*$/m.test(text);
+            } catch (e) {
+                return false;
+            }
+        }
+        async function refreshHdOption() {
+            // Newer backend: availability comes from the HD marker of the 480p playlist (no request)
+            const ok = hdSignal === 'playlist' ? (Boolean(hdMarkerSeen) && !hdBroken) : await hdPlaylistAvailable();
+            applyHdOption(ok);
+        }
+        // Called for every playlist hls.js loads. Only the 480p playlist carries the HD marker; the
+        // UI is touched only when availability changes (playlists reload every ~2 s).
+        function onPlaylistLoaded(text, context) {
+            if (hdSignal !== 'playlist' || !sdManifestUrl || !context || !context.url) return;
+            if (canonicalPlaylistUrl(context.url) !== sdManifestUrl) return;
+            const ok = PxlRetry.hasHdMarker(text);
+            if (ok === hdMarkerSeen) return;
+            hdMarkerSeen = ok;
+            applyHdOption(ok && !hdBroken);
+        }
+        // Older backend (no /api/r2): the R2 domain is published in /api/config
+        async function legacyR2Base(slug) {
+            try {
+                const res = await fetch('/api/config', { headers: { 'Accept': 'application/json' } });
+                if (!res.ok) return '';
+                const domain = String((await res.json()).r2CustomDomain || '');
+                return /^[a-z0-9.-]+$/i.test(domain) ? `https://${domain}/hd/${encodeURIComponent(slug)}/` : '';
+            } catch (e) {
+                return '';
+            }
+        }
+        function applyHdOption(ok) {
+            qualityWrap.classList.toggle('has-menu', ok);
+            qualityBadge.disabled = !ok;
+            qualityBadge.title = ok ? 'جودة البث' : 'دقة البث';
+            if (!ok) {
+                openQualityMenu(false);
+                if (qualityMode === 'hd') switchQuality('sd');
+            }
+        }
+        function switchQuality(mode) {
+            const url = mode === 'hd' ? hdManifestUrl : sdManifestUrl;
+            if (!url || mode === qualityMode) return;
+            qualityMode = mode;
+            hdSwitchedAt = Date.now();
+            streamManifestUrl = url;
+            updateQualityMenu();
+            setStatus('', { spinner: true });
+            lastProgress = { t: video.currentTime, at: Date.now() };
+            if (hlsInstance) {
+                hlsInstance.loadSource(url);
+            } else {
+                video.src = withWindowKey(url);
+                video.play().catch(() => {});
+            }
+        }
+        function hdFailed(reason) {
+            console.warn('[PLAYER] HD rendition failed, back to 480p:', reason);
+            // Failing right after switching = this browser cannot play it: hide HD for this visit
+            if (Date.now() - hdSwitchedAt < 20000) hdBroken = true;
+            switchQuality('sd');
+            refreshHdOption();
+        }
+        qualityBadge.addEventListener('click', (e) => {
+            e.stopPropagation();
+            openQualityMenu(qualityMenu.classList.contains('hidden'));
+        });
+        qualityMenu.addEventListener('click', (e) => {
+            const item = e.target.closest('[data-quality]');
+            if (!item) return;
+            e.stopPropagation();
+            openQualityMenu(false);
+            switchQuality(item.dataset.quality);
+            qualityBadge.focus();
+        });
+        qualityMenu.addEventListener('keydown', (e) => {
+            const items = [...qualityMenu.querySelectorAll('[data-quality]')];
+            const i = items.indexOf(document.activeElement);
+            if (e.key === 'Escape') { e.preventDefault(); openQualityMenu(false); qualityBadge.focus(); }
+            else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                e.preventDefault();
+                items[(i + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length].focus();
+            }
+        });
+        document.addEventListener('click', (e) => { if (!qualityWrap.contains(e.target)) openQualityMenu(false); });
+        // Native Safari: an error while on HD also falls back to 480p
+        video.addEventListener('error', () => { if (!hlsInstance && qualityMode === 'hd') hdFailed('native error'); });
 
         // Start
         updatePlayUi();

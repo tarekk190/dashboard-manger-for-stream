@@ -44,16 +44,24 @@
     SUPABASE_URL: 'https://baftqvykfyeqzrklormf.supabase.co',  // project base URL (no /rest/v1), e.g. 'https://abcd1234.supabase.co'
     SUPABASE_ANON_KEY: 'sb_publishable_JQ2_pUrEt77qkesiITm01w_RkL3PpMo',  // public key, RLS-protected; anon JWT or 'sb_publishable_...'
     PLAYER_BASE: 'https://live.smarterwho.site/player/',
+    // Streaming backend (server.js). "Start" calls its /api/channels/start. This page's origin
+    // must be in the backend's ADMIN_ALLOWED_ORIGINS (VPS .env), e.g.
+    //   ADMIN_ALLOWED_ORIGINS=http://localhost:*,http://127.0.0.1:*,https://tarekk190.github.io
+    BACKEND_URL: 'https://live.smarterwho.site',
+    R2_PUBLIC_BASE: 'https://cdn.vsbskl.site',   // hd/{slug}/index.html links pasted here are recognised
     BLOG_MATCH_PAGE: 'https://www.px-league.site/p/match.html?id=',
     // MUST equal the site's PXL_MATCH_FILTERS (px-league-theme.xml, SETTINGS script): the site
     // lists the matches of these championships, so a match missing here can never be hidden.
     MATCH_FILTERS: JSON.stringify(["901130","41019","79123","47821","47037","90322","573139","308191","138192","252344","13178","970117","888111","75166","560100","797102","78989","799154","30067","160110","154108","41480","26232","91130","784120","751343","38371","690345","796368","370347"]) + '/[]/["8634"]',
     // Fixed channels: picking one in the form fills its R2 slug (the slug stays editable).
-    // A slug changes only if the channel is recreated in the admin panel: update it here then.
+    // These are only the starting values: once you are signed in to the backend (Start button or
+    // "مزامنة القنوات"), the real slugs are read from /api/channels/status and replace them.
+    // A channel recreated in /admin gets a NEW slug (b3: 1ikcxk76du8w -> 6bjyv7u5kfve), and an
+    // old slug points at a dead R2 folder: the player then retries forever.
     CHANNELS: {
       b1: 'iesufnzpe8ys',
       b2: 'l19glp5gmva0',
-      b3: '1ikcxk76du8w',
+      b3: '6bjyv7u5kfve',
       b4: 'iwkksjrvle3u',
     },
   };
@@ -152,7 +160,10 @@
           <div class="grid gap-3 rounded-2xl border border-ink-700 bg-ink-950 p-4">
             <div class="flex items-center justify-between">
               <p class="font-bold">البث المباشر <span class="text-xs font-normal text-slate-500">(اختياري)</span></p>
-              <button type="button" id="clear-stream" class="text-xs text-slate-400 transition hover:text-red-400">إزالة البث</button>
+              <span class="flex gap-3">
+                <button type="button" id="sync-channels" title="قراءة R2 slug الحقيقي لكل قناة من الخادم" class="text-xs text-slate-400 transition hover:text-brand">مزامنة القنوات</button>
+                <button type="button" id="clear-stream" class="text-xs text-slate-400 transition hover:text-red-400">إزالة البث</button>
+              </span>
             </div>
             <label class="grid gap-1 text-xs font-semibold text-slate-400">Channel
               <select name="channel" dir="ltr" class="rounded-xl border border-ink-700 bg-ink-900 px-3 py-2.5 font-mono text-sm text-slate-100 transition focus:border-brand"></select>
@@ -164,6 +175,23 @@
             <div class="rounded-xl border border-dashed border-ink-700 bg-ink-900/60 p-2.5">
               <p class="mb-0.5 text-[11px] text-slate-500">رابط المشغّل</p>
               <code id="preview" dir="ltr" class="block break-all text-xs text-brand">—</code>
+            </div>
+
+            <!-- Start a broadcast on the selected channel from a source URL (backend /api/channels/start) -->
+            <div class="grid gap-2 rounded-xl border border-ink-700 bg-ink-900/60 p-3">
+              <label class="grid gap-1 text-xs font-semibold text-slate-400">رابط المصدر (m3u8 / mp4 / rtmp)
+                <input name="source_url" type="url" placeholder="https://example.com/live/index.m3u8" dir="ltr" autocomplete="off" class="rounded-xl border border-ink-700 bg-ink-950 px-3 py-2.5 font-mono text-sm text-slate-100 transition focus:border-brand">
+              </label>
+              <div id="be-login" class="hidden gap-2">
+                <p class="text-[11px] text-slate-400">دخول لوحة الخادم (نفس حساب /admin)</p>
+                <input name="be_user" placeholder="username" dir="ltr" autocomplete="username" class="rounded-xl border border-ink-700 bg-ink-950 px-3 py-2 text-sm">
+                <input name="be_pass" type="password" placeholder="password" dir="ltr" autocomplete="current-password" class="rounded-xl border border-ink-700 bg-ink-950 px-3 py-2 text-sm">
+              </div>
+              <div class="flex gap-2">
+                <button type="button" id="start-stream" class="flex-1 rounded-xl border border-red-500/50 bg-red-500/15 py-2.5 text-sm font-extrabold text-red-200 transition hover:bg-red-500/25 disabled:opacity-50">▶ تشغيل البث وربطه</button>
+                <button type="button" id="stop-stream" class="rounded-xl border border-ink-700 px-4 text-sm text-slate-300 transition hover:border-red-400 hover:text-red-300 disabled:opacity-50">■ إيقاف</button>
+              </div>
+              <p id="be-msg" class="hidden text-xs"></p>
             </div>
           </div>
 
@@ -385,8 +413,8 @@
       o.textContent = `${o.value}  ·  ${slug}${st ? (st.live ? '  ● تبث' : '  ○ متوقفة') : ''}`;
     });
   }
-  async function refreshChannelStatus() {
-    const slugs = Object.values(CONFIG.CHANNELS || {}).filter((s) => KEY_RE.test(s));
+  async function refreshChannelStatus(extra) {
+    const slugs = [...new Set(Object.values(CONFIG.CHANNELS || {}).concat(extra || []))].filter((s) => KEY_RE.test(s));
     if (!slugs.length || !CONFIG.WORKER_URL) return;
     try {
       const res = await fetch(`${CONFIG.WORKER_URL}/api/channel-status?slugs=${slugs.join(',')}`, { headers: { Accept: 'application/json' }, cache: 'no-store' });
@@ -420,8 +448,12 @@
     setVis(s.is_visible !== false);
     setChannel(s.channel);
     form.r2_slug.value = s.r2_slug || '';
+    form.source_url.value = '';
+    clearInterval(waitTimer);
+    beMsg.className = 'hidden';
     msg.className = 'hidden';
     updatePreview();
+    checkSavedSlug();
     renderList();
     if (window.matchMedia('(max-width: 1023px)').matches) $('#panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
@@ -468,15 +500,207 @@
     const channel = form.channel.value.trim(), slug = form.r2_slug.value.trim();
     if (channel && !KEY_RE.test(channel)) return flash('Channel: حروف إنجليزية وأرقام و - _ فقط.', false);
     if (slug && !KEY_RE.test(slug)) return flash('R2 Slug: حروف إنجليزية وأرقام و - _ فقط.', false);
+    // A stopped channel's player only shows "stopped" on the site: say so before linking it
+    const st = slugStatus(slug);
+    if (slug && st && !st.live && setOf(state.selected).r2_slug !== slug &&
+        !confirm(`القناة ${channel || slug} لا تبث الآن${st.ageSec != null ? ` (آخر تحديث قبل ${ago(st.ageSec)})` : ''}.\nالمشغّل على صفحة المباراة سيعرض "البث متوقف" حتى تشغّلها (رابط المصدر ثم ▶ تشغيل).\nربطها رغم ذلك؟`)) return;
     const btn = $('#save');
     btn.disabled = true;
     try {
       await persist([{ match_id: state.selected, is_visible: vis.getAttribute('aria-checked') === 'true', channel: channel || null, r2_slug: slug || null }]);
-      const st = slugStatus(slug);
       if (slug && st && !st.live) flash('تم الحفظ ✓ — تنبيه: هذه القناة لا تبث الآن، شغّل البث عليها من لوحة الخادم.', false);
       else flash('تم الحفظ ✓', true);
       renderList();
     } catch (err) { flash('فشل الحفظ: ' + (err.message || err), false); }
+    finally { btn.disabled = false; }
+  });
+
+  // ---------------------------------------------------------------- pasted links
+  // A player link (…/player/?channel=b2&r2=SLUG) or an R2 playlist link (…/hd/SLUG/index.html)
+  // pasted into R2 Slug or Source URL fills Channel + R2 Slug instead of failing validation.
+  function slugToChannel(slug) { return Object.keys(CONFIG.CHANNELS || {}).find((c) => CONFIG.CHANNELS[c] === slug) || ''; }
+  function parseStreamLink(text) {
+    let u;
+    try { u = new URL(String(text || '').trim()); } catch { return null; }
+    const ch = u.searchParams.get('channel') || '', r2 = u.searchParams.get('r2') || '';
+    const player = new URL(CONFIG.PLAYER_BASE);
+    if (u.origin === player.origin && u.pathname.startsWith(player.pathname) && (KEY_RE.test(ch) || KEY_RE.test(r2))) {
+      return { channel: KEY_RE.test(ch) ? ch : slugToChannel(r2), r2_slug: KEY_RE.test(r2) ? r2 : (CONFIG.CHANNELS || {})[ch] || '' };
+    }
+    const m = u.pathname.match(/^\/hd\/([A-Za-z0-9_-]{1,64})\//);
+    if (m && CONFIG.R2_PUBLIC_BASE && u.origin === new URL(CONFIG.R2_PUBLIC_BASE).origin) return { channel: slugToChannel(m[1]), r2_slug: m[1] };
+    return null;
+  }
+  form.addEventListener('input', (e) => {
+    if (e.target !== form.r2_slug && e.target !== form.source_url) return;
+    const link = parseStreamLink(e.target.value);
+    if (!link) return;
+    if (link.channel) setChannel(link.channel);
+    form.r2_slug.value = link.r2_slug || '';
+    if (e.target === form.source_url) form.source_url.value = '';   // our own output, not a source
+    beFlash('تم التعرف على رابط المشغّل وتعبئة Channel و R2 Slug. اضغط "حفظ" لربطه بالمباراة.', true);
+    updatePreview();
+  });
+
+  // ---------------------------------------------------------------- start / stop broadcast
+  // Start = backend POST /api/channels/start { channelName, sourceUrl } (creates the channel on
+  // first use, replaces the source if it is already running), then the match is linked to that
+  // channel in Supabase, then we wait until the R2 playlist is fresh (= plays on the site).
+  const BE_TOKEN_KEY = 'pxl.backend.token';
+  const SOURCE_PROTOCOLS = ['http:', 'https:', 'rtmp:', 'rtmps:', 'rtsp:', 'srt:'];
+  const beMsg = $('#be-msg'), beLogin = $('#be-login');
+  function beFlash(text, ok) { beMsg.textContent = text; beMsg.className = 'text-xs ' + (ok ? 'text-brand' : 'text-red-400'); }
+  function beToken() { try { return sessionStorage.getItem(BE_TOKEN_KEY) || ''; } catch { return ''; } }
+  function setBeToken(t) { try { t ? sessionStorage.setItem(BE_TOKEN_KEY, t) : sessionStorage.removeItem(BE_TOKEN_KEY); } catch { /* private mode */ } }
+  function needBeLogin(text) { setBeToken(''); beLogin.classList.remove('hidden'); beLogin.classList.add('grid'); beFlash(text, false); form.be_user.focus(); }
+  async function backend(path, body, token) {   // body === null -> GET
+    let res;
+    try {
+      res = await fetch(CONFIG.BACKEND_URL + path, body === null ? {
+        headers: { Accept: 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) },
+        cache: 'no-store',
+      } : {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) },
+        body: JSON.stringify(body),
+      });
+    } catch {
+      throw Object.assign(new Error(`تعذّر الوصول إلى الخادم من ${location.origin}: أضف هذا الرابط إلى ADMIN_ALLOWED_ORIGINS في ملف .env على الخادم ثم أعد تشغيل backend.`), { cors: true });
+    }
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 403 && /cross-origin/i.test(data.error || '')) {
+      throw new Error(`الخادم رفض هذا الموقع (${location.origin}): أضفه إلى ADMIN_ALLOWED_ORIGINS في .env على الخادم.`);
+    }
+    if (!res.ok || data.success === false) throw Object.assign(new Error(data.error || ('HTTP ' + res.status)), { status: res.status });
+    return data;
+  }
+  async function ensureBeToken() {
+    if (beToken()) return beToken();
+    const user = form.be_user.value.trim(), pass = form.be_pass.value;
+    if (!user || !pass) { needBeLogin('أدخل اسم المستخدم وكلمة المرور الخاصة بلوحة الخادم (/admin) ثم اضغط تشغيل مرة أخرى.'); return ''; }
+    const data = await backend('/api/admin/login', { username: user, password: pass });
+    setBeToken(data.token);
+    form.be_pass.value = '';
+    beLogin.classList.add('hidden'); beLogin.classList.remove('grid');
+    return data.token;
+  }
+  // Enter inside the backend login / source fields must not submit the match form (Save)
+  ['be_user', 'be_pass', 'source_url'].forEach((n) => form[n].addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); $('#start-stream').click(); }
+  }));
+
+  // Real channel -> slug map from the backend (GET /api/channels/status). Replaces CONFIG.CHANNELS,
+  // so a channel recreated in /admin (new slug) is linked with its live folder, not a dead one.
+  // silent: on boot with a saved token; never asks for the password.
+  async function syncChannels(silent) {
+    const token = silent ? beToken() : await ensureBeToken();
+    if (!token) return false;
+    let data;
+    try { data = await backend('/api/channels/status', null, token); }
+    catch (err) {
+      if (err.status === 401) { if (!silent) needBeLogin('انتهت جلسة لوحة الخادم: أدخل بيانات الدخول مرة أخرى.'); else setBeToken(''); return false; }
+      if (!silent) beFlash('فشلت المزامنة: ' + (err.message || err), false);
+      return false;
+    }
+    const changed = [];
+    (data.channels || []).forEach((c) => {
+      let slug = '';
+      try { slug = new URL(c.links.iframeR2EmbedUrl).searchParams.get('r2') || ''; } catch { /* no R2 link */ }
+      const key = String(c.streamKey || '');
+      if (!KEY_RE.test(key) || !KEY_RE.test(slug)) return;
+      if (CONFIG.CHANNELS[key] !== slug) changed.push(`${key}: ${CONFIG.CHANNELS[key] || '—'} → ${slug}`);
+      CONFIG.CHANNELS[key] = slug;
+      if (![...channelSelect.options].some((o) => o.value === key)) addChannelOption(key, `${key}  ·  ${slug}`);
+    });
+    relabelChannels();
+    await refreshChannelStatus();
+    if (changed.length) console.info('[stream-manager] slugs from backend:', changed);
+    if (state.selected) checkSavedSlug();
+    if (!silent) beFlash(changed.length ? `تم تحديث: ${changed.join('، ')}` : 'القنوات متطابقة مع الخادم ✓', true);
+    return true;
+  }
+  // The open match is saved with a slug that is not its channel's current one: offer the fix
+  function checkSavedSlug() {
+    const s = setOf(state.selected), real = (CONFIG.CHANNELS || {})[s.channel];
+    if (!s.channel || !real || s.r2_slug === real) return;
+    form.r2_slug.value = real;
+    updatePreview();
+    flash(`R2 Slug المحفوظ (${s.r2_slug || '—'}) قديم للقناة ${s.channel}: تم وضع ${real}. اضغط "حفظ" لتصحيحه على الموقع.`, false);
+  }
+  $('#sync-channels').addEventListener('click', () => syncChannels(false));
+
+  let waitTimer = null;
+  function waitUntilLive(slug, matchId) {
+    clearInterval(waitTimer);
+    const until = Date.now() + 90000;
+    waitTimer = setInterval(async () => {
+      await refreshChannelStatus([slug]);
+      const st = slugStatus(slug);
+      if (st && st.live) {
+        clearInterval(waitTimer);
+        beFlash(`● القناة تبث الآن. افتح صفحة المباراة: ${CONFIG.BLOG_MATCH_PAGE}${matchId} (حدّث الصفحة إن كانت مفتوحة).`, true);
+      } else if (Date.now() > until) {
+        clearInterval(waitTimer);
+        beFlash('بدأ التشغيل لكن القناة لم تبث بعد 90 ثانية: تأكد أن رابط المصدر يعمل (افتحه في VLC) وراجع سجل القناة في /admin.', false);
+      }
+    }, 5000);
+  }
+
+  $('#start-stream').addEventListener('click', async () => {
+    if (!state.selected) return;
+    const matchId = state.selected;
+    const channel = form.channel.value.trim();
+    const source = form.source_url.value.trim();
+    if (!channel || !KEY_RE.test(channel)) return beFlash('اختر Channel أولاً (b1 … b4).', false);
+    let parsed;
+    try { parsed = new URL(source); } catch { return beFlash('ضع رابط المصدر الكامل (يبدأ بـ https:// أو rtmp://).', false); }
+    if (!SOURCE_PROTOCOLS.includes(parsed.protocol)) return beFlash('بروتوكول غير مدعوم: http(s) / rtmp(s) / rtsp / srt فقط.', false);
+    const known = (CONFIG.CHANNELS || {})[channel], st = slugStatus(known);
+    if (st && st.live && !confirm(`القناة ${channel} تبث الآن. التشغيل سيستبدل مصدرها الحالي لكل المباريات المرتبطة بها. متابعة؟`)) return;
+
+    const btn = $('#start-stream');
+    btn.disabled = true;
+    beFlash('جارٍ تشغيل البث على الخادم...', true);
+    try {
+      let token = await ensureBeToken();
+      if (!token) return;
+      let data;
+      try { data = await backend('/api/channels/start', { channelName: channel, sourceUrl: source }, token); }
+      catch (err) {
+        if (err.status === 401) return needBeLogin('انتهت جلسة لوحة الخادم: أدخل بيانات الدخول مرة أخرى.');
+        throw err;
+      }
+      // The slug the backend really uses for this channel (a new channel gets a random one)
+      let slug = known || '';
+      try { slug = new URL(data.channel.links.iframeR2EmbedUrl).searchParams.get('r2') || slug; } catch { /* keep CONFIG slug */ }
+      if (!KEY_RE.test(slug)) throw new Error('الخادم لم يُرجع R2 slug للقناة.');
+      if (known && known !== slug) console.warn(`[stream-manager] CONFIG.CHANNELS.${channel} = ${known}, backend uses ${slug}. Update CONFIG.`);
+      if (state.selected === matchId) { form.r2_slug.value = slug; updatePreview(); }
+      const visible = state.selected === matchId ? vis.getAttribute('aria-checked') === 'true' : setOf(matchId).is_visible !== false;
+      await persist([{ match_id: matchId, is_visible: visible, channel, r2_slug: slug }]);
+      renderList();
+      beFlash(`تم التشغيل (${data.channel.state || 'CONNECTING'}) وربط المباراة #${matchId} بالقناة ${channel}. ننتظر وصول البث...`, true);
+      waitUntilLive(slug, matchId);
+    } catch (err) {
+      beFlash('فشل التشغيل: ' + (err.message || err), false);
+    } finally { btn.disabled = false; }
+  });
+
+  $('#stop-stream').addEventListener('click', async () => {
+    const channel = form.channel.value.trim();
+    if (!channel || !KEY_RE.test(channel)) return beFlash('اختر Channel أولاً.', false);
+    if (!confirm(`إيقاف البث على القناة ${channel}؟ سيتوقف لكل المباريات المرتبطة بها.`)) return;
+    const btn = $('#stop-stream');
+    btn.disabled = true;
+    try {
+      const token = await ensureBeToken();
+      if (!token) return;
+      try { await backend('/api/channels/stop', { channelName: channel }, token); }
+      catch (err) { if (err.status === 401) return needBeLogin('انتهت جلسة لوحة الخادم: أدخل بيانات الدخول مرة أخرى.'); throw err; }
+      clearInterval(waitTimer);
+      beFlash(`تم إيقاف ${channel}. اضغط "إزالة البث" ثم "حفظ" لإخفاء المشغّل من صفحة المباراة.`, true);
+      setTimeout(refreshChannelStatus, 3000);
+    } catch (err) { beFlash('فشل الإيقاف: ' + (err.message || err), false); }
     finally { btn.disabled = false; }
   });
 
@@ -565,6 +789,7 @@
       started = true;
       load();
       refreshChannelStatus();
+      syncChannels(true);   // real slugs, if a backend session is open in this tab
       if (!window.__pxlChanTimer) window.__pxlChanTimer = setInterval(() => { if (!document.hidden) refreshChannelStatus(); }, 20000);
     }
   }

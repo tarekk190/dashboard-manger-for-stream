@@ -57,6 +57,13 @@ services:
       - SERVER_IP=${SERVER_IP:?SERVER_IP is required (public IP for RTMP ingest)}
       - EDGE_DOMAIN=${EDGE_DOMAIN:?EDGE_DOMAIN is required (public HTTPS domain)}
       - R2_CUSTOM_DOMAIN=${R2_CUSTOM_DOMAIN:-r2-custom-domain.shop}
+      # Secret R2 paths (rotating playlist keys, unguessable segment names). Same value as the
+      # data Worker's STREAM_PATH_SECRET. Empty = old public layout.
+      - STREAM_PATH_SECRET=${STREAM_PATH_SECRET:-}
+      - R2_WINDOW_SECONDS=${R2_WINDOW_SECONDS:-600}
+      - R2_NATIVE_WINDOW_SECONDS=${R2_NATIVE_WINDOW_SECONDS:-7200}
+      # true while players older than the secret-path player may still be open; then false
+      - R2_LEGACY_PLAYLIST=${R2_LEGACY_PLAYLIST:-true}
       - MEDIAMTX_RTMP_HOST=mediamtx
       - MEDIAMTX_RTMP_PORT=1935
       - R2_ACCOUNT_ID=${R2_ACCOUNT_ID:-}

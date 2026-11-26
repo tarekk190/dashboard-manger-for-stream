@@ -115,6 +115,54 @@ if (!['off', 'ua', 'ua+ip'].includes(VIEWER_TOKEN_BIND)) {
     fatal("VIEWER_TOKEN_BIND must be 'off', 'ua' or 'ua+ip'.");
 }
 
+// ------------------------------------------------------------------------------
+// Secret R2 paths (STREAM_PATH_SECRET). Access control for R2 delivery WITHOUT a Worker on the
+// video path: Cloudflare serves every playlist and segment straight from its cache, and an
+// URL is only worth something for a limited time because the playlist lives under a key that
+// rotates. Without the secret the old public layout is used (hd/{slug}/index.html, seg_N.js).
+//
+//   playlist  hd/{slug}/w/{key}/index.html        (HD: hd/{slug}/hd/w/{key}/index.html)
+//             key = base64url(HMAC-SHA256(secret, "pxl-win|1|{slug}|{kind}|{window}"))[0..22]
+//             window = floor(unix seconds / window length); kind "s" = hls.js players
+//             (R2_WINDOW_SECONDS, default 10 min), "n" = native HLS that cannot switch URLs
+//             (R2_NATIVE_WINDOW_SECONDS, default 2 h). Each playlist update is written under
+//             the keys of the current AND the previous window, so a key handed out in window w
+//             works until the end of window w+1 (between 1x and 2x the window length).
+//             The key is handed out only by /api/r2/:slug (viewer page gate + nginx rate limit).
+//   segment   hd/{slug}/seg_N-{h}.js   h = base64url(HMAC(secret, "pxl-seg|1|{prefix}|{file}"))[0..16]
+//             unguessable, listed only inside a playlist, deleted after MAX_SEGMENT_AGE_SECONDS.
+// The same derivation runs in the data Worker (blogger/worker, /api/channel-status).
+// Rotating STREAM_PATH_SECRET (and restarting) invalidates every handed-out URL at once.
+// ------------------------------------------------------------------------------
+const STREAM_PATH_SECRET = String(process.env.STREAM_PATH_SECRET || '');
+if (STREAM_PATH_SECRET && STREAM_PATH_SECRET.trim().length < 32) {
+    fatal('STREAM_PATH_SECRET is shorter than 32 characters (generate with: openssl rand -hex 48).');
+}
+if (STREAM_PATH_SECRET && [ADMIN_JWT_SECRET, VIEWER_JWT_SECRET].includes(STREAM_PATH_SECRET)) {
+    fatal('STREAM_PATH_SECRET must differ from ADMIN_JWT_SECRET and VIEWER_JWT_SECRET.');
+}
+function clampSeconds(name, fallback, min, max) {
+    const n = parseInt(process.env[name] || String(fallback), 10);
+    return Number.isFinite(n) ? Math.min(Math.max(n, min), max) : fallback;
+}
+const R2_WINDOW_SECONDS = {
+    s: clampSeconds('R2_WINDOW_SECONDS', 600, 120, 3600),
+    n: clampSeconds('R2_NATIVE_WINDOW_SECONDS', 7200, 600, 6 * 3600)
+};
+// Keep writing the old public hd/{slug}/index.html too (players deployed before the secret
+// paths). Turn off once the new player/ is live, then block that path at Cloudflare (WAF rule).
+const R2_LEGACY_PLAYLIST = !STREAM_PATH_SECRET || process.env.R2_LEGACY_PLAYLIST !== 'false';
+
+function pathHmac(text, length) {
+    return crypto.createHmac('sha256', STREAM_PATH_SECRET).update(text).digest('base64url').slice(0, length);
+}
+function windowKey(slug, kind, windowIndex) {
+    return pathHmac(`pxl-win|1|${slug}|${kind}|${windowIndex}`, 22);
+}
+function currentWindow(kind, nowMs = Date.now()) {
+    return Math.floor(nowMs / 1000 / R2_WINDOW_SECONDS[kind]);
+}
+
 // Cross-origin access for the public viewer API only (/api/stream, /api/token).
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
 if (NODE_ENV === 'production' && ALLOWED_ORIGINS.includes('*')) {
@@ -1351,6 +1399,8 @@ const R2_PRUNE_IDLE_GRACE_MS = MAX_SEGMENT_AGE_SECONDS * 1000 + 2 * R2_PRUNE_INT
 // Long-lived segment caching is only safe because segment names are never reused
 // (mediamtx.yml: -hls_start_number_source epoch).
 const SEGMENT_CACHE_CONTROL = 'public, max-age=3600, immutable';
+// A window playlist not rewritten for this long is deleted by the prune round (secret paths)
+const WINDOW_PLAYLIST_IDLE_MS = 90 * 1000;
 
 class R2PipelineManager {
     constructor() {
@@ -1467,8 +1517,29 @@ class R2PipelineManager {
     }
 
     segmentKey(r2Prefix, fileName) {
-        // Camouflage segment extension: seg_001.ts -> seg_001.js
-        return `${r2Prefix}/${fileName.replace(/\.ts$/i, '.js')}`;
+        // Camouflage segment extension: seg_001.ts -> seg_001.js; with STREAM_PATH_SECRET the
+        // name also gets an unguessable suffix: seg_001-{h}.js (see "Secret R2 paths")
+        const base = fileName.replace(/\.ts$/i, '');
+        if (!STREAM_PATH_SECRET) return `${r2Prefix}/${base}.js`;
+        return `${r2Prefix}/${base}-${pathHmac(`pxl-seg|1|${r2Prefix}|${base}`, 16)}.js`;
+    }
+
+    // R2 keys a playlist update is written to: the legacy public names (R2_PLAYLIST_FILES) and,
+    // with STREAM_PATH_SECRET, the window keys of the current and previous window of each kind.
+    playlistTargets(r2Prefix) {
+        const targets = R2_LEGACY_PLAYLIST
+            ? R2_PLAYLIST_FILES.map(f => ({ key: `${r2Prefix}/${R2_PLAYLIST_FORMATS[f].name}`, type: R2_PLAYLIST_FORMATS[f].type }))
+            : [];
+        if (STREAM_PATH_SECRET) {
+            const slug = r2Prefix.split('/')[1];
+            for (const kind of ['s', 'n']) {
+                const w = currentWindow(kind);
+                for (const idx of [w, w - 1]) {
+                    targets.push({ key: `${r2Prefix}/w/${windowKey(slug, kind, idx)}/index.html`, type: R2_PLAYLIST_FORMATS.html.type });
+                }
+            }
+        }
+        return targets;
     }
 
     async processFile(filePath) {
@@ -1530,8 +1601,15 @@ class R2PipelineManager {
             .filter(line => line && !line.startsWith('#') && /\.ts$/i.test(line))
             .map(line => this.segmentKey(r2Prefix, path.posix.basename(line)));
 
-        // Rewrite manifest internal segment links: .ts -> .js
-        const rewritten = content.replace(/([a-zA-Z0-9_\-]+)\.ts/g, '$1.js');
+        // Rewrite manifest internal segment links: .ts -> .js. With STREAM_PATH_SECRET every
+        // segment line becomes the absolute path of its secret name (/hd/{slug}/seg_N-{h}.js), so
+        // it resolves the same from every playlist key (hd/{slug}/w/{key}/ or the legacy name).
+        const rewritten = STREAM_PATH_SECRET
+            ? content.split(/\r?\n/).map(line => {
+                const s = line.trim();
+                return s && !s.startsWith('#') && /\.ts$/i.test(s) ? `/${this.segmentKey(r2Prefix, path.posix.basename(s))}` : line;
+            }).join('\n')
+            : content.replace(/([a-zA-Z0-9_\-]+)\.ts/g, '$1.js');
 
         // Keep the newest few versions: when uploads are slower than the segment rate, the newest
         // version always lists a segment still in flight, but a slightly older one is complete.
@@ -1568,9 +1646,8 @@ class R2PipelineManager {
         this.flushingPlaylists.add(r2Prefix);
         try {
             const size = ready.body.length;
-            await Promise.all(R2_PLAYLIST_FILES.map(f => this.uploadObject(
-                `${r2Prefix}/${R2_PLAYLIST_FORMATS[f].name}`, () => ready.body, size,
-                R2_PLAYLIST_FORMATS[f].type, PLAYLIST_CACHE_CONTROL)));
+            await Promise.all(this.playlistTargets(r2Prefix).map(t => this.uploadObject(
+                t.key, () => ready.body, size, t.type, PLAYLIST_CACHE_CONTROL)));
             this.publishedVersion.set(r2Prefix, ready.version);
             this.lastPlaylistAt.set(r2Prefix, Date.now());
             this.stats.uploadedPlaylists++;
@@ -1656,6 +1733,13 @@ class R2PipelineManager {
                 }));
 
                 for (const item of listResponse.Contents || []) {
+                    // Window playlists (hd/{slug}/w/{key}/index.html) no longer written: their
+                    // window has passed or the stream stopped. Live ones are rewritten every ~2 s.
+                    if (item.Key.includes('/w/') && item.LastModified &&
+                        now - new Date(item.LastModified).getTime() > WINDOW_PLAYLIST_IDLE_MS) {
+                        toDelete.push({ Key: item.Key });
+                        continue;
+                    }
                     // Never delete playlist manifests
                     if (item.Key.endsWith('index.html') || item.Key.endsWith('index.css') || item.Key.endsWith('.m3u8')) {
                         continue;
@@ -1765,8 +1849,10 @@ app.set('trust proxy', 1);
 // malformed ids are ignored (no entry is created); each channel is capped in memory.
 // The count is an estimate: anyone can send pings, it is not an access control.
 // ------------------------------------------------------------------------------
-const VIEWER_TTL_MS = 35 * 1000;              // a viewer counts until 35 s after the last ping
-const VIEWER_SWEEP_MS = 5 * 1000;
+// The player pings every 60-75 s (jittered): a viewer counts until 150 s after the last ping,
+// so one lost ping never drops them. Older players ping every 15 s and count the same way.
+const VIEWER_TTL_MS = 150 * 1000;
+const VIEWER_SWEEP_MS = 15 * 1000;
 const VIEWER_MAX_PER_CHANNEL = 200000;        // memory bound per channel
 const VIEWER_SID_RE = /^[A-Za-z0-9_-]{8,64}$/;
 const viewerSessions = new Map();             // channel.id -> Map(sid -> lastSeen ms)
@@ -1789,6 +1875,77 @@ app.post('/api/ping/:channel', (req, res) => {
     }
     res.set('Cache-Control', 'no-store');
     res.status(204).end();
+});
+
+// ------------------------------------------------------------------------------
+// Match feed for the px-league.site match page: GET /api/feed/match/{id}.js
+// One bundled, CDN-cacheable answer { v, at, info, events, lineup } instead of three Worker
+// calls per viewer every 10 s. The ".js" name makes Cloudflare cache it by default (no cache
+// rule needed) and honour s-maxage, so 50,000 viewers of a match cost ~1 origin request per
+// Cloudflare location per 10 s; this process asks the data Worker at most once per
+// MATCH_FEED_TTL_MS per match (single flight). The data is public (live scores) and carries no
+// stream: the page reads the stream from the Worker's match_info (rarely). Hence ACAO "*".
+// Upstream failure: the last good copy is served for up to MATCH_FEED_STALE_MS, then 502 (the
+// page falls back to the Worker).
+// ------------------------------------------------------------------------------
+const MATCH_FEED_UPSTREAM = String(process.env.MATCH_FEED_UPSTREAM || 'https://data.px-league.site').replace(/\/+$/, '');
+const MATCH_FEED_ORIGIN = process.env.MATCH_FEED_ORIGIN || 'https://www.px-league.site';
+const MATCH_FEED_TTL_MS = 10 * 1000;
+const MATCH_FEED_STALE_MS = 2 * 60 * 1000;
+const MATCH_FEED_MAX_ENTRIES = 300;
+const matchFeeds = new Map();   // id -> { at, body, inflight }
+
+async function matchFeedUpstream(kind, id) {
+    const res = await fetch(`${MATCH_FEED_UPSTREAM}/api/matches/${kind}/${id}/D/60`, {
+        headers: { Accept: 'application/json', Origin: MATCH_FEED_ORIGIN, 'User-Agent': 'PX-League-Feed/1.0' },
+        signal: AbortSignal.timeout(8000)
+    });
+    if (!res.ok) throw new Error(`${kind} HTTP ${res.status}`);
+    const json = await res.json();
+    if (json && json.status === false) throw new Error(`${kind} status false`);
+    return json && json.data != null ? json.data : json;
+}
+
+async function buildMatchFeed(id) {
+    const info = await matchFeedUpstream('match_info', id);
+    if (!info || typeof info !== 'object' || !info.home_team || !info.away_team) throw new Error('malformed match_info');
+    delete info.stream;
+    const [events, lineup] = await Promise.allSettled([
+        Number(info.events) ? matchFeedUpstream('matches_event', id) : Promise.resolve(null),
+        Number(info.lineup) ? matchFeedUpstream('matches_lineup', id) : Promise.resolve(null)
+    ]);
+    return JSON.stringify({
+        v: 1,
+        at: Date.now(),
+        info,
+        events: events.status === 'fulfilled' ? events.value : null,
+        lineup: lineup.status === 'fulfilled' ? lineup.value : null
+    });
+}
+
+app.get('/api/feed/match/:file', async (req, res) => {
+    const m = /^(\d{1,12})\.js$/.exec(String(req.params.file || ''));
+    res.set({ 'Access-Control-Allow-Origin': '*', 'X-Content-Type-Options': 'nosniff', 'Cross-Origin-Resource-Policy': 'cross-origin' });
+    if (!m) return res.set('Cache-Control', 'no-store').status(404).json({ error: 'Not found' });
+    const id = m[1];
+    let entry = matchFeeds.get(id);
+    if (!entry || (Date.now() - entry.at > MATCH_FEED_TTL_MS && !entry.inflight)) {
+        if (!entry) {
+            if (matchFeeds.size >= MATCH_FEED_MAX_ENTRIES) matchFeeds.delete(matchFeeds.keys().next().value);
+            entry = { at: 0, body: null, inflight: null };
+            matchFeeds.set(id, entry);
+        }
+        entry.inflight = buildMatchFeed(id)
+            .then(body => { entry.body = body; entry.at = Date.now(); })
+            .catch(err => { console.warn(`[FEED] match ${id}: ${err.message}`); })
+            .finally(() => { entry.inflight = null; });
+    }
+    if (entry.inflight && (!entry.body || Date.now() - entry.at > MATCH_FEED_STALE_MS)) await entry.inflight;
+    if (!entry.body || Date.now() - entry.at > MATCH_FEED_STALE_MS) {
+        return res.set('Cache-Control', 'no-store').status(502).json({ error: 'Upstream unavailable' });
+    }
+    res.set({ 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'public, max-age=5, s-maxage=10' });
+    res.send(entry.body);
 });
 
 function countViewers(channelId, cutoff) {
@@ -2506,7 +2663,13 @@ app.get('/api/stream', requireViewerPage, (req, res) => {
 // R2 source for the player (?r2={slug}): the playlist base URL of a known channel.
 // Replaces the old practice of reading the R2 domain from the public /api/config. The
 // domain is still visible to anyone who watches the player's network requests: this keeps
-// it out of an anonymous, cacheable endpoint, it is not access control (R2 delivery is public).
+// it out of an anonymous, cacheable endpoint. The access control is the window key (see
+// "Secret R2 paths"): with STREAM_PATH_SECRET set the answer carries
+//   key        current window key: playlists are at {base}w/{key}/index.html, {base}hd/w/{key}/index.html
+//   expiresIn  seconds until that key stops being written (end of the NEXT window)
+//   renewIn    when the player should ask again: a random moment in the next window, so a
+//              stadium of viewers does not renew in the same second
+// ?native=1 = the long native-HLS window (the player cannot switch URLs there).
 const R2_SLUG_RE = /^[A-Za-z0-9_-]{1,64}$/;
 app.get('/api/r2/:slug', requireViewerPage, (req, res) => {
     const slug = String(req.params.slug || '');
@@ -2518,7 +2681,19 @@ app.get('/api/r2/:slug', requireViewerPage, (req, res) => {
     if (!channel) {
         return res.status(404).json({ error: 'Not found' });
     }
-    res.json({ base: `https://${R2_CUSTOM_DOMAIN}/hd/${encodeURIComponent(channel.r2_slug)}/` });
+    const base = `https://${R2_CUSTOM_DOMAIN}/hd/${encodeURIComponent(channel.r2_slug)}/`;
+    if (!STREAM_PATH_SECRET) return res.json({ base });
+    const kind = req.query.native === '1' ? 'n' : 's';
+    const len = R2_WINDOW_SECONDS[kind];
+    const nowS = Date.now() / 1000;
+    const w = currentWindow(kind);
+    const nextStart = (w + 1) * len;
+    res.json({
+        base,
+        key: windowKey(channel.r2_slug, kind, w),
+        expiresIn: Math.floor((w + 2) * len - nowS),
+        renewIn: Math.max(30, Math.floor(nextStart - nowS + Math.random() * len * 0.7))
+    });
 });
 
 // Token Renewal: accepts a valid token or one expired by at most TOKEN_RENEW_GRACE_SECONDS

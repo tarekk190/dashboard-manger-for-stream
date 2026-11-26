@@ -44,7 +44,7 @@ const LOCAL_DASHBOARD_ORIGINS = [
 //            /api/matches/match_info/{match_id}/D/60
 //       matches_date_get: matches with is_visible = false are removed
 //       match_info:       passed through (hidden matches stay reachable by id)
-//       STREAM_ORIGINS:   a match with a stream gets "stream": { "channel": "b4", "r2_slug": "..." }
+//       STREAM_ORIGINS:   a match with a stream gets "stream": { "r2_slug": "..." } (or { "channel" } if no slug)
 //                         (list and match_info). A FINISHED match (status 4) never gets one.
 //       Other origins:    any "stream" field is removed.
 //       ?raw=1 (dashboard origins only): no filtering, no edge cache
@@ -258,6 +258,9 @@ export default {
 async function withinRateLimit(request, env) {
   if (!env.RATE_LIMITER || typeof env.RATE_LIMITER.limit !== "function") return true;
   const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+  // Our own servers (RATE_LIMIT_EXEMPT_IPS, e.g. the stream VPS that builds the cached match
+  // feed for every viewer). CF-Connecting-IP is set by Cloudflare and cannot be forged.
+  if (String(env.RATE_LIMIT_EXEMPT_IPS || "").split(",").map((s) => s.trim()).includes(ip)) return true;
   try {
     const { success } = await env.RATE_LIMITER.limit({ key: ip });
     return success !== false;
@@ -408,10 +411,14 @@ function supabaseConfig(env) {
   return { base, headers };
 }
 
+// Only the identifier the player actually uses: the player prefers r2 over channel, so a row
+// with an R2 slug never publishes its channel key (the edge-mode name of the same stream).
+// With STREAM_PATH_SECRET the slug alone opens nothing: the playlist lives under a rotating key.
 function cleanStream(row) {
   const channel = STREAM_KEY_RE.test(String(row && row.channel || "")) ? String(row.channel) : "";
   const r2_slug = STREAM_KEY_RE.test(String(row && row.r2_slug || "")) ? String(row.r2_slug) : "";
-  return channel || r2_slug ? { channel, r2_slug } : null;
+  if (r2_slug) return { r2_slug };
+  return channel ? { channel } : null;
 }
 
 // A finished match never carries a stream (match object from ysscores: { status, ... })
@@ -527,7 +534,10 @@ async function channelStatus(url, env, cors) {
   const now = Date.now();
   const entries = await Promise.all(slugs.map(async (slug) => {
     try {
-      const res = await fetch(`${base}/hd/${slug}/index.html?_t=${Math.floor(now / 1000)}`, {
+      // Secret R2 paths (backend STREAM_PATH_SECRET, same secret here): the playlist is under
+      // the current window key. Without the secret: the old public hd/{slug}/index.html.
+      const key = await windowKey(slug, env, now);
+      const res = await fetch(`${base}/hd/${slug}/${key ? "w/" + key + "/" : ""}index.html?_t=${Math.floor(now / 1000)}`, {
         signal: AbortSignal.timeout(5000),
         cf: { cacheTtl: 0 },
       });
@@ -542,6 +552,21 @@ async function channelStatus(url, env, cors) {
     }
   }));
   return json({ channels: Object.fromEntries(entries) }, 200, cors);
+}
+
+// Same derivation as the backend's windowKey() (kind "s"): the first 22 base64url characters of
+// HMAC-SHA256(secret, "pxl-win|1|{slug}|s|{floor(unix seconds / R2_WINDOW_SECONDS)}").
+// R2_WINDOW_SECONDS must equal the backend's value (default 600).
+async function windowKey(slug, env, nowMs) {
+  const secret = String(env.STREAM_PATH_SECRET || "");
+  if (secret.length < 32) return "";
+  const len = Number(env.R2_WINDOW_SECONDS) || 600;
+  const w = Math.floor(nowMs / 1000 / len);
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`pxl-win|1|${slug}|s|${w}`)));
+  let bin = "";
+  for (const b of sig) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "").slice(0, 22);
 }
 
 function corsHeaders(origin) {

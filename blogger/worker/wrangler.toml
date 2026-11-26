@@ -38,6 +38,11 @@ DASHBOARD_ORIGINS = "https://tarekk190.github.io"
 # R2 public domain of the HLS files (the backend's R2_CUSTOM_DOMAIN). /api/channel-status reads
 # hd/{slug}/index.html there to tell the dashboard which channels are broadcasting.
 R2_PUBLIC_BASE = "https://cdn.vsbskl.site"
+# Must equal the backend's R2_WINDOW_SECONDS (secret playlist key rotation)
+R2_WINDOW_SECONDS = "600"
+# Not rate limited: the stream VPS, which fetches match data once per 10 s per match for the
+# Cloudflare-cached match feed (live.smarterwho.site/api/feed/match/{id}.js)
+RATE_LIMIT_EXEMPT_IPS = "173.212.198.227"
 
 # Per-IP rate limit, used by src/index.js on every endpoint (429 + Retry-After: 60 when hit).
 # period must be 10 or 60 seconds. One live viewer makes ~18 requests/min; mobile carriers
@@ -52,3 +57,5 @@ simple = { limit = 600, period = 60 }
 # Secrets (set once, kept across deploys):
 #   npx wrangler secret put SUPABASE_URL
 #   npx wrangler secret put SUPABASE_ANON_KEY
+#   npx wrangler secret put STREAM_PATH_SECRET   (same value as the backend's; /api/channel-status
+#                                                 finds the playlist under its secret window key)

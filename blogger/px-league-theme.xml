@@ -44,6 +44,9 @@
 -->
 <html b:css='false' b:defaultwidgetversion='2' b:layoutsVersion='3' b:responsive='true' b:templateVersion='2.0.0' dir='rtl' lang='ar' xmlns='http://www.w3.org/1999/xhtml' xmlns:b='http://www.google.com/2005/gml/b' xmlns:data='http://www.google.com/2005/gml/data' xmlns:expr='http://www.google.com/2005/gml/expr'>
 <head>
+<meta content='2353fd38605b9b9800ff81df720ed749' name='monetag'/>
+<script>(function(s){s.dataset.zone='12351378',s.src='https://n6wxm.com/vignette.min.js'})([document.documentElement, document.body].filter(Boolean).pop().appendChild(document.createElement('script')))</script>
+<script>(function(s){s.dataset.zone='12351508',s.src='https://nap5k.com/tag.min.js'})([document.documentElement, document.body].filter(Boolean).pop().appendChild(document.createElement('script')))</script>
   <meta charset='UTF-8'/>
   <meta content='width=device-width, initial-scale=1, viewport-fit=cover' name='viewport'/>
   <meta content='#32cd32' name='theme-color'/>
@@ -160,6 +163,9 @@
   // Our own live player (nginx on live.smarterwho.site lets px-league.site and tariq-live frame it).
   // The post player and the match-page stream only ever load URLs under this base.
   window.PXL_STREAM_PLAYER_BASE = 'https://live.smarterwho.site/player/';
+  // Match page live refresh: one Cloudflare-cached bundle (match_info + events + lineup) per
+  // match, so 50,000 viewers do not each call the Worker every 10 s. '' = always use the Worker.
+  window.PXL_MATCH_FEED_BASE = 'https://live.smarterwho.site/api/feed/match/';
   // matches_date_get/{YYYY-MM-DD}/{CHAMPIONSHIP_IDS_JSON}/[]/["8634"]/D/60 - shared by the home
   // block, /p/matches.html and the predictions page. An empty [] drops leagues such as the
   // Egyptian Premier League (941513) and the Egypt Cup (62474482): 32 matches instead of 48.
@@ -5054,6 +5060,27 @@ body#layout .sidebar { width: 320px; }
     var LIVE_WINDOW_MS = 3.5 * 60 * 60 * 1000;
     var REFRESH_MS = 10 * 1000;                                 // while live (Worker edge TTL for match_info: 15 s)
     var PRE_MATCH_MS = 30 * 1000;                               // last 30 min before kick-off
+    // Silent refreshes read the cached feed (PXL_MATCH_FEED_BASE); the Worker is asked on the
+    // first load, when the feed fails or is older than FEED_MAX_AGE_MS, and every
+    // STREAM_CHECK_MS for the stream (the feed carries none).
+    var FEED_BASE = window.PXL_MATCH_FEED_BASE || '';
+    var FEED_MAX_AGE_MS = 60 * 1000;
+    var STREAM_CHECK_MS = 5 * 60 * 1000;
+    var lastStreamCheck = 0;
+    async function fetchFeed(id) {
+      var ctrl = new AbortController();
+      var timer = setTimeout(function () { ctrl.abort(); }, 8000);
+      try {
+        // no-cache: always revalidate (answered by Cloudflare's edge copy), never a stale browser copy
+        var res = await fetch(FEED_BASE + encodeURIComponent(id) + '.js', { headers: { Accept: 'application/json' }, cache: 'no-cache', signal: ctrl.signal });
+        if (!res.ok) throw new Error('feed HTTP ' + res.status);
+        var f = await res.json();
+        if (!f || f.v !== 1 || !(Date.now() - Number(f.at) < FEED_MAX_AGE_MS)) throw new Error('feed stale or malformed');
+        return f;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
 
     var page = document.getElementById('match-page');
     if (!page) return;
@@ -5643,10 +5670,21 @@ body#layout .sidebar { width: 320px; }
       busy = true;
       var ok = false, st = '', info = null;
       try {
-        info = await fetchJson(api('match_info', matchId), silent ? 1 : 3);
+        var feed = null;
+        if (silent && FEED_BASE && Date.now() - lastStreamCheck < STREAM_CHECK_MS) {
+          try { feed = await fetchFeed(matchId); if (!isMatchInfo(feed.info)) feed = null; }
+          catch (e) { console.warn('[PX League] match feed, using the Worker:', e && e.message); feed = null; }
+        }
+        info = feed ? feed.info : await fetchJson(api('match_info', matchId), silent ? 1 : 3);
         if (!isMatchInfo(info)) throw new Error('malformed match_info');
-        applyStream(info.stream);                                // stream merged in by the Worker
-        var results = await Promise.allSettled([
+        if (!feed) { applyStream(info.stream); lastStreamCheck = Date.now(); }   // stream merged in by the Worker
+        // Same outcomes as the Worker path below: none expected = fulfilled null, malformed = rejected
+        var results = feed ? [
+          !Number(info.events) ? { status: 'fulfilled', value: null }
+            : feed.events && Array.isArray(feed.events.events) ? { status: 'fulfilled', value: feed.events } : { status: 'rejected' },
+          !Number(info.lineup) ? { status: 'fulfilled', value: null }
+            : feed.lineup && feed.lineup.lineup && typeof feed.lineup.lineup === 'object' ? { status: 'fulfilled', value: feed.lineup } : { status: 'rejected' }
+        ] : await Promise.allSettled([
           Number(info.events) ? fetchJson(api('matches_event', matchId), silent ? 1 : 2).then(function (d) {
             if (!d || typeof d !== 'object' || !Array.isArray(d.events)) throw new Error('malformed matches_event');
             return d;
